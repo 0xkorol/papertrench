@@ -322,8 +322,10 @@ function isSolanaAddress(s) {
   return typeof s === 'string' && BASE58_RE.test(s);
 }
 
-function isValidMints(list) {
-  return Array.isArray(list) && list.length <= MAX_MINTS_PER_BATCH && list.every(isSolanaAddress);
+function sanitizeMints(list) {
+  if (!Array.isArray(list)) return null;
+  const clean = list.filter(isSolanaAddress);
+  return clean.length ? clean.slice(0, MAX_MINTS_PER_BATCH) : null;
 }
 
 function isValidTokenForRefresh(t) {
@@ -429,10 +431,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try { sendResponse(await R.refresh(message.token)); } catch (e) { sendResponse(null); }
         break;
 
-      case 'pt_batch_prices':
-        if (!isValidMints(message.mints)) { sendResponse({}); break; }
-        try { sendResponse(await R.batchPrices(message.mints)); } catch (e) { sendResponse({}); }
+      case 'pt_batch_prices': {
+        const mints = sanitizeMints(message.mints);
+        if (!mints) { sendResponse({}); break; }
+        try { sendResponse(await R.batchPrices(mints)); } catch (e) { sendResponse({}); }
         break;
+      }
 
       default:
         sendResponse({ error: 'unknown message type' });
