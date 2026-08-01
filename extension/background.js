@@ -8,8 +8,9 @@
  */
 
 
-if (typeof importScripts === 'function') importScripts('replay.js');
+if (typeof importScripts === 'function') importScripts('replay.js', 'quote.js', 'resolver.js');
 const RP = self.PTReplay;
+const R = self.PaperTrenchResolver;
 
 const DEFAULTS = {
   balanceStartSol: 10,
@@ -27,6 +28,7 @@ const DEFAULTS = {
   profitAlertPct: 10,
   averagePriceLinesEnabled: true,
   positionsBarEnabled: true,
+  settingsRevision: 2,
   aiEndpoint: 'http://127.0.0.1:8765/v1',
   aiModel: '',
   aiApiKey: '',
@@ -394,6 +396,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'pt_recording_toggle':
         if (!message.enabled && recActive) await stopRecording(null);
         sendResponse({ ok: true });
+        break;
+
+      // Price resolution is done from the service worker so it is not subject to
+      // the page origin's CORS or CSP. The content script supplies only mints
+      // and addresses; the background decides which public APIs to call.
+      case 'pt_resolve':
+        try { sendResponse(await R.resolve(message.address)); } catch (e) { sendResponse(null); }
+        break;
+
+      case 'pt_refresh':
+        try { sendResponse(await R.refresh(message.token)); } catch (e) { sendResponse(null); }
+        break;
+
+      case 'pt_batch_prices':
+        try { sendResponse(await R.batchPrices(message.mints)); } catch (e) { sendResponse({}); }
         break;
 
       default:

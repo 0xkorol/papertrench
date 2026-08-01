@@ -556,5 +556,6 @@
 
   // Always install the browser global; only export under CommonJS when present.
   if (typeof window !== 'undefined') window.PaperQuote = api;
+  if (typeof self !== 'undefined') self.PaperQuote = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })();

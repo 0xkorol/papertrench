@@ -4,7 +4,7 @@
   "private": true,
   "description": "Paper-trade Solana memecoins on Axiom, Padre, Photon, GMGN, BullX and more.",
   "scripts": {
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test"
   },
   "license": "MIT"
 }

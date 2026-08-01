@@ -309,7 +309,20 @@ function runFreshLaunch(opts) {
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ schemaVersion: '1.0.0', pairs: null }) });
     },
     chrome: {
-      runtime: { id: 'papertrench-test', getURL: (p) => 'x/' + p, sendMessage: () => Promise.resolve({}), onMessage: { addListener: () => {} }, openOptionsPage: () => {} },
+      runtime: {
+        id: 'papertrench-test',
+        getURL: (p) => 'x/' + p,
+        sendMessage: (msg) => {
+          const R = win.PaperTrenchResolver;
+          if (!R) return Promise.resolve({});
+          if (msg.type === 'pt_resolve') return R.resolve(msg.address);
+          if (msg.type === 'pt_refresh') return R.refresh(msg.token);
+          if (msg.type === 'pt_batch_prices') return R.batchPrices(msg.mints);
+          return Promise.resolve({});
+        },
+        onMessage: { addListener: () => {} },
+        openOptionsPage: () => {},
+      },
       storage: {
         local: {
           get: (keys, cb) => { const out = {}; for (const k of (Array.isArray(keys) ? keys : [keys])) if (k in storage) out[k] = storage[k]; if (cb) cb(out); return Promise.resolve(out); },

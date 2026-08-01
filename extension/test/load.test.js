@@ -109,7 +109,14 @@ function makeBrowserSandbox() {
       runtime: {
         id: 'papertrench-test',
         getURL: (p) => 'chrome-extension://test/' + p,
-        sendMessage: () => Promise.resolve({}),
+        sendMessage: (msg) => {
+          const R = win.PaperTrenchResolver;
+          if (!R) return Promise.resolve({});
+          if (msg.type === 'pt_resolve') return R.resolve(msg.address);
+          if (msg.type === 'pt_refresh') return R.refresh(msg.token);
+          if (msg.type === 'pt_batch_prices') return R.batchPrices(msg.mints);
+          return Promise.resolve({});
+        },
         onMessage: { addListener: () => {} },
         openOptionsPage: () => {},
       },
