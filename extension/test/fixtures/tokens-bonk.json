@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "1.0.0",
+  "pairs": [
+    {
+      "chainId": "solana",
+      "dexId": "meteora",
+      "pairAddress": "6oFWm7KPLfxnwMb3z5xwBoXNSPP3JJyirAPqPSiVcnsp",
+      "baseToken": {
+        "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "name": "Bonk",
+        "symbol": "Bonk"
+      },
+      "quoteToken": {
+        "address": "So11111111111111111111111111111111111111112",
+        "name": "Wrapped SOL",
+        "symbol": "SOL"
+      },
+      "priceNative": "0.00000003862",
+      "priceUsd": "0.000002826",
+      "liquidity": {
+        "usd": 65115.37,
+        "base": 18872134843,
+        "quote": 160.8192
+      },
+      "marketCap": 251191476,
+      "fdv": 251191476
+    },
+    {
+      "chainId": "solana",
+      "dexId": "raydium",
+      "pairAddress": "3UwfrdLTpAjxTRni1boc5HUWe6hzc4HgE5yLdvEp2Noc",
+      "baseToken": {
+        "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "name": "Bonk",
+        "symbol": "Bonk"
+      },
+      "quoteToken": {
+        "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "name": "USD Coin",
+        "symbol": "USDC"
+      },
+      "priceNative": "0.000002825",
+      "priceUsd": "0.000002825",
+      "liquidity": {
+        "usd": 110258.27,
+        "base": 39016549285,
+        "quote": 25.2361
+      },
+      "marketCap": 251062551,
+      "fdv": 251062551
+    },
+    {
+      "chainId": "solana",
+      "dexId": "orca",
+      "pairAddress": "5zpyutJu9ee6jFymDGoK7F6S5Kczqtc9FomP3ueKuyA9",
+      "baseToken": {
+        "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "name": "Bonk",
+        "symbol": "Bonk"
+      },
+      "quoteToken": {
+        "address": "So11111111111111111111111111111111111111112",
+        "name": "Wrapped SOL",
+        "symbol": "SOL"
+      },
+      "priceNative": "0.00000003866",
+      "priceUsd": "0.000002829",
+      "liquidity": {
+        "usd": 124502.21,
+        "base": 30857153077,
+        "quote": 508.4499
+      },
+      "marketCap": 251403946,
+      "fdv": 251403946
+    },
+    {
+      "chainId": "solana",
+      "dexId": "orca",
+      "pairAddress": "BqnpCdDLPV2pFdAaLnVidmn3G93RP2p5oRdGEY2sJGez",
+      "baseToken": {
+        "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "name": "Bonk",
+        "symbol": "Bonk"
+      },
+      "quoteToken": {
+        "address": "So11111111111111111111111111111111111111112",
+        "name": "Wrapped SOL",
+        "symbol": "SOL"
+      },
+      "priceNative": "0.00000003907",
+      "priceUsd": "0.000002853",
+      "liquidity": {
+        "usd": 100237.87,
+        "base": 15430919706,
+        "quote": 769.428
+      },
+      "marketCap": 253608108,
+      "fdv": 253608108
+    }
+  ]
+}

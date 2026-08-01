@@ -1,0 +1,421 @@
+/* Tests for the shipped paper-trading engine (engine.js).
+ *
+ * These drive the real buy()/sell() entry points the overlay calls. Every
+ * expectation is DERIVED from the inputs inside the test, so a change in the
+ * engine's arithmetic fails here rather than being blessed by a pasted literal.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+// engine.js targets the browser; give it a window to install its global on.
+global.window = global.window || {};
+require('../engine.js');
+const E = global.window.PaperEngine;
+
+const CLOSE = 1e-9;
+
+function freshSettings(over) {
+  return Object.assign(E.defaultSettings(), over || {});
+}
+
+test('engine installs its public API on the browser global', () => {
+  assert.equal(typeof E, 'object');
+  for (const fn of ['buy', 'sell', 'defaultState', 'defaultSettings', 'sessionStats', 'markPosition']) {
+    assert.equal(typeof E[fn], 'function', `${fn} must be exported`);
+  }
+});
+
+/* ---------------- criterion 4: fresh wallet is empty ---------------- */
+
+test('a fresh wallet starts at the configured balance with nothing pre-seeded', () => {
+  const settings = freshSettings({ balanceStartSol: 10 });
+  const state = E.defaultState(settings);
+
+  assert.equal(state.cashSol, settings.balanceStartSol);
+  assert.equal(Object.keys(state.positions).length, 0, 'no pre-seeded positions');
+  assert.equal(state.journal.length, 0, 'no pre-seeded trades');
+  assert.equal(state.rounds.length, 0, 'no pre-seeded round trips');
+  assert.equal(state.stats.realizedPnlSol, 0);
+
+  const stats = E.sessionStats(state, settings);
+  assert.equal(stats.equitySol, settings.balanceStartSol);
+  assert.equal(stats.openPositions, 0);
+  assert.equal(stats.rounds, 0);
+});
+
+test('a custom starting balance is honoured', () => {
+  const settings = freshSettings({ balanceStartSol: 3.5 });
+  assert.equal(E.defaultState(settings).cashSol, 3.5);
+});
+
+test('trade feedback is on by default; interrupting alerts stay opt-in', () => {
+  const settings = E.defaultSettings();
+  // A fill should be unmistakable out of the box.
+  assert.equal(settings.tradeEffectsEnabled, true);
+  assert.equal(settings.tradeSoundsEnabled, true);
+  assert.equal(settings.averagePriceLinesEnabled, true);
+  // Hidden-tab bells interrupt the user elsewhere, so they remain opt-in.
+  assert.equal(settings.profitAlertsEnabled, false);
+  assert.equal(settings.profitAlertPct, 10);
+  assert.equal(settings.positionsBarEnabled, true);
+});
+
+test('profit alert levels cross once per configured threshold', () => {
+  assert.equal(E.profitAlertLevel(9.99, 10), 0);
+  assert.equal(E.profitAlertLevel(10, 10), 1);
+  assert.equal(E.profitAlertLevel(27, 10), 2);
+  assert.equal(E.profitAlertLevel(-12, 10), 0);
+  assert.equal(E.profitAlertLevel(50, 0), 0);
+
+  assert.equal(E.crossedProfitAlert(0, 10, 10), 1);
+  assert.equal(E.crossedProfitAlert(1, 19.9, 10), null,
+    'the +10% bell must not repeat while still inside that level');
+  assert.equal(E.crossedProfitAlert(1, 20, 10), 2);
+  assert.equal(E.crossedProfitAlert(2, 15, 10), null,
+    'dropping below a prior level must not replay it');
+  assert.equal(E.crossedProfitAlert(2, 31, 10), 3,
+    'only the newest crossed level is returned after a jump');
+});
+
+/* ---------------- criterion 4: buy arithmetic ---------------- */
+
+test('buy debits gross SOL and credits the fee-adjusted quantity', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 100, slippageBps: 0 });
+  const state = E.defaultState(settings);
+
+  const spend = 1;
+  const price = 0.00000003866;
+
+  E.buy(state, settings, {
+    ts: Date.now(), mint: 'MintA', symbol: 'BONK', site: 'padre',
+    priceNative: price, priceUsd: 0.000002825, solAmount: spend,
+  });
+
+  // Expectation derived from the inputs, not copied from a run.
+  const expectedFee = spend * (settings.feeBps / 10000);
+  const expectedQty = (spend - expectedFee) / price;
+
+  assert.ok(Math.abs(state.cashSol - (settings.balanceStartSol - spend)) < CLOSE,
+    'cash must fall by the GROSS amount spent');
+
+  const pos = state.positions.MintA;
+  assert.ok(pos, 'a position must exist after buying');
+  assert.ok(Math.abs(pos.qty - expectedQty) / expectedQty < 1e-12,
+    `quantity must be (spend - fee) / price; got ${pos.qty}, expected ${expectedQty}`);
+  assert.ok(Math.abs(pos.costSol - (spend - expectedFee)) < CLOSE);
+  assert.ok(Math.abs(state.stats.feesPaidSol - expectedFee) < CLOSE);
+  assert.equal(state.journal.length, 1);
+  assert.equal(state.journal[0].side, 'buy');
+});
+
+test('a round keeps one stable replay session ID across all fills and closure', () => {
+  const settings = freshSettings({ feeBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  const first = E.buy(state, settings, {
+    ts: t0, mint: 'MintReplay', symbol: 'RPL', name: 'Replay', site: 'padre', priceNative: 0.001, solAmount: 1,
+  });
+  const id = first.position.sessionId;
+  assert.match(id, /^pts-/);
+  assert.equal(first.trade.sessionId, id);
+
+  const second = E.buy(state, settings, {
+    ts: t0 + 1000, mint: 'MintReplay', symbol: 'RPL', site: 'padre', priceNative: 0.001, solAmount: 1,
+  });
+  assert.equal(second.trade.sessionId, id);
+  const closed = E.sell(state, settings, {
+    ts: t0 + 2000, mint: 'MintReplay', qtyFraction: 1, priceNative: 0.002,
+  });
+  assert.equal(closed.trade.sessionId, id);
+  assert.equal(closed.round.sessionId, id);
+  assert.equal(closed.round.name, 'Replay');
+});
+
+test('a legacy open position is upgraded with a replay session ID on its next fill', () => {
+  const settings = freshSettings({ feeBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+  E.buy(state, settings, { ts: t0, mint: 'LegacyMint', symbol: 'OLD', priceNative: 0.001, solAmount: 1 });
+  delete state.positions.LegacyMint.sessionId;
+
+  const sold = E.sell(state, settings, { ts: t0 + 1000, mint: 'LegacyMint', qtyFraction: 0.5, priceNative: 0.001 });
+  assert.match(sold.trade.sessionId, /^pts-/);
+  assert.equal(state.positions.LegacyMint.sessionId, sold.trade.sessionId);
+});
+
+test('buying more than the balance is refused and leaves state untouched', () => {
+  const settings = freshSettings({ balanceStartSol: 1 });
+  const state = E.defaultState(settings);
+
+  assert.throws(() => E.buy(state, settings, {
+    ts: Date.now(), mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 5,
+  }), /Insufficient/i);
+
+  assert.equal(state.cashSol, 1, 'cash must be unchanged after a refused buy');
+  assert.equal(Object.keys(state.positions).length, 0);
+});
+
+test('a non-positive price is refused', () => {
+  const settings = freshSettings();
+  const state = E.defaultState(settings);
+  assert.throws(() => E.buy(state, settings, {
+    ts: Date.now(), mint: 'MintA', symbol: 'X', priceNative: 0, solAmount: 1,
+  }));
+});
+
+/* ---------------- criterion 4: full round trip ---------------- */
+
+test('buy then full sell produces correct cash, P&L and exactly one round trip', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 100, slippageBps: 0 });
+  const state = E.defaultState(settings);
+
+  const spend = 1;
+  const entry = 0.001;
+  const exit = 0.002; // a clean 2x
+  const t0 = Date.now();
+
+  E.buy(state, settings, {
+    ts: t0, mint: 'MintA', symbol: 'BONK', site: 'padre', priceNative: entry, solAmount: spend,
+  });
+
+  const qty = state.positions.MintA.qty;
+  const costBasis = state.positions.MintA.costSol;
+
+  const res = E.sell(state, settings, {
+    ts: t0 + 60000, mint: 'MintA', qtyFraction: 1, priceNative: exit,
+  });
+
+  // Derive the expected exit economics from the inputs.
+  const grossOut = qty * exit;
+  const exitFee = grossOut * (settings.feeBps / 10000);
+  const netOut = grossOut - exitFee;
+  const expectedRealized = netOut - costBasis;
+
+  assert.ok(Math.abs(res.trade.pnlSol - expectedRealized) < CLOSE,
+    `realized P&L must equal netOut - costBasis; got ${res.trade.pnlSol}, expected ${expectedRealized}`);
+
+  const expectedCash = settings.balanceStartSol - spend + netOut;
+  assert.ok(Math.abs(state.cashSol - expectedCash) < CLOSE,
+    `cash must be start - spend + netOut; got ${state.cashSol}, expected ${expectedCash}`);
+
+  assert.equal(Object.keys(state.positions).length, 0, 'a full exit must close the position');
+  assert.equal(state.rounds.length, 1, 'a full exit must append exactly one round trip');
+
+  const round = state.rounds[0];
+  assert.ok(Math.abs(round.investedSol - spend) < CLOSE);
+  assert.ok(Math.abs(round.returnedSol - netOut) < CLOSE);
+  assert.ok(Math.abs(round.pnlSol - (netOut - spend)) < CLOSE,
+    'round P&L is measured against gross invested');
+  assert.equal(round.heldMs, 60000);
+  assert.ok(round.pnlSol > 0, 'a 2x must be profitable after 1% fees per side');
+});
+
+test('a partial sell keeps the position open and books no round trip', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 100, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  const qtyBefore = state.positions.MintA.qty;
+
+  const res = E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 0.5, priceNative: 0.002 });
+
+  assert.equal(res.round, null, 'a partial exit must not close a round trip');
+  assert.equal(state.rounds.length, 0);
+  assert.ok(Math.abs(state.positions.MintA.qty - qtyBefore * 0.5) / qtyBefore < 1e-12,
+    'half the quantity must remain');
+});
+
+test('averageFillPrices uses quantity-weighted paper buys and sells', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 0, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, {
+    ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, priceUsd: 0.20, solAmount: 1,
+  });
+  E.buy(state, settings, {
+    ts: t0 + 1000, mint: 'MintA', symbol: 'X', priceNative: 0.002, priceUsd: 0.40, solAmount: 1,
+  });
+  E.sell(state, settings, {
+    ts: t0 + 2000, mint: 'MintA', qtyFraction: 0.25, priceNative: 0.003, priceUsd: 0.60,
+  });
+  E.sell(state, settings, {
+    ts: t0 + 3000, mint: 'MintA', qtyFraction: 0.25, priceNative: 0.004, priceUsd: 0.80,
+  });
+
+  const fills = state.journal.filter((t) => t.mint === 'MintA');
+  const weighted = (side, key) => {
+    const selected = fills.filter((t) => t.side === side);
+    const qty = selected.reduce((sum, t) => sum + t.qty, 0);
+    return selected.reduce((sum, t) => sum + t.qty * t[key], 0) / qty;
+  };
+  const averages = E.averageFillPrices(state, 'MintA');
+
+  assert.ok(Math.abs(averages.avgBuyNative - weighted('buy', 'priceNative')) < CLOSE);
+  assert.ok(Math.abs(averages.avgBuyUsd - weighted('buy', 'priceUsd')) < CLOSE);
+  assert.ok(Math.abs(averages.avgSellNative - weighted('sell', 'priceNative')) < CLOSE);
+  assert.ok(Math.abs(averages.avgSellUsd - weighted('sell', 'priceUsd')) < CLOSE);
+});
+
+test('averageFillPrices persists from the latest round after a full close', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 0, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, {
+    ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, priceUsd: 0.20, solAmount: 1,
+  });
+  E.sell(state, settings, {
+    ts: t0 + 1000, mint: 'MintA', qtyFraction: 1, priceNative: 0.002, priceUsd: 0.40,
+  });
+
+  assert.equal(state.positions.MintA, undefined);
+  const averages = E.averageFillPrices(state, 'MintA');
+  assert.equal(averages.avgBuyUsd, 0.20);
+  assert.equal(averages.avgSellUsd, 0.40);
+});
+
+test('latestClosedPnl reports the realized result of a partial sell', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 100, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  const { trade } = E.sell(state, settings, {
+    ts: t0 + 1000, mint: 'MintA', qtyFraction: 0.5, priceNative: 0.002,
+  });
+
+  const closed = E.latestClosedPnl(state, 'MintA');
+  assert.equal(closed.kind, 'partial');
+  assert.equal(closed.closedAt, trade.ts);
+  assert.ok(Math.abs(closed.pnlSol - trade.pnlSol) < CLOSE);
+  assert.ok(closed.pnlPct > 0, 'a profitable partial exit must show a positive realized percentage');
+  assert.ok(Math.abs(closed.returnedSol - trade.solNet) < CLOSE);
+});
+
+test('latestClosedPnl switches to full round-trip P&L after the final sell', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 100, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 0.5, priceNative: 0.0015 });
+  const { round } = E.sell(state, settings, {
+    ts: t0 + 2000, mint: 'MintA', qtyFraction: 1, priceNative: 0.002,
+  });
+
+  const closed = E.latestClosedPnl(state, 'MintA');
+  assert.equal(closed.kind, 'round');
+  assert.ok(Math.abs(closed.pnlSol - round.pnlSol) < CLOSE);
+  assert.ok(Math.abs(closed.pnlPct - round.pnlPct) < CLOSE);
+  assert.ok(Math.abs(closed.returnedSol - round.returnedSol) < CLOSE);
+});
+
+test('selling with no open position is refused', () => {
+  const settings = freshSettings();
+  const state = E.defaultState(settings);
+  assert.throws(() => E.sell(state, settings, {
+    ts: Date.now(), mint: 'Nope', qtyFraction: 1, priceNative: 0.001,
+  }), /No open paper position/i);
+});
+
+test('a losing round trip books a negative realized P&L', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 100, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  E.sell(state, settings, { ts: t0 + 5000, mint: 'MintA', qtyFraction: 1, priceNative: 0.0005 });
+
+  const round = state.rounds[0];
+  assert.ok(round.pnlSol < 0, 'halving the price must lose money');
+  assert.ok(state.cashSol < settings.balanceStartSol);
+  assert.equal(E.sessionStats(state, settings).wins, 0);
+});
+
+test('fees make a flat round trip a net loss', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 100, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+  const price = 0.001;
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: price, solAmount: 1 });
+  E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 1, priceNative: price });
+
+  assert.ok(state.rounds[0].pnlSol < 0, 'round-tripping at the same price must lose the fees');
+  assert.ok(state.cashSol < settings.balanceStartSol);
+});
+
+/* ---------------- marking positions ---------------- */
+
+test('markPosition tracks peak and trough unrealized P&L', () => {
+  const settings = freshSettings({ feeBps: 0, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+
+  E.markPosition(state, 'MintA', 0.003); // up
+  E.markPosition(state, 'MintA', 0.0005); // down
+
+  const pos = state.positions.MintA;
+  assert.ok(pos.peakPnlSol > 0, 'peak must record the profitable excursion');
+  assert.ok(pos.troughPnlSol < 0, 'trough must record the drawdown');
+  assert.ok(pos.peakPnlSol > pos.troughPnlSol);
+});
+
+test('equity reflects cash plus marked position value', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 0, slippageBps: 0 });
+  const state = E.defaultState(settings);
+
+  E.buy(state, settings, { ts: Date.now(), mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 2 });
+  E.markPosition(state, 'MintA', 0.002); // position doubles
+
+  const pos = state.positions.MintA;
+  const expectedEquity = state.cashSol + pos.qty * 0.002;
+  assert.ok(Math.abs(E.equitySol(state) - expectedEquity) < CLOSE);
+  assert.ok(E.equitySol(state) > settings.balanceStartSol, 'a 2x on half the wallet must raise equity');
+});
+
+/* ---------------- settings migration ---------------- */
+
+test('an existing install adopts the new feedback defaults exactly once', () => {
+  // Stored settings normally beat defaults, so a user who installed while these
+  // were off would never see them without an explicit migration.
+  const legacy = {
+    balanceStartSol: 10,
+    tradeEffectsEnabled: false,
+    tradeSoundsEnabled: false,
+    averagePriceLinesEnabled: false,
+  };
+
+  const migrated = E.mergeSettings(legacy);
+  assert.equal(migrated.tradeEffectsEnabled, true);
+  assert.equal(migrated.tradeSoundsEnabled, true);
+  assert.equal(migrated.averagePriceLinesEnabled, true);
+  assert.equal(migrated.settingsRevision, E.SETTINGS_REVISION);
+  assert.equal(migrated.balanceStartSol, 10, 'unrelated settings must survive');
+});
+
+test('a deliberate opt-out after the migration is never overridden', () => {
+  const optedOut = {
+    settingsRevision: E.SETTINGS_REVISION,
+    tradeEffectsEnabled: false,
+    tradeSoundsEnabled: false,
+    averagePriceLinesEnabled: false,
+  };
+
+  const merged = E.mergeSettings(optedOut);
+  assert.equal(merged.tradeEffectsEnabled, false,
+    'once migrated, the user\'s own choice wins');
+  assert.equal(merged.tradeSoundsEnabled, false);
+  assert.equal(merged.averagePriceLinesEnabled, false);
+});
+
+test('mergeSettings on a fresh install just returns the defaults', () => {
+  const fresh = E.mergeSettings(null);
+  assert.equal(fresh.tradeEffectsEnabled, true);
+  assert.equal(fresh.balanceStartSol, E.DEFAULT_SETTINGS.balanceStartSol);
+});

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0.0",
+  "pair": {
+    "chainId": "solana",
+    "dexId": "orca",
+    "pairAddress": "5zpyutJu9ee6jFymDGoK7F6S5Kczqtc9FomP3ueKuyA9",
+    "baseToken": {
+      "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      "name": "Bonk",
+      "symbol": "Bonk"
+    },
+    "quoteToken": {
+      "address": "So11111111111111111111111111111111111111112",
+      "name": "Wrapped SOL",
+      "symbol": "SOL"
+    },
+    "priceNative": "0.00000003866",
+    "priceUsd": "0.000002829",
+    "liquidity": {
+      "usd": 124502.5,
+      "base": 30856894447,
+      "quote": 508.4599
+    },
+    "marketCap": 251404756,
+    "fdv": 251404756
+  }
+}

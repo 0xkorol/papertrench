@@ -1,0 +1,7 @@
+/* PaperTrench content-script host styles.
+ * Everything visual lives in the Shadow DOM (see content.js); this file only
+ * guards the host element's own placement.
+ */
+papertrench-host {
+  all: initial;
+}

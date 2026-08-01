@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="PaperTrench — paper-trade Solana memecoins">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B0E14"/>
+      <stop offset="55%" stop-color="#0A0D13"/>
+      <stop offset="100%" stop-color="#06080C"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="18%" cy="8%" r="62%">
+      <stop offset="0%" stop-color="#FF9D45" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#FF9D45" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="88%" cy="92%" r="58%">
+      <stop offset="0%" stop-color="#34D399" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#34D399" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFC081"/>
+      <stop offset="55%" stop-color="#FF9D45"/>
+      <stop offset="100%" stop-color="#E77B22"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#34D399" stop-opacity="0.15"/>
+      <stop offset="45%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#7DF3C4"/>
+    </linearGradient>
+    <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#34D399" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#34D399" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF9D45" stop-opacity="0.65"/>
+      <stop offset="40%" stop-color="#FF9D45" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#FF9D45" stop-opacity="0.40"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="300" rx="16" fill="url(#bg)"/>
+  <rect width="1200" height="300" rx="16" fill="url(#glowA)"/>
+  <rect width="1200" height="300" rx="16" fill="url(#glowB)"/>
+
+  <!-- faint grid -->
+  <g stroke="#FFFFFF" stroke-opacity="0.035" stroke-width="1">
+    <path d="M0 75h1200M0 150h1200M0 225h1200"/>
+    <path d="M150 0v300M300 0v300M450 0v300M600 0v300M750 0v300M900 0v300M1050 0v300"/>
+  </g>
+
+  <!-- equity curve motif -->
+  <path d="M660 232 L718 214 L776 224 L834 178 L892 192 L950 140 L1008 152 L1066 96 L1124 74 L1124 268 L660 268 Z" fill="url(#fill)"/>
+  <path d="M660 232 L718 214 L776 224 L834 178 L892 192 L950 140 L1008 152 L1066 96 L1124 74"
+        fill="none" stroke="url(#line)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="1124" cy="74" r="6" fill="#34D399"/>
+  <circle cx="1124" cy="74" r="6" fill="none" stroke="#0B0E14" stroke-width="2"/>
+
+  <!-- buy / sell markers -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-weight="800" font-size="13">
+    <circle cx="776" cy="224" r="13" fill="#22B573"/>
+    <text x="776" y="229" text-anchor="middle" fill="#032B1B">B</text>
+    <circle cx="1066" cy="96" r="13" fill="#E0433A"/>
+    <text x="1066" y="101" text-anchor="middle" fill="#FFF">S</text>
+  </g>
+
+  <!-- app mark -->
+  <g transform="translate(72 96)">
+    <rect width="64" height="64" rx="18" fill="url(#mark)"/>
+    <rect width="64" height="64" rx="18" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+    <text x="32" y="44" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif"
+          font-size="34" font-weight="900" fill="#2A1400">P</text>
+  </g>
+
+  <!-- wordmark -->
+  <text x="160" y="132" font-family="ui-sans-serif, system-ui, sans-serif"
+        font-size="52" font-weight="800" letter-spacing="-1.4" fill="#EAEFF7">PaperTrench</text>
+  <text x="162" y="166" font-family="ui-sans-serif, system-ui, sans-serif"
+        font-size="17" font-weight="600" fill="#8D97A9">Real prices. Fake money. A record you can learn from.</text>
+
+  <!-- feature pills -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="12.5" font-weight="700">
+    <g transform="translate(162 190)">
+      <rect width="132" height="30" rx="15" fill="#FF9D45" fill-opacity="0.12" stroke="#FF9D45" stroke-opacity="0.32"/>
+      <text x="66" y="20" text-anchor="middle" fill="#FFC081">PAPER ONLY</text>
+    </g>
+    <g transform="translate(304 190)">
+      <rect width="150" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.10"/>
+      <text x="75" y="20" text-anchor="middle" fill="#8D97A9">8 TRADING SITES</text>
+    </g>
+    <g transform="translate(464 190)">
+      <rect width="132" height="30" rx="15" fill="#34D399" fill-opacity="0.10" stroke="#34D399" stroke-opacity="0.28"/>
+      <text x="66" y="20" text-anchor="middle" fill="#34D399">FREE &amp; OPEN</text>
+    </g>
+  </g>
+
+  <rect x="0.5" y="0.5" width="1199" height="299" rx="16" fill="none" stroke="url(#rim)" stroke-width="1"/>
+</svg>
