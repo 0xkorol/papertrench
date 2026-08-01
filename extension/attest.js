@@ -65,7 +65,11 @@
       // Fixed precision keeps the digest stable across float formatting.
       Number(fill.qty || 0).toFixed(12),
       Number(fill.priceNative || 0).toExponential(12),
-      Number(fill.solGross || 0).toFixed(12),
+      // Cash-basis amount: gross on buy, net on sell.
+      Number(fill.side === 'buy'
+        ? (fill.solGross !== undefined ? fill.solGross : fill.solNet)
+        : (fill.solNet !== undefined ? fill.solNet : fill.solGross)
+      ).toFixed(12),
       String(Math.trunc(Number(fill.ts) || 0)),
     ].join('|');
   }
@@ -85,6 +89,11 @@
       qty: Number(fill.qty) || 0,
       priceNative: Number(fill.priceNative) || 0,
       solGross: Number(fill.solGross) || 0,
+      solNet: Number(fill.solNet !== undefined ? fill.solNet : fill.solGross) || 0,
+      amount: Number(fill.side === 'buy'
+        ? (fill.solGross !== undefined ? fill.solGross : fill.solNet)
+        : (fill.solNet !== undefined ? fill.solNet : fill.solGross)
+      ) || 0,
       ts: Math.trunc(Number(fill.ts) || 0),
       prev,
       hash,
@@ -175,27 +184,30 @@
     for (const link of list) {
       const qty = Number(link.qty) || 0;
       const price = Number(link.priceNative) || 0;
-      const gross = Number(link.solGross) || 0;
+      const amount = Number(link.amount !== undefined
+        ? link.amount
+        : (link.side === 'buy' ? link.solGross : link.solNet)
+      ) || 0;
       if (!(qty > 0) || !(price > 0)) continue;
 
       if (link.side === 'buy') {
-        cash -= gross;
+        cash -= amount;
         const held = positions.get(link.mint) || { qty: 0, cost: 0 };
         held.qty += qty;
-        held.cost += gross;
+        held.cost += amount;
         positions.set(link.mint, held);
       } else if (link.side === 'sell') {
         const held = positions.get(link.mint);
         if (!held || held.qty <= 0) continue;
         const share = Math.min(1, qty / held.qty);
         const costOut = held.cost * share;
-        cash += gross;
-        realized += gross - costOut;
+        cash += amount;
+        realized += amount - costOut;
         held.qty -= qty;
         held.cost -= costOut;
         if (held.qty <= 1e-12) {
           positions.delete(link.mint);
-          if (gross - costOut > 0) wins += 1; else losses += 1;
+          if (amount - costOut > 0) wins += 1; else losses += 1;
         } else {
           positions.set(link.mint, held);
         }

@@ -15,6 +15,9 @@
 (function () {
   'use strict';
 
+  var WSOL_MINT = 'So11111111111111111111111111111111111111112';
+  var BASE58_RE = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
+
   /* ------------------------------------------------------------------ *
    * 1. Identity + anchor quote from a Dexscreener payload
    * ------------------------------------------------------------------ */
@@ -23,13 +26,38 @@
    * Choose the pair a trading UI would actually quote: the Solana pair with a
    * usable price and the deepest liquidity. Shallow pools produce wild prices,
    * so liquidity depth is the correct tiebreak rather than array order.
+   *
+   * When `requestedAddress` is supplied, prefer pairs where that token is the
+   * base, or where it is the quote against wrapped SOL. This stops a stablecoin
+   * or unrelated token from being returned as the resolved identity.
    */
-  function pickBestPair(pairs) {
+  function pickBestPair(pairs, requestedAddress) {
     if (!Array.isArray(pairs)) return null;
     const usable = pairs.filter(
       (p) => p && p.chainId === 'solana' && Number(p.priceNative) > 0
     );
     if (!usable.length) return null;
+
+    const requested = typeof requestedAddress === 'string' && BASE58_RE.test(requestedAddress)
+      ? requestedAddress
+      : null;
+    if (requested) {
+      const relevant = usable.filter((p) => {
+        const base = (p.baseToken && p.baseToken.address) || '';
+        const quote = (p.quoteToken && p.quoteToken.address) || '';
+        if (base === requested) return true;
+        if (quote === requested && base === WSOL_MINT) return true;
+        return false;
+      });
+      if (relevant.length) {
+        return relevant.reduce((best, p) => {
+          const a = Number((p.liquidity && p.liquidity.usd) || 0);
+          const b = Number((best.liquidity && best.liquidity.usd) || 0);
+          return a > b ? p : best;
+        });
+      }
+    }
+
     return usable.reduce((best, p) => {
       const a = Number((p.liquidity && p.liquidity.usd) || 0);
       const b = Number((best.liquidity && best.liquidity.usd) || 0);
@@ -40,21 +68,43 @@
   /** Normalize one Dexscreener pair into our token record, or null if unusable. */
   function normalizePair(pair, fallbackAddress) {
     if (!pair) return null;
-    const priceNative = Number(pair.priceNative);
-    if (!(priceNative > 0)) return null;
+    const rawPrice = Number(pair.priceNative);
+    if (!(rawPrice > 0)) return null;
 
+    const requested = typeof fallbackAddress === 'string' && BASE58_RE.test(fallbackAddress)
+      ? fallbackAddress
+      : null;
     const base = pair.baseToken || {};
+    const quote = pair.quoteToken || {};
+
+    let isQuote = false;
+    if (requested) {
+      if (requested === pair.pairAddress) {
+        isQuote = false;
+      } else if (base.address === requested) {
+        isQuote = false;
+      } else if (quote.address === requested && base.address === WSOL_MINT) {
+        isQuote = true;
+      } else if (quote.address === requested) {
+        return null;
+      } else {
+        isQuote = false;
+      }
+    }
+
+    const token = isQuote ? quote : base;
+    const priceNative = isQuote ? 1 / rawPrice : rawPrice;
     const priceUsd = pair.priceUsd != null ? Number(pair.priceUsd) : null;
     const mcap = Number(pair.marketCap != null ? pair.marketCap : pair.fdv);
 
     return {
-      mint: base.address || fallbackAddress || null,
+      mint: token.address || fallbackAddress || null,
       pairAddress: pair.pairAddress || null,
-      symbol: base.symbol || null,
-      name: base.name || base.symbol || null,
+      symbol: token.symbol || null,
+      name: token.name || token.symbol || null,
       priceNative,
       priceUsd: Number.isFinite(priceUsd) && priceUsd > 0 ? priceUsd : null,
-      mcap: Number.isFinite(mcap) && mcap > 0 ? mcap : null,
+      mcap: Number.isFinite(mcap) && mcap > 0 && !isQuote ? mcap : null,
       dex: pair.dexId || null,
       priceSource: 'resolver',
       resolvedAt: Date.now(),
@@ -68,7 +118,7 @@
    */
   function tokenFromPayload(payload, fallbackAddress) {
     if (!payload || typeof payload !== 'object') return null;
-    const pair = payload.pair || pickBestPair(payload.pairs);
+    const pair = payload.pair || pickBestPair(payload.pairs, fallbackAddress);
     return normalizePair(pair, fallbackAddress);
   }
 
@@ -81,8 +131,6 @@
    * required. Jupiter's free token search returns new mints within seconds,
    * but quotes USD only — the SOL price is derived from a SOL/USD reference.
    * ------------------------------------------------------------------ */
-
-  var WSOL_MINT = 'So11111111111111111111111111111111111111112';
 
   /** Pull the entry for `address` out of a Jupiter search response. */
   function jupiterEntry(payload, address) {
@@ -556,5 +604,6 @@
 
   // Always install the browser global; only export under CommonJS when present.
   if (typeof window !== 'undefined') window.PaperQuote = api;
+  if (typeof self !== 'undefined') self.PaperQuote = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })();

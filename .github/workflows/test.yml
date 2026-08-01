@@ -15,7 +15,6 @@ jobs:
           node-version: '20'
       - name: Run test suite
         working-directory: extension
-        # Unquoted so the runner's shell expands the glob — node does not
-        # expand patterns itself, and a quoted pattern reaches it literally.
+        # node --test discovers and runs the test directory in cwd.
         # The live-API test skips cleanly when the network is unavailable.
-        run: node --test test/*.test.js
+        run: node --test

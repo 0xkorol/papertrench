@@ -8,8 +8,9 @@
  */
 
 
-if (typeof importScripts === 'function') importScripts('replay.js');
+if (typeof importScripts === 'function') importScripts('replay.js', 'quote.js', 'resolver.js');
 const RP = self.PTReplay;
+const R = self.PaperTrenchResolver;
 
 const DEFAULTS = {
   balanceStartSol: 10,
@@ -27,6 +28,7 @@ const DEFAULTS = {
   profitAlertPct: 10,
   averagePriceLinesEnabled: true,
   positionsBarEnabled: true,
+  settingsRevision: 2,
   aiEndpoint: 'http://127.0.0.1:8765/v1',
   aiModel: '',
   aiApiKey: '',
@@ -313,6 +315,26 @@ function buildRoundReviewPrompt(round, trades) {
 
 /* -------------------- message routing -------------------- */
 
+const BASE58_RE = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
+const MAX_MINTS_PER_BATCH = 100;
+
+function isSolanaAddress(s) {
+  return typeof s === 'string' && BASE58_RE.test(s);
+}
+
+function sanitizeMints(list) {
+  if (!Array.isArray(list)) return null;
+  const clean = list.filter(isSolanaAddress);
+  return clean.length ? clean.slice(0, MAX_MINTS_PER_BATCH) : null;
+}
+
+function isValidTokenForRefresh(t) {
+  if (!t || typeof t !== 'object') return false;
+  if (!isSolanaAddress(t.mint)) return false;
+  if (t.pairAddress && !isSolanaAddress(t.pairAddress)) return false;
+  return true;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return;
 
@@ -395,6 +417,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!message.enabled && recActive) await stopRecording(null);
         sendResponse({ ok: true });
         break;
+
+      // Price resolution is done from the service worker so it is not subject to
+      // the page origin's CORS or CSP. The content script supplies only mints
+      // and addresses; the background decides which public APIs to call.
+      case 'pt_resolve':
+        if (!isSolanaAddress(message.address)) { sendResponse(null); break; }
+        try { sendResponse(await R.resolve(message.address)); } catch (e) { sendResponse(null); }
+        break;
+
+      case 'pt_refresh':
+        if (!isValidTokenForRefresh(message.token)) { sendResponse(null); break; }
+        try { sendResponse(await R.refresh(message.token)); } catch (e) { sendResponse(null); }
+        break;
+
+      case 'pt_batch_prices': {
+        const mints = sanitizeMints(message.mints);
+        if (!mints) { sendResponse({}); break; }
+        try { sendResponse(await R.batchPrices(mints)); } catch (e) { sendResponse({}); }
+        break;
+      }
 
       default:
         sendResponse({ error: 'unknown message type' });

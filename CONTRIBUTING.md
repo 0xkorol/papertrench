@@ -14,10 +14,10 @@ corrupts every P&L that follows, and it teaches the user the wrong lesson.
 
 ```bash
 cd extension
-node --test "test/*.test.js"
+node --test
 ```
 
-All 206 must pass. The single live-API test skips (never fails) when offline.
+All 231 must pass. The single live-API test skips (never fails) when offline.
 
 ## Writing tests
 

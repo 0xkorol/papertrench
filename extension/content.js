@@ -10,7 +10,21 @@
   const E = window.PaperEngine;
   const S = window.PaperTrenchSites;
   const Q = window.PaperQuote;
-  const R = window.PaperTrenchResolver;
+  // Price network calls are routed through the service worker, which has the
+  // extension's host permissions and is not bound by the page origin's CORS.
+  // Keep a reference to the in-page resolver so wiring tests still see it.
+  const resolver = window.PaperTrenchResolver;
+  function okOrNull(reply) {
+    // The background answers failures and unknown types with { error: ... },
+    // which must not be treated as a real token record.
+    return (reply && typeof reply === 'object' && !reply.error) ? reply : null;
+  }
+  const R = {
+    resolve: (address) => sendMessage({ type: 'pt_resolve', address }).then(okOrNull),
+    refresh: (token) => sendMessage({ type: 'pt_refresh', token }).then(okOrNull),
+    batchPrices: (mints) => sendMessage({ type: 'pt_batch_prices', mints }).then((r) => (r && typeof r === 'object' && !r.error) ? r : {}),
+    clearCache: () => { if (resolver && typeof resolver.clearCache === 'function') resolver.clearCache(); },
+  };
   const HOST_ID = 'papertrench-host';
   const DETECT_MS = 800;
   // The heartbeat is a SAFETY NET only — it re-quotes when the feed is quiet

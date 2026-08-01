@@ -12,6 +12,7 @@
   'use strict';
 
   var Q = (typeof window !== 'undefined' && window.PaperQuote)
+    || (typeof self !== 'undefined' && self.PaperQuote)
     || (typeof module !== 'undefined' && module.exports ? require('./quote.js') : null);
 
   var BASE = 'https://api.dexscreener.com/latest/dex';
@@ -189,5 +190,6 @@
   };
 
   if (typeof window !== 'undefined') window.PaperTrenchResolver = api;
+  if (typeof self !== 'undefined') self.PaperTrenchResolver = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })();
