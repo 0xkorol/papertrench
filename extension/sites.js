@@ -140,7 +140,16 @@
       match: (h) => /(^|\.)jup\.ag$/.test(h),
       // jup.ag/swap/SOL-<mint> or jup.ag/tokens/<mint>
       detect: () => {
-        const tok = firstBase58(queryParam('outputMint') || '') || firstBase58(location.pathname);
+        const SOL = 'So11111111111111111111111111111111111111112';
+        const buy = firstBase58(queryParam('buy') || '');
+        const sell = firstBase58(queryParam('sell') || '');
+        const output = firstBase58(queryParam('outputMint') || '');
+        const input = firstBase58(queryParam('inputMint') || '');
+        const tok = (buy && buy !== SOL ? buy : null)
+          || (sell && sell !== SOL ? sell : null)
+          || (output && output !== SOL ? output : null)
+          || (input && input !== SOL ? input : null)
+          || firstBase58(location.pathname);
         return tok ? { kind: 'mint', address: tok } : null;
       },
     },

@@ -70,6 +70,7 @@
       closedAt: session.closedAt,
       status: session.closedAt ? 'closed' : 'open',
       errors: [],
+      checkpoints: [],
       updatedAt: Date.now(),
     };
   }

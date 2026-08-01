@@ -559,7 +559,7 @@ function renderRounds(el) {
         <td>${renderExitCell(r)}</td>
         <td>${renderThesisCell(r)}</td>
         <td>${r.aiReview ? '<span class="tag" style="color:var(--green);border-color:rgba(52,211,153,.3)">reviewed</span>' : '<button class="btn-sec review-btn" data-id="' + esc(r.id) + '">AI review</button>'}</td>
-        <td>${replay ? `<button class="btn-sec replay-btn" data-session="${esc(replay.sessionId)}">▶ ${replay.checkpoints.length} moments</button>` : '<span class="dim">—</span>'}</td>
+        <td>${replay ? `<button class="btn-sec replay-btn" data-session="${esc(replay.sessionId)}">▶ ${Array.isArray(replay.checkpoints) ? replay.checkpoints.length : 0} moments</button>` : '<span class="dim">—</span>'}</td>
         <td><button class="btn-sec share-btn" data-id="${esc(r.id)}">Share</button></td>
         <td class="dim" style="font-size:11px">${esc(r.recordingFile || '—')}</td>
       </tr>`;
