@@ -11,6 +11,10 @@
   'use strict';
 
   const BASE58_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+  const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+  const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+  const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+  const QUOTE_MINTS = new Set([WSOL_MINT, USDC_MINT, USDT_MINT]);
 
   function firstBase58(text) {
     if (!text) return null;
@@ -136,20 +140,21 @@
     {
       id: 'jupiter',
       name: 'Jupiter',
-      tokenUrl: (mint) => 'https://jup.ag/swap/SOL-' + mint,
+      tokenUrl: (mint) => 'https://jup.ag/swap?inputMint=' + WSOL_MINT + '&outputMint=' + mint,
       match: (h) => /(^|\.)jup\.ag$/.test(h),
-      // jup.ag/swap/SOL-<mint> or jup.ag/tokens/<mint>
+      // jup.ag/swap/SOL-<mint>, jup.ag/tokens/<mint>, or the newer
+      // ?inputMint=...&outputMint=... form. After redirects the page may rewrite
+      // itself to ?buy=...&sell=... (usually SOL/USDC), so prefer the original
+      // output/input token and ignore stable/quote addresses.
       detect: () => {
-        const SOL = 'So11111111111111111111111111111111111111112';
-        const buy = firstBase58(queryParam('buy') || '');
-        const sell = firstBase58(queryParam('sell') || '');
-        const output = firstBase58(queryParam('outputMint') || '');
-        const input = firstBase58(queryParam('inputMint') || '');
-        const tok = (buy && buy !== SOL ? buy : null)
-          || (sell && sell !== SOL ? sell : null)
-          || (output && output !== SOL ? output : null)
-          || (input && input !== SOL ? input : null)
-          || firstBase58(location.pathname);
+        const candidates = [
+          firstBase58(queryParam('outputMint') || ''),
+          firstBase58(queryParam('inputMint') || ''),
+          firstBase58(queryParam('buy') || ''),
+          firstBase58(queryParam('sell') || ''),
+          firstBase58(location.pathname),
+        ].filter(Boolean);
+        const tok = candidates.find((addr) => !QUOTE_MINTS.has(addr)) || null;
         return tok ? { kind: 'mint', address: tok } : null;
       },
     },
