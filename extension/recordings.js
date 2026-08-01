@@ -16,6 +16,15 @@
   // Recordings are large; keep a bounded history rather than growing forever.
   const MAX_RECORDINGS = 12;
 
+  // An open() that never answers must not hang the caller. IndexedDB can stall
+  // indefinitely: `onblocked` fires when another tab holds an older version
+  // open and then nothing further happens, and in some contexts (private mode,
+  // a corrupt profile, a file:// page) neither success nor error ever arrives.
+  // The dashboard awaits this during startup, so an unresolved promise leaves
+  // the whole page blank forever. Failing after a bounded wait degrades to
+  // "no recordings" instead, which the UI already handles.
+  const OPEN_TIMEOUT_MS = 5000;
+
   function idb() {
     return typeof indexedDB !== 'undefined' ? indexedDB : null;
   }
@@ -24,7 +33,27 @@
     return new Promise((resolve, reject) => {
       const api = idb();
       if (!api) { reject(new Error('IndexedDB unavailable')); return; }
-      const request = api.open(DB_NAME, DB_VERSION);
+
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const timer = setTimeout(
+        () => finish(reject, new Error('IndexedDB open timed out')),
+        OPEN_TIMEOUT_MS
+      );
+
+      let request;
+      try {
+        request = api.open(DB_NAME, DB_VERSION);
+      } catch (err) {
+        finish(reject, err instanceof Error ? err : new Error('IndexedDB open failed'));
+        return;
+      }
+
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains(STORE)) {
@@ -33,8 +62,11 @@
           store.createIndex('savedAt', 'savedAt');
         }
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
+      request.onsuccess = () => finish(resolve, request.result);
+      request.onerror = () => finish(reject, request.error || new Error('IndexedDB open failed'));
+      // Another tab is holding an older version open; that upgrade will not
+      // complete on its own, so surface it rather than waiting out the timeout.
+      request.onblocked = () => finish(reject, new Error('IndexedDB open blocked by another tab'));
     });
   }
 

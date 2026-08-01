@@ -140,8 +140,18 @@ async function loadAll() {
   state = s.pt_state || E.defaultState(settings);
   frames = s.pt_frames || [];
   replays = RP.normalizeReplayList(s[RP.STORAGE_KEY]);
-  await loadRecordings();
   if (!selectedReplayId && replays[0]) selectedReplayId = replays[0].sessionId;
+
+  // Videos are not needed to paint anything except Replay, and they come from
+  // IndexedDB, which can be slow or unavailable. Awaiting them here meant a
+  // stalled database left the ENTIRE dashboard blank, with no error to explain
+  // it. Kick the load off without blocking the first paint, then repaint the
+  // Replay view only if recordings actually arrived.
+  loadRecordings()
+    .then(() => {
+      if (Object.keys(recordings).length && currentSection === 'replay') renderSection('replay');
+    })
+    .catch(() => {});
 }
 
 async function saveSettings() {

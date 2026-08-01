@@ -128,3 +128,127 @@ test('object URLs are created once per recording rather than per render', () => 
   assert.match(fn, /recordingUrls\[recording\.id\]/,
     'the replay re-renders on every tick; minting a new URL each time would leak');
 });
+
+/* ---------------- the store must never hang its caller ---------------- */
+
+/*
+ * Found by loading the real dashboard in a headless browser: the page rendered
+ * nothing at all, with no error in the console. `loadAll()` awaited the
+ * recording store, the store awaited `indexedDB.open()`, and that open request
+ * never fired success, error, OR blocked. Every promise in the chain stayed
+ * pending, so the dashboard sat permanently blank.
+ *
+ * IndexedDB really does stall: another tab holding an older version open fires
+ * `onblocked` and then waits forever, and private-mode / corrupt-profile /
+ * file:// contexts can drop the request entirely. So the store must bound its
+ * own wait, and the dashboard must not make the first paint depend on it.
+ *
+ * These tests drive the SHIPPED `openDb()` through `list()` against fake
+ * IndexedDB objects that reproduce each stall.
+ */
+
+/** Swap in a fake indexedDB for one call, always restoring the real global. */
+async function withIndexedDb(fake, run) {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, 'indexedDB');
+  const previous = globalThis.indexedDB;
+  globalThis.indexedDB = fake;
+  try {
+    return await run();
+  } finally {
+    if (had) globalThis.indexedDB = previous;
+    else delete globalThis.indexedDB;
+  }
+}
+
+/** Resolves to 'settled' if the promise finishes first, 'hung' if the clock wins. */
+function raceAgainstClock(promise, ms) {
+  let timer;
+  const clock = new Promise((resolve) => { timer = setTimeout(() => resolve('hung'), ms); });
+  return Promise.race([
+    promise.then(() => 'settled', () => 'settled'),
+    clock,
+  ]).finally(() => clearTimeout(timer));
+}
+
+test('an open request that never answers is abandoned instead of hanging forever', async () => {
+  // The exact browser behaviour observed: open() returns a request whose
+  // handlers are never invoked.
+  const silent = { open: () => ({}) };
+
+  const outcome = await withIndexedDb(silent, async () => {
+    const started = Date.now();
+    const result = await raceAgainstClock(RC.list(), 15_000);
+    return { result, elapsed: Date.now() - started };
+  });
+
+  assert.equal(outcome.result, 'settled',
+    'a silent IndexedDB must not leave the caller pending; the dashboard awaits this');
+  assert.ok(outcome.elapsed < 15_000,
+    `the store must give up on its own; waited ${outcome.elapsed}ms`);
+});
+
+test('a blocked open is surfaced rather than waited out', async () => {
+  // Another tab holds an older version open: onblocked fires, nothing follows.
+  const blocked = {
+    open: () => {
+      const request = {};
+      setImmediate(() => { if (request.onblocked) request.onblocked(); });
+      return request;
+    },
+  };
+
+  const outcome = await withIndexedDb(blocked, async () => {
+    const started = Date.now();
+    const result = await raceAgainstClock(RC.list(), 4_000);
+    return { result, elapsed: Date.now() - started };
+  });
+
+  assert.equal(outcome.result, 'settled', 'a blocked open must settle');
+  assert.ok(outcome.elapsed < 3_000,
+    `onblocked must resolve immediately, not fall through to the timeout; took ${outcome.elapsed}ms`);
+});
+
+test('an open() that throws outright fails fast, and the dashboard degrades to no recordings', async () => {
+  // Some contexts throw synchronously from open() (a SecurityError in a
+  // sandboxed or private-mode frame). The store must turn that into a rejected
+  // promise immediately rather than leaving one pending behind the timeout.
+  const throwing = { open: () => { throw new Error('SecurityError'); } };
+
+  const timersBefore = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
+  const outcome = await withIndexedDb(throwing, async () => {
+    const started = Date.now();
+    let rejected = false;
+    await RC.list().catch(() => { rejected = true; });
+    const timersAfter = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
+    return { rejected, elapsed: Date.now() - started, pendingTimers: timersAfter - timersBefore };
+  });
+
+  assert.equal(outcome.rejected, true, 'an unusable store must report failure, not resolve with junk');
+  assert.ok(outcome.elapsed < 1_000,
+    `a synchronous throw must not wait out the open timeout; took ${outcome.elapsed}ms`);
+
+  // The rejection alone is not enough: the open timeout must also be cleared.
+  // A throw that escapes the executor rejects the promise but leaves the timer
+  // armed, holding a callback (and in a browser, the closure it captures) for
+  // the full timeout after the caller has already given up.
+  assert.equal(outcome.pendingTimers, 0,
+    'a failed open must not leave its timeout armed; the timer was still pending');
+
+  // And the only consumer must survive that rejection.
+  const src = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function loadRecordings'), src.indexOf('function recordingUrl'));
+  assert.ok(fn.length > 0, 'loadRecordings must exist');
+  assert.match(fn, /catch[\s\S]*recordings = \{\}/,
+    'an IndexedDB failure must leave the dashboard with no recordings, not a broken page');
+});
+
+test('the dashboard paints before recordings finish loading', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function loadAll'), src.indexOf('async function saveSettings'));
+  assert.ok(fn.length > 0, 'loadAll must exist');
+  assert.ok(!/await\s+loadRecordings\(\)/.test(fn),
+    'awaiting the recording store inside loadAll makes the first paint depend on ' +
+    'IndexedDB; a stalled database then leaves the whole dashboard blank');
+  assert.match(fn, /loadRecordings\(\)/,
+    'recordings must still be loaded, just not blockingly');
+});
