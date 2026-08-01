@@ -1,0 +1,5 @@
+# Keep binary release assets out of diffs.
+*.mp4 binary
+*.gif binary
+*.png binary
+*.jpg binary

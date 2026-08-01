@@ -13,9 +13,6 @@ function serviceWorker() {
       framesEnabled: false,
       recordingEnabled: false,
       autoReview: false,
-      trenchBrainEnabled: true,
-      trenchBrainEndpoint: 'http://127.0.0.1:8772/api',
-      trenchBrainCaptureIntervalSec: 60,
     },
     pt_state: { positions: {}, rounds: [], journal: [] },
   };

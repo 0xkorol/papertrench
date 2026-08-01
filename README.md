@@ -12,6 +12,14 @@ Real prices. Fake money. A record you can actually learn from.
 
 </div>
 
+<div align="center">
+
+### [▶ Watch the launch video](docs/video/papertrench-launch.mp4)
+
+<a href="docs/video/papertrench-launch.mp4"><img src="docs/assets/preview.gif" alt="PaperTrench launch video preview" width="82%"></a>
+
+</div>
+
 ---
 
 ## What it is
@@ -54,6 +62,7 @@ It exists because the usual way people learn this market is to lose money findin
 | **Position sizing** | Average and largest trade as a share of your book, flagging anything over 25%. |
 | **Setup performance** | Win rate and average P&L per setup tag — so `revenge` can be compared honestly against `narrative`. |
 | **Session replay** | Scrub through any trade: every fill, chart frames, and the screen recording if you made one, all on one timeline. |
+| **Shareable P&L cards** | Turn any closed round into a posting-ready image, with your own picture or GIF behind it. |
 | **AI coaching** | Optional review of a round or a whole session through any OpenAI-compatible endpoint. Judges process against your stated plan. |
 
 ### Verifiable record
@@ -93,6 +102,19 @@ Open any supported token page and the overlay appears within a second or two.
 6. Open the dashboard to see the round graded — and what you left on the table.
 
 ---
+
+## P&L cards
+
+Every closed round has a **Share** button that opens a card composer. Drop in any
+picture or GIF as the background — it's cover-fitted and scrimmed so the numbers stay
+readable over a busy image — then download a 1200×675 PNG ready to post.
+
+The numbers on the card are read straight from the engine's own round record, so a
+shared card cannot show a result your journal doesn't contain.
+
+Two things are always drawn and cannot be turned off: the **PAPER** watermark across
+the middle, and the small PaperTrench mark with *"paper trading · not financial advice"*
+in the corner. A screenshot of a simulated trade should never be passable as a real one.
 
 ## Privacy
 
