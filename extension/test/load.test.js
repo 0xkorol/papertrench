@@ -125,6 +125,7 @@ function makeBrowserSandbox() {
 const BROWSER_SCRIPTS = [
   { file: 'engine.js', global: 'PaperEngine' },
   { file: 'attest.js', global: 'PTAttest' },
+  { file: 'pnlcard.js', global: 'PTPnlCard' },
   { file: 'recordings.js', global: 'PTRecordings' },
   { file: 'replay.js', global: 'PTReplay' },
   { file: 'quote.js', global: 'PaperQuote' },
@@ -236,12 +237,13 @@ test('dashboard loads its modules before dashboard.js', () => {
   const html = fs.readFileSync(path.join(ROOT, 'dashboard.html'), 'utf8');
   const engineAt = html.indexOf('src="engine.js"');
   const attestAt = html.indexOf('src="attest.js"');
+  const pnlCardAt = html.indexOf('src="pnlcard.js"');
   const recordingsAt = html.indexOf('src="recordings.js"');
   const replayAt = html.indexOf('src="replay.js"');
   const dashboardAt = html.indexOf('src="dashboard.js"');
-  assert.ok(engineAt >= 0 && attestAt > engineAt && recordingsAt > attestAt
-    && replayAt > recordingsAt && dashboardAt > replayAt,
-    'dashboard script order must be engine → attest → recordings → replay → dashboard');
+  assert.ok(engineAt >= 0 && attestAt > engineAt && pnlCardAt > attestAt
+    && recordingsAt > pnlCardAt && replayAt > recordingsAt && dashboardAt > replayAt,
+    'dashboard script order must be engine → attest → pnlcard → recordings → replay → dashboard');
 });
 
 test('the manifest requests only the permissions the extension actually uses', () => {
@@ -251,7 +253,7 @@ test('the manifest requests only the permissions the extension actually uses', (
     ['activeTab', 'offscreen', 'storage', 'tabs', 'unlimitedStorage'].sort());
   assert.ok(!manifest.permissions.includes('alarms'),
     'the alarm was only used for external polling, which this build does not do');
-  assert.equal(manifest.version, '1.0.0');
+  assert.equal(manifest.version, '1.1.0');
 });
 
 /* ---------------- message contract ---------------- */

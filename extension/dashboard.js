@@ -16,6 +16,8 @@ const RC = window.PTRecordings;
 if (!RC) throw new Error('PTRecordings store missing');
 const AT = window.PTAttest;
 if (!AT) throw new Error('PTAttest module missing');
+const PC = window.PTPnlCard;
+if (!PC) throw new Error('PTPnlCard module missing');
 
 const DEFAULTS = E.DEFAULT_SETTINGS;
 let settings = E.defaultSettings();
@@ -42,6 +44,7 @@ let currentSection = 'overview';
 async function init() {
   await loadAll();
   bindNav();
+  bindShareCard();
   renderSidebar();
   renderSection(currentSection);
   // Seed the baseline so the first poll does not re-render an unchanged page.
@@ -216,6 +219,8 @@ function rebindSection(id, el) {
       button.addEventListener('click', () => runReview(button.dataset.id)));
     el.querySelectorAll('.replay-btn').forEach((button) =>
       button.addEventListener('click', () => openReplay(button.dataset.session)));
+    el.querySelectorAll('.share-btn').forEach((button) =>
+      button.addEventListener('click', () => openShareCard(button.dataset.id)));
     return;
   }
   if (id === 'coach') {
@@ -545,14 +550,15 @@ function renderRounds(el) {
         <td>${renderThesisCell(r)}</td>
         <td>${r.aiReview ? '<span class="tag" style="color:var(--green);border-color:rgba(52,211,153,.3)">reviewed</span>' : '<button class="btn-sec review-btn" data-id="' + esc(r.id) + '">AI review</button>'}</td>
         <td>${replay ? `<button class="btn-sec replay-btn" data-session="${esc(replay.sessionId)}">▶ ${replay.checkpoints.length} moments</button>` : '<span class="dim">—</span>'}</td>
+        <td><button class="btn-sec share-btn" data-id="${esc(r.id)}">Share</button></td>
         <td class="dim" style="font-size:11px">${esc(r.recordingFile || '—')}</td>
       </tr>`;
   }).join('');
   el.innerHTML = `
     <div class="card"><h3>Closed round trips <span class="tag">${(state.rounds || []).length}</span></h3>
       <div class="log"><table>
-        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>Exit</th><th>Thesis</th><th>Review</th><th>Replay</th><th>Recording</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="13">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
+        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>Exit</th><th>Thesis</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="14">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
       </table></div>
     </div>`;
   // Handlers are attached in rebindSection() after the element is live.
@@ -1305,6 +1311,95 @@ function eventLabel(event) {
 }
 
 
+
+/* ---------- shareable P&L card ---------- */
+
+let cardMedia = null;      // the user's chosen background image/GIF
+let cardModelCurrent = null;
+
+/**
+ * Open the share composer for one closed round.
+ *
+ * The card is drawn from the round the engine actually recorded, so the numbers
+ * on a shared image are the same ones the journal holds — there is no separate
+ * "display" figure that could drift from the real result.
+ */
+function openShareCard(roundId) {
+  const round = (state.rounds || []).find((r) => r.id === roundId);
+  if (!round) return;
+
+  const trades = (state.journal || []).filter((t) => (round.tradeIds || []).includes(t.id));
+  const buys = trades.filter((t) => t.side === 'buy');
+  const sells = trades.filter((t) => t.side === 'sell');
+  const weighted = (list) => {
+    const qty = list.reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
+    if (!(qty > 0)) return null;
+    return list.reduce((sum, t) => sum + (Number(t.qty) || 0) * (Number(t.priceNative) || 0), 0) / qty;
+  };
+
+  cardModelCurrent = PC.cardModel({
+    ...round,
+    entryPrice: weighted(buys),
+    exitPrice: weighted(sells),
+  }, { handle: (settings.leaderboardIdentity || {}).handle || '' });
+
+  if (!cardModelCurrent) return;
+  document.getElementById('card-modal').classList.add('open');
+  paintShareCard();
+}
+
+function paintShareCard() {
+  const canvas = document.getElementById('card-canvas');
+  if (!canvas || !cardModelCurrent) return;
+  PC.drawCard(canvas.getContext('2d'), cardModelCurrent, cardMedia);
+}
+
+function closeShareCard() {
+  document.getElementById('card-modal').classList.remove('open');
+}
+
+/** Wire the composer once, at startup — the modal lives outside the sections. */
+function bindShareCard() {
+  const modal = document.getElementById('card-modal');
+  if (!modal) return;
+  const drop = document.getElementById('card-drop');
+  const file = document.getElementById('card-file');
+
+  const loadFile = (chosen) => {
+    if (!chosen) return;
+    const url = URL.createObjectURL(chosen);
+    const img = new Image();
+    img.onload = () => { cardMedia = img; paintShareCard(); };
+    // A broken/unsupported file must not wipe the card.
+    img.onerror = () => URL.revokeObjectURL(url);
+    img.src = url;
+  };
+
+  file.addEventListener('change', () => loadFile(file.files && file.files[0]));
+  drop.addEventListener('dragover', (event) => { event.preventDefault(); drop.classList.add('hot'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('hot'));
+  drop.addEventListener('drop', (event) => {
+    event.preventDefault();
+    drop.classList.remove('hot');
+    loadFile(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]);
+  });
+
+  document.getElementById('card-clear').addEventListener('click', () => {
+    cardMedia = null;
+    paintShareCard();
+  });
+  document.getElementById('card-close').addEventListener('click', closeShareCard);
+  modal.addEventListener('click', (event) => { if (event.target === modal) closeShareCard(); });
+
+  document.getElementById('card-download').addEventListener('click', () => {
+    const canvas = document.getElementById('card-canvas');
+    if (!canvas || !cardModelCurrent) return;
+    const link = document.createElement('a');
+    link.download = `papertrench-${cardModelCurrent.symbol}-${cardModelCurrent.multipleText}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  });
+}
 
 /* ---------- leaderboard ---------- */
 
