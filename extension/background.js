@@ -315,6 +315,24 @@ function buildRoundReviewPrompt(round, trades) {
 
 /* -------------------- message routing -------------------- */
 
+const BASE58_RE = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
+const MAX_MINTS_PER_BATCH = 100;
+
+function isSolanaAddress(s) {
+  return typeof s === 'string' && BASE58_RE.test(s);
+}
+
+function isValidMints(list) {
+  return Array.isArray(list) && list.length <= MAX_MINTS_PER_BATCH && list.every(isSolanaAddress);
+}
+
+function isValidTokenForRefresh(t) {
+  if (!t || typeof t !== 'object') return false;
+  if (!isSolanaAddress(t.mint)) return false;
+  if (t.pairAddress && !isSolanaAddress(t.pairAddress)) return false;
+  return true;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return;
 
@@ -402,14 +420,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // the page origin's CORS or CSP. The content script supplies only mints
       // and addresses; the background decides which public APIs to call.
       case 'pt_resolve':
+        if (!isSolanaAddress(message.address)) { sendResponse(null); break; }
         try { sendResponse(await R.resolve(message.address)); } catch (e) { sendResponse(null); }
         break;
 
       case 'pt_refresh':
+        if (!isValidTokenForRefresh(message.token)) { sendResponse(null); break; }
         try { sendResponse(await R.refresh(message.token)); } catch (e) { sendResponse(null); }
         break;
 
       case 'pt_batch_prices':
+        if (!isValidMints(message.mints)) { sendResponse({}); break; }
         try { sendResponse(await R.batchPrices(message.mints)); } catch (e) { sendResponse({}); }
         break;
 
