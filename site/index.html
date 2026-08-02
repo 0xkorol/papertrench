@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Paper-trade Solana memecoins on the sites you already use</title>
+<meta name="description" content="A Chrome extension that overlays a paper-trading terminal on Axiom, Padre, Photon, GMGN, BullX, Dexscreener, Birdeye and Jupiter. Real prices. Fake money. A record you can actually learn from.">
+<meta property="og:title" content="PaperTrench — Real prices. Fake money. Real lessons.">
+<meta property="og:description" content="Paper-trade Solana memecoins with live chart bubbles, screen-recorded trade replays, a trading journal, and a verifiable leaderboard record.">
+<meta property="og:image" content="assets/video-poster.jpg">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="#"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="#bubbles">Chart bubbles</a>
+      <a href="#replay">Replay</a>
+      <a href="#journal">Journal</a>
+      <a href="#leaderboard">Leaderboard</a>
+      <a href="#install">Install</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="wrap">
+    <span class="hero-badge reveal"><span class="dot"></span>Free · Open source · No signup · Zero telemetry</span>
+    <h1 class="reveal d1">Trade the trenches.<br><span class="grad-orange">Keep your SOL.</span></h1>
+    <p class="hero-sub reveal d2">PaperTrench overlays a <strong>paper-trading terminal</strong> on the memecoin sites you already use — real charts, real live prices, <strong>fake money</strong> — then shows you exactly what you did and why. <span style="color:var(--green)">Learn in an afternoon what usually costs a wallet.</span></p>
+    <div class="hero-ctas reveal d3">
+      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases" target="_blank" rel="noopener">⬇ Get the extension</a>
+      <a class="btn btn-ghost" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">★ Star on GitHub</a>
+    </div>
+    <div class="hero-stats reveal d3">
+      <div class="hero-stat"><div class="num o">8</div><div class="lbl">TRADING SITES</div></div>
+      <div class="hero-stat"><div class="num g">231</div><div class="lbl">TESTS PASSING</div></div>
+      <div class="hero-stat"><div class="num b">0</div><div class="lbl">PRICES INVENTED</div></div>
+      <div class="hero-stat"><div class="num o">100%</div><div class="lbl">LOCAL &amp; PRIVATE</div></div>
+    </div>
+
+    <!-- live animated chart demo -->
+    <div class="chart-demo reveal">
+      <div class="chart-chrome">
+        <span class="cdot" style="background:#ff5f57"></span>
+        <span class="cdot" style="background:#febc2e"></span>
+        <span class="cdot" style="background:#28c840"></span>
+        <span class="ticker"><b>$TRENCH</b> / SOL · <span id="tickerPrice">0.00003412</span></span>
+        <span class="live-pill"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>LIVE PRICE ANCHORED</span>
+      </div>
+      <div class="chart-body">
+        <canvas id="heroChart"></canvas>
+        <div class="paper-panel">
+          <div class="pp-head"><span class="sdot"></span>PAPERTRENCH</div>
+          <div class="pp-bal">◎ <span id="ppBal">10.42</span></div>
+          <div class="pp-pnl up" id="ppPnl">+0.42 SOL (+4.2%) unrealized</div>
+          <div class="pp-btns"><span>0.1</span><span>0.5</span><span>1</span><span>5</span></div>
+          <div class="pp-buy">BUY (PAPER)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ============ SITES MARQUEE ============ -->
+<div class="marquee-sec">
+  <div class="marquee-label reveal">Works as an overlay on the sites you already trade on</div>
+  <div class="marquee reveal">
+    <div class="marquee-track" id="marqueeTrack">
+      <span class="site-chip"><span class="sq" style="background:#ff9d45"></span>Axiom</span>
+      <span class="site-chip"><span class="sq" style="background:#34d399"></span>Padre</span>
+      <span class="site-chip"><span class="sq" style="background:#6aa9ff"></span>Photon</span>
+      <span class="site-chip"><span class="sq" style="background:#a78bfa"></span>GMGN</span>
+      <span class="site-chip"><span class="sq" style="background:#f472b6"></span>BullX</span>
+      <span class="site-chip"><span class="sq" style="background:#facc15"></span>Dexscreener</span>
+      <span class="site-chip"><span class="sq" style="background:#fb7185"></span>Birdeye</span>
+      <span class="site-chip"><span class="sq" style="background:#2dd4bf"></span>Jupiter</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ CHART BUBBLES ============ -->
+<section id="bubbles">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <span class="sec-kicker k-orange reveal">Bubbles on the chart</span>
+        <h2 class="reveal d1">Your paper fills, drawn <span class="grad-orange" style="background:linear-gradient(100deg,var(--orange2),var(--orange-deep));-webkit-background-clip:text;background-clip:text;color:transparent">right on the chart</span></h2>
+        <p class="sec-sub reveal d2">Every paper buy and sell renders as a bubble at the exact price level of the fill — the same visual treatment real trades get. On Padre, fills go one step further and render as <b>native TradingView markers</b> with average entry and exit lines.</p>
+        <div class="feature-list reveal d3">
+          <div class="feature-row"><div class="fi">🎯</div><div><h4>Price-true placement</h4><p>Bubbles sit at the actual fill price and time. Hover any bubble to see price and SOL amount.</p></div></div>
+          <div class="feature-row"><div class="fi">📈</div><div><h4>Native chart fills on Padre</h4><p>Buys and sells appear as real TradingView markers, with average fill and exit lines drawn on the series.</p></div></div>
+          <div class="feature-row"><div class="fi">⚡</div><div><h4>Armed buys on fresh launches</h4><p>Click buy before a brand-new coin even has a quote — the order arms, then fills the instant the first trusted price lands.</p></div></div>
+        </div>
+      </div>
+      <div class="split-visual reveal d1">
+        <div class="visual-card bubbles-canvas-wrap">
+          <div class="chart-chrome">
+            <span class="cdot" style="background:#ff5f57"></span>
+            <span class="cdot" style="background:#febc2e"></span>
+            <span class="cdot" style="background:#28c840"></span>
+            <span class="ticker"><b>trade.padre.gg</b> · your fills</span>
+          </div>
+          <div style="position:relative;height:340px">
+            <canvas id="bubbleChart" style="width:100%;height:100%;display:block"></canvas>
+          </div>
+          <div class="vc-pad" style="padding-top:0">
+            <div class="bubble-legend">
+              <span class="bl"><span class="bdot b">B</span>Paper buy</span>
+              <span class="bl"><span class="bdot s">S</span>Paper sell</span>
+              <span class="bl"><span style="width:18px;height:2px;background:var(--orange);display:inline-block"></span>Avg fill line</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SCREEN RECORDING / REPLAY ============ -->
+<section id="replay" style="background:linear-gradient(180deg, transparent, rgba(224,67,58,0.03), transparent)">
+  <div class="wrap">
+    <div class="split rev">
+      <div>
+        <span class="sec-kicker k-orange reveal" style="color:#ff8a80;background:rgba(224,67,58,0.08);border-color:rgba(224,67,58,0.3)">● REC — Session replay</span>
+        <h2 class="reveal d1">Screen-record your trades.<br>Review them like game film.</h2>
+        <p class="sec-sub reveal d2">Hit record and PaperTrench captures your screen while you trade. Afterwards, scrub through the whole session on one timeline — <b>every fill, every chart frame, and the recording itself, perfectly in sync.</b> Watch yourself chase. Then stop.</p>
+        <div class="feature-list reveal d3">
+          <div class="feature-row"><div class="fi">🎬</div><div><h4>One-click capture</h4><p>Screen recording built into the extension — no OBS, no setup. Recordings are stored locally in IndexedDB.</p></div></div>
+          <div class="feature-row"><div class="fi">🕘</div><div><h4>Fills pinned to the timeline</h4><p>Every buy and sell is a marker on the scrubber. Jump straight to the moment you pulled the trigger.</p></div></div>
+          <div class="feature-row"><div class="fi">🔒</div><div><h4>Never leaves your machine</h4><p>Recordings live in your browser and save to your downloads folder. Nothing is uploaded, ever.</p></div></div>
+        </div>
+      </div>
+      <div class="split-visual reveal d1">
+        <div class="visual-card rec-mock">
+          <div class="rec-head"><span class="rec-dot"></span><span class="rec-lbl">RECORDING</span><span class="rec-time" id="recTime">04:12</span></div>
+          <div class="rec-screen"><canvas id="recChart"></canvas></div>
+          <div class="rec-timeline">
+            <div class="rec-track">
+              <div class="rec-fill" id="recFill"></div>
+              <span class="rec-mark b" style="left:14%">B</span>
+              <span class="rec-mark b" style="left:31%">B</span>
+              <span class="rec-mark s" style="left:52%">S</span>
+              <span class="rec-mark s" style="left:78%">S</span>
+              <span class="rec-scrub" id="recScrub"></span>
+            </div>
+            <div class="rec-events">
+              <span class="rec-evt buy">00:34 BUY 0.5 ◎ @ 0.0000311</span>
+              <span class="rec-evt buy">01:18 BUY 0.5 ◎ @ 0.0000287</span>
+              <span class="rec-evt sell">02:09 SELL 50% @ 0.0000402</span>
+              <span class="rec-evt sell">03:16 SELL 100% @ 0.0000378</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ JOURNAL ============ -->
+<section id="journal">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <span class="sec-kicker k-blue reveal">The journal</span>
+        <h2 class="reveal d1">Write the thesis <em style="font-style:normal;color:var(--blue)">before</em> you know the outcome</h2>
+        <p class="sec-sub reveal d2">While the position is open, you write down <b>why</b> you took the trade, tag the setup, and set a target and stop. When the round closes, PaperTrench grades your process — not just your P&amp;L — because anyone can get lucky once.</p>
+        <div class="feature-list reveal d3">
+          <div class="feature-row"><div class="fi">📝</div><div><h4>Trade thesis, pre-committed</h4><p>Your reasoning is on record before the outcome exists. No revisionist history.</p></div></div>
+          <div class="feature-row"><div class="fi">🏷️</div><div><h4>Setup performance</h4><p>Win rate and average P&amp;L per setup tag — so <code style="font-family:var(--mono);color:var(--red)">revenge</code> gets compared honestly against <code style="font-family:var(--mono);color:var(--blue)">narrative</code>.</p></div></div>
+          <div class="feature-row"><div class="fi">⚖️</div><div><h4>Exit quality &amp; sizing, graded</h4><p>Every round graded excellent / sold early / round-tripped — with the SOL you left on the table quantified, and positions over 25% of your book flagged.</p></div></div>
+          <div class="feature-row"><div class="fi">🤖</div><div><h4>Optional AI coach</h4><p>Point it at any OpenAI-compatible endpoint and get a review of a round — judged against the plan you wrote.</p></div></div>
+        </div>
+      </div>
+      <div class="split-visual reveal d1">
+        <div class="visual-card journal-mock">
+          <div class="j-card">
+            <div class="j-head"><span class="sym">$WIF</span><span class="j-tag narrative">NARRATIVE</span><span class="j-pnl up">+2.41 ◎</span></div>
+            <div class="j-thesis">"Fresh CT narrative, volume ramping, holders doubling every 10m. Target 2x, stop −30%."</div>
+            <div><span class="j-grade exc">EXCELLENT EXIT</span><span class="j-left">captured 87% of the move</span></div>
+          </div>
+          <div class="j-card">
+            <div class="j-head"><span class="sym">$TRENCH</span><span class="j-tag breakout">BREAKOUT</span><span class="j-pnl up">+0.88 ◎</span></div>
+            <div class="j-thesis">"Range break on rising liquidity. Plan: sell halves into strength."</div>
+            <div><span class="j-grade early">SOLD EARLY</span><span class="j-left">left 1.9 ◎ on the table</span></div>
+          </div>
+          <div class="j-card">
+            <div class="j-head"><span class="sym">$REKT</span><span class="j-tag narrative" style="color:var(--red);border-color:rgba(224,67,58,.3);background:rgba(224,67,58,.08)">REVENGE</span><span class="j-pnl down">−1.30 ◎</span></div>
+            <div class="j-thesis">"It has to bounce here…" — no target, no stop.</div>
+            <div><span class="j-grade rt">ROUND-TRIPPED</span><span class="j-left">was +64% at peak</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LEADERBOARD ============ -->
+<section id="leaderboard" style="background:linear-gradient(180deg, transparent, rgba(52,211,153,0.03), transparent)">
+  <div class="wrap">
+    <div class="split rev">
+      <div>
+        <span class="sec-kicker k-green reveal">Verifiable leaderboard</span>
+        <h2 class="reveal d1">A leaderboard that <span style="background:linear-gradient(100deg,var(--green2),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent">can't be faked</span></h2>
+        <p class="sec-sub reveal d2">Every fill is committed to a <b>SHA-256 hash chain the moment it happens</b> — before the outcome is known. No inserting trades, no deleting losers, no backdating winners. The dashboard re-derives your record from the chain and standings are recomputed server-side from the raw fills, never from a self-reported number.</p>
+        <div class="feature-list reveal d3">
+          <div class="feature-row"><div class="fi">⛓️</div><div><h4>Tamper-evident by construction</h4><p>Each fill commits to the hash of the previous one. Touch anything, and every link after it breaks.</p></div></div>
+          <div class="feature-row"><div class="fi">🔍</div><div><h4>Every price re-verifiable</h4><p>Fills record mint, price, and timestamp — so a verifier can re-check them against real market history.</p></div></div>
+          <div class="feature-row"><div class="fi">🪪</div><div><h4>Verified identity</h4><p>One ranked record per verified account, making sybil entries expensive.</p></div></div>
+        </div>
+      </div>
+      <div class="split-visual reveal d1">
+        <div class="visual-card lb-mock">
+          <div class="lb-title"><span class="shield">🛡</span>Season standings <span style="margin-left:auto;font-size:11px;font-weight:800;letter-spacing:1px;color:var(--green);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:4px 10px;background:rgba(52,211,153,.08)">CHAIN-VERIFIED</span></div>
+          <div class="lb-row"><span class="rank">#1</span><span class="handle"><span class="avatar" style="background:rgba(255,157,69,.2);color:var(--orange2)">TD</span>trenchdigger <span class="verify">✓ VERIFIED</span></span><span class="pnl">+48.2 ◎</span><span class="win">71% W · 34 rds</span></div>
+          <div class="lb-row"><span class="rank">#2</span><span class="handle"><span class="avatar" style="background:rgba(106,169,255,.2);color:var(--blue)">SM</span>solmaxi_9 <span class="verify">✓ VERIFIED</span></span><span class="pnl">+31.7 ◎</span><span class="win">64% W · 51 rds</span></div>
+          <div class="lb-row"><span class="rank">#3</span><span class="handle"><span class="avatar" style="background:rgba(167,139,250,.2);color:var(--violet)">PJ</span>paperjack <span class="verify">✓ VERIFIED</span></span><span class="pnl">+22.4 ◎</span><span class="win">58% W · 68 rds</span></div>
+          <div class="lb-row"><span class="rank">#4</span><span class="handle"><span class="avatar" style="background:rgba(52,211,153,.2);color:var(--green)">NC</span>no.chase <span class="verify">✓ VERIFIED</span></span><span class="pnl">+18.9 ◎</span><span class="win">62% W · 29 rds</span></div>
+          <div class="lb-row"><span class="rank">#5</span><span class="handle"><span class="avatar" style="background:rgba(224,67,58,.2);color:#ff8a80">GV</span>gmi.vibes <span class="verify">✓ VERIFIED</span></span><span class="pnl">+12.1 ◎</span><span class="win">55% W · 44 rds</span></div>
+          <div class="lb-chain" id="chainTicker">hash: <span class="h">a41f…c92e</span> <span class="arrow">→</span> <span class="h">7b03…d114</span> <span class="arrow">→</span> <span class="h">e88a…20f7</span> <span class="arrow">→</span> <span class="h">verifying…</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SCREENSHOTS ============ -->
+<section id="shots" style="padding-top:40px">
+  <div class="wrap">
+    <div style="text-align:center;max-width:680px;margin:0 auto 54px">
+      <span class="sec-kicker k-violet reveal">The real thing</span>
+      <h2 class="reveal d1">Built like a terminal, not a toy</h2>
+      <p class="sec-sub reveal d2" style="margin:0 auto">The overlay on a live chart, and the dashboard where every round gets dissected.</p>
+    </div>
+    <div class="shot-frame reveal"><img src="assets/overlay.png" alt="The PaperTrench overlay on a live memecoin chart" loading="lazy"></div>
+    <div style="height:26px"></div>
+    <div class="shot-frame reveal"><img src="assets/dashboard.png" alt="The PaperTrench dashboard: journal, rounds, replay and leaderboard" loading="lazy"></div>
+  </div>
+</section>
+
+<!-- ============ MORE FEATURES GRID ============ -->
+<section id="more" style="padding-top:30px">
+  <div class="wrap">
+    <div style="text-align:center;max-width:680px;margin:0 auto">
+      <span class="sec-kicker k-orange reveal">And then some</span>
+      <h2 class="reveal d1">Everything else in the trench kit</h2>
+    </div>
+    <div class="grid3">
+      <div class="gcard reveal"><div class="gi">🎯</div><h3>It never invents a price</h3><p>Every fill is validated against a trusted anchor from Dexscreener and Jupiter, raced in parallel. No source, no number — the panel says so instead of guessing.</p></div>
+      <div class="gcard reveal d1"><div class="gi">🚀</div><h3>Trades launches seconds old</h3><p>Jupiter is queried in parallel with Dexscreener, so a coin that just hit the curve is tradeable before indexers even see it.</p></div>
+      <div class="gcard reveal d2"><div class="gi">📌</div><h3>Positions bar</h3><p>Every open position pinned to the top of the page with live P&amp;L. Click one to jump straight to its chart.</p></div>
+      <div class="gcard reveal"><div class="gi">🖼️</div><h3>Shareable P&amp;L cards</h3><p>Turn any closed round into a 1200×675 image with your own picture or GIF behind it — permanently watermarked PAPER, so it can never pass as a real trade.</p></div>
+      <div class="gcard reveal d1"><div class="gi">🧪</div><h3>231 tests. Mutation-tested.</h3><p>The decision logic is pure functions exercised directly by the suite — the same code that runs in the page.</p></div>
+      <div class="gcard reveal d2"><div class="gi">🕵️</div><h3>Zero telemetry</h3><p>No account, no signup, nothing phoned home. The only network calls are the public price APIs — and your own AI endpoint, only if you configure one.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSTALL ============ -->
+<section id="install">
+  <div class="wrap">
+    <div style="text-align:center;max-width:680px;margin:0 auto">
+      <span class="sec-kicker k-green reveal">30-second install</span>
+      <h2 class="reveal d1">In the trenches in half a minute</h2>
+      <p class="sec-sub reveal d2" style="margin:0 auto">Not on the Chrome Web Store yet — loading it unpacked is quick.</p>
+    </div>
+    <div class="install-steps">
+      <div class="step reveal"><div class="n">01</div><h4>Download</h4><p>Grab the latest <a href="https://github.com/OnlyTerp/papertrench/releases" target="_blank" rel="noopener" style="color:var(--orange2)">release zip</a> and unzip it.</p></div>
+      <div class="step reveal d1"><div class="n">02</div><h4>Open extensions</h4><p>Go to <code>chrome://extensions</code> and flip on <b>Developer mode</b>.</p></div>
+      <div class="step reveal d2"><div class="n">03</div><h4>Load unpacked</h4><p>Select the folder containing <code>manifest.json</code>.</p></div>
+      <div class="step reveal d3"><div class="n">04</div><h4>Trade</h4><p>Open any supported token page — the overlay appears within seconds.</p></div>
+    </div>
+    <div class="privacy-strip">
+      <div class="pchip reveal"><span class="pi">🔐</span>No account. No signup.</div>
+      <div class="pchip reveal d1"><span class="pi">💾</span>Everything stays local.</div>
+      <div class="pchip reveal d2"><span class="pi">📡</span>Zero telemetry.</div>
+      <div class="pchip reveal d3"><span class="pi">🆓</span>MIT licensed. Free forever.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FINAL CTA ============ -->
+<section class="final-cta">
+  <div class="wrap">
+    <span class="hero-badge reveal"><span class="dot"></span>Paper money. Real lessons.</span>
+    <h2 class="reveal d1" style="margin-top:24px">Blow up a fake account<br><span class="grad-orange" style="background:linear-gradient(100deg,var(--orange2),var(--orange-deep));-webkit-background-clip:text;background-clip:text;color:transparent">before you blow up a real one.</span></h2>
+    <p class="sec-sub reveal d2" style="text-align:center;margin-top:16px">The usual way people learn this market is losing money finding out they chase, oversize, and round-trip their winners. PaperTrench tells you that in an afternoon instead.</p>
+    <div class="hero-ctas reveal d3" style="margin-top:36px">
+      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases" target="_blank" rel="noopener">⬇ Download PaperTrench</a>
+      <a class="btn btn-ghost" href="https://github.com/OnlyTerp/papertrench#readme" target="_blank" rel="noopener">Read the docs</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="#"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+    <div class="foot-note">Paper trading only · not financial advice · every number on this page is simulated demo data, because PaperTrench never fabricates a real one.</div>
+  </div>
+</footer>
+
+<script src="main.js"></script>
+</body>
+</html>
