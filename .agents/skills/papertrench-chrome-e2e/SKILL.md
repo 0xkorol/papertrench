@@ -51,6 +51,18 @@ if (Test-Path $prefs) {
 ## Navigation workaround
 Typing `chrome://` or `file://` URLs in the omnibox can be routed to Google search. Use a local redirect file or CDP `/json/new` instead.
 
+## Verifying the loaded version
+The extension does not render its version inside the popup or dashboard. The authoritative visible version is on `chrome://extensions`. Open the details page directly with the extension ID (from the `service_worker` target URL):
+
+```powershell
+curl.exe -s -X PUT 'http://127.0.0.1:9222/json/new?chrome://extensions/?id=<id>'
+```
+
+The details page shows the **Version** field from `manifest.json`. Do not click **Remove** by mistake; the buttons are adjacent.
+
+## Checking the extension ID
+Look at the `service_worker` target returned by `http://127.0.0.1:9222/json`. Its `url` is `chrome-extension://<id>/background.js`. Use `<id>` when opening `chrome://extensions/?id=<id>`.
+
 ## Token page to test
 - Dexscreener: `https://dexscreener.com/solana/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263`
 - Birdeye: `https://birdeye.so/token/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263?chain=solana`
@@ -59,7 +71,7 @@ Typing `chrome://` or `file://` URLs in the omnibox can be routed to Google sear
 
 ## Overlay selectors (Shadow DOM host: `#papertrench-host`)
 - `#pt-token-name` — token name
-- `#pt-price` — native price
+- `#pt-price` — headline price (native price or market cap depending on token/site); the secondary unit is in `#pt-price-usd`
 - `#pt-balance` — paper balance
 - `#pt-buy-presets .pt-preset` — quick-buy amounts
 - `#pt-buy` — primary buy button
