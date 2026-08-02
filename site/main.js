@@ -17,14 +17,55 @@
   if (track) track.innerHTML += track.innerHTML;
 
   /* ---------- shared canvas helpers ---------- */
+  // Canvas size/context is cached; re-measured only after a resize.
+  const canvasState = new WeakMap();
+  const allCanvases = [];
   function fitCanvas(canvas) {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const r = canvas.getBoundingClientRect();
-    canvas.width = Math.max(1, Math.round(r.width * dpr));
-    canvas.height = Math.max(1, Math.round(r.height * dpr));
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    return { ctx, w: r.width, h: r.height };
+    let st = canvasState.get(canvas);
+    if (!st || st.dirty) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const r = canvas.getBoundingClientRect();
+      canvas.width = Math.max(1, Math.round(r.width * dpr));
+      canvas.height = Math.max(1, Math.round(r.height * dpr));
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      st = { ctx, w: r.width, h: r.height, dirty: false };
+      canvasState.set(canvas, st);
+    }
+    return st;
+  }
+  window.addEventListener('resize', () => {
+    for (const c of allCanvases) {
+      const st = canvasState.get(c);
+      if (st) st.dirty = true;
+      const rl = loops.get(c);
+      if (rl && rl.drawOnce) rl.drawOnce();
+    }
+  });
+
+  // Animation loops run only while the canvas is on screen; with reduced
+  // motion a single static frame is drawn instead of looping.
+  const loops = new Map();
+  function runLoop(canvas, frame) {
+    allCanvases.push(canvas);
+    const drawOnce = () => frame(performance.now());
+    loops.set(canvas, { drawOnce });
+    if (reduced) {
+      const vio = new IntersectionObserver((es) => {
+        if (es[0].isIntersecting) { drawOnce(); vio.disconnect(); }
+      }, { threshold: 0.05 });
+      vio.observe(canvas);
+      return;
+    }
+    let visible = false, rafId = 0;
+    const tick = (ts) => {
+      frame(ts);
+      rafId = visible ? requestAnimationFrame(tick) : 0;
+    };
+    new IntersectionObserver((es) => {
+      visible = es[0].isIntersecting;
+      if (visible && !rafId) rafId = requestAnimationFrame(tick);
+    }, { threshold: 0.05 }).observe(canvas);
   }
 
   function drawGrid(ctx, w, h) {
@@ -150,12 +191,10 @@
       ctx.beginPath(); ctx.arc(w - cw / 2, y(lc.c), 4, 0, Math.PI * 2); ctx.fill();
     }
 
-    function loopHero() {
+    runLoop(heroCanvas, () => {
       if (!reduced) stepHero();
       drawHero();
-      requestAnimationFrame(loopHero);
-    }
-    loopHero();
+    });
   }
 
   /* =========================================================
@@ -172,7 +211,6 @@
     }
     const marks = [ { i: 12, side: 'b' }, { i: 26, side: 'b' }, { i: 44, side: 's' }, { i: 61, side: 's' } ];
     let t0 = null;
-    let started = false;
 
     function drawBub(ts) {
       if (!t0) t0 = ts;
@@ -239,14 +277,9 @@
           ctx.fillText('SELL 1.0 ◎ @ 0.0000402', tx, ty + 3.5);
         }
       });
-
-      requestAnimationFrame(drawBub);
     }
 
-    const bio = new IntersectionObserver((es) => {
-      if (es[0].isIntersecting && !started) { started = true; requestAnimationFrame(drawBub); bio.disconnect(); }
-    }, { threshold: 0.3 });
-    bio.observe(bubCanvas);
+    runLoop(bubCanvas, drawBub);
   }
 
   /* =========================================================
@@ -307,9 +340,8 @@
         const s = Math.floor(total * prog);
         timeEl.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')} / 04:12`;
       }
-      requestAnimationFrame(drawRec);
     }
-    requestAnimationFrame(drawRec);
+    runLoop(recCanvas, drawRec);
   }
 
   /* =========================================================
