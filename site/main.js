@@ -194,6 +194,7 @@
   if (heroCanvas) {
     const tickerEl = document.getElementById('tickerPrice');
     const priceEl = document.getElementById('ptPrice');
+    const usdEl = document.getElementById('ptUsd');
     const balEl = document.getElementById('ppBal');
     const pnlEl = document.getElementById('ppPnl');
     candleChart(heroCanvas, {
@@ -201,6 +202,7 @@
         const px = (c * 3.4e-7).toFixed(8);
         if (tickerEl) tickerEl.textContent = px;
         if (priceEl) priceEl.textContent = px;
+        if (usdEl) usdEl.textContent = `$${(c * 3.4e-7 * 172).toFixed(6)} · SOL`;
         const pnl = (c - 100) / 100;
         if (balEl) balEl.textContent = (10 + pnl * 10).toFixed(2);
         if (pnlEl) {
