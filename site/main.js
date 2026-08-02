@@ -95,10 +95,10 @@
   }
 
   /* =========================================================
-     HERO CHART — live ticking candles with paper-fill bubbles
+     CANDLE CHARTS — live ticking candles with paper-fill bubbles
+     (used by the hero and the terminal scene)
      ========================================================= */
-  const heroCanvas = document.getElementById('heroChart');
-  if (heroCanvas) {
+  function candleChart(canvas, opts) {
     const N = 90;
     let candles = [];
     let price = 100;
@@ -113,11 +113,8 @@
     const fills = [ { i: 22, side: 'b' }, { i: 38, side: 'b' }, { i: 58, side: 's' }, { i: 76, side: 's' } ];
 
     let tick = 0;
-    const tickerEl = document.getElementById('tickerPrice');
-    const balEl = document.getElementById('ppBal');
-    const pnlEl = document.getElementById('ppPnl');
 
-    function stepHero() {
+    function step() {
       tick++;
       const last = candles[candles.length - 1];
       const drift = Math.sin(tick / 14) * 1.4 + 0.2;
@@ -130,20 +127,11 @@
         for (const f of fills) f.i--;
         if (fills[0].i < 2) { fills.shift(); fills.push({ i: N - 4, side: Math.random() > 0.5 ? 'b' : 's' }); }
       }
-      if (tickerEl && tick % 6 === 0) {
-        tickerEl.textContent = (last.c * 3.4e-7).toFixed(8);
-        const pnl = (last.c - 100) / 100;
-        if (balEl) balEl.textContent = (10 + pnl * 10).toFixed(2);
-        if (pnlEl) {
-          const up = pnl >= 0;
-          pnlEl.className = 'pp-pnl ' + (up ? 'up' : 'down');
-          pnlEl.textContent = `${up ? '+' : ''}${(pnl * 10).toFixed(2)} SOL (${up ? '+' : ''}${(pnl * 100).toFixed(1)}%) unrealized`;
-        }
-      }
+      if (opts && opts.onTick && tick % 6 === 0) opts.onTick(last.c);
     }
 
-    function drawHero() {
-      const { ctx, w, h } = fitCanvas(heroCanvas);
+    function draw() {
+      const { ctx, w, h } = fitCanvas(canvas);
       ctx.clearRect(0, 0, w, h);
       drawGrid(ctx, w, h);
       let mn = Infinity, mx = -Infinity;
@@ -191,11 +179,36 @@
       ctx.beginPath(); ctx.arc(w - cw / 2, y(lc.c), 4, 0, Math.PI * 2); ctx.fill();
     }
 
-    runLoop(heroCanvas, () => {
-      if (!reduced) stepHero();
-      drawHero();
+    runLoop(canvas, () => {
+      if (!reduced) step();
+      draw();
     });
   }
+
+  const heroCanvas = document.getElementById('heroChart');
+  if (heroCanvas) {
+    const tickerEl = document.getElementById('tickerPrice');
+    const priceEl = document.getElementById('ptPrice');
+    const balEl = document.getElementById('ppBal');
+    const pnlEl = document.getElementById('ppPnl');
+    candleChart(heroCanvas, {
+      onTick(c) {
+        const px = (c * 3.4e-7).toFixed(8);
+        if (tickerEl) tickerEl.textContent = px;
+        if (priceEl) priceEl.textContent = px;
+        const pnl = (c - 100) / 100;
+        if (balEl) balEl.textContent = (10 + pnl * 10).toFixed(2);
+        if (pnlEl) {
+          const up = pnl >= 0;
+          pnlEl.style.color = up ? 'var(--green)' : '#ff8a80';
+          pnlEl.textContent = `${up ? '+' : ''}${(pnl * 10).toFixed(2)} SOL today (${up ? '+' : ''}${(pnl * 100).toFixed(1)}%)`;
+        }
+      }
+    });
+  }
+
+  const sceneCanvas = document.getElementById('sceneChart');
+  if (sceneCanvas) candleChart(sceneCanvas);
 
   /* =========================================================
      BUBBLES SECTION — line chart with animated pop-in bubbles
