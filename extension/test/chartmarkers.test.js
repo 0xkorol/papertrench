@@ -160,3 +160,23 @@ test('marker count is capped to prevent unbounded growth', () => {
   assert.ok(CM._getMarkers().length <= 200,
     `marker count must be capped at 200; got ${CM._getMarkers().length}`);
 });
+
+test('generic USD chart markers and average lines retain their currency', () => {
+  const CM = loadMarkerModule();
+  CM.clearMarkers();
+
+  CM.addMarker({ ts: 1000, price: 0.00042, side: 'buy', solAmount: 1, currency: 'USD' });
+  CM.setAverageLines({ avgBuyPrice: 0.00042, avgSellPrice: 0.00066, currency: 'USD' });
+
+  assert.equal(CM._getMarkers()[0].currency, 'USD');
+  let lines = CM._getAverageLines();
+  assert.equal(lines.avgBuyPrice, 0.00042);
+  assert.equal(lines.avgSellPrice, 0.00066);
+  assert.equal(lines.currency, 'USD');
+
+  CM.clearAverageLines();
+  lines = CM._getAverageLines();
+  assert.equal(lines.avgBuyPrice, null);
+  assert.equal(lines.avgSellPrice, null);
+  assert.equal(lines.currency, 'SOL');
+});

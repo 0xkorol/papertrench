@@ -116,6 +116,34 @@ test('refresh re-quotes an already-resolved token', async () => {
   assert.equal(fresh.symbol, pairPayload.pair.baseToken.symbol);
 });
 
+test('solUsd exposes the cached SOL/USD rate even when the token is unindexed', async () => {
+  const WSOL = 'So11111111111111111111111111111111111111112';
+  const R = loadResolver((url) => {
+    if (!url.includes('jup.ag')) return notFound();
+    return jsonResponse([
+      { id: WSOL, name: 'Wrapped SOL', symbol: 'SOL', usdPrice: 198.5 },
+    ]);
+  });
+
+  const rate = await R.solUsd();
+  assert.ok(rate > 0, 'must return a positive SOL/USD rate');
+  assert.ok(Math.abs(rate - 198.5) < 1e-9);
+
+  // The rate is cached: a second call must not re-fetch.
+  let hits = 0;
+  const R2 = loadResolver((url) => {
+    if (url.includes('jup.ag')) hits++;
+    return jsonResponse([
+      { id: WSOL, name: 'Wrapped SOL', symbol: 'SOL', usdPrice: 201.0 },
+    ]);
+  });
+  const first = await R2.solUsd();
+  const h1 = hits;
+  const second = await R2.solUsd();
+  assert.equal(hits, h1, 'cached rate must not trigger a second network call');
+  assert.equal(second, first, 'repeated calls return the cached value');
+});
+
 /* ---------------- live API (skips cleanly when offline) ---------------- */
 
 /** Probe the live API so the assertions can be skipped (not failed) offline. */

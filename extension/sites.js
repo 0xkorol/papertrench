@@ -58,6 +58,18 @@
         const tail = pathTail();
         return tail ? { kind: 'pair', address: tail } : null;
       },
+      // Pulse / Discover rows carry anchors to /meme/<pair> plus small
+      // pump.fun icon links; the row's own instant-buy button is the anchor
+      // point for the chip (inserted just left of it).
+      rowBuy: {
+        listPaths: /^\/(pulse|discover)?\/?$/,
+        linkSelectors: ['a[href^="/meme/"]', 'a[href*="pump.fun/coin/"]', 'a[href*="solscan.io/token/"]'],
+        placement: 'before-buy-button',
+        // The instant-buy pill reads "0 SOL" / "0.5 ETH" (older UI: "Buy x SOL").
+        buyButtonPattern: '^(Buy\\s|[\\d.,]+[KMB]?\\s*(SOL|ETH|BNB|USD)$)',
+        containerMode: 'group',
+        kind: 'pair',
+      },
     },
     {
       id: 'padre',
@@ -68,6 +80,18 @@
       detect: () => {
         const tail = pathTail();
         return tail ? { kind: 'mint', address: tail } : null;
+      },
+      // Trenches cards link (absolute) to the token's trade page and also
+      // carry pump.fun icon links.
+      rowBuy: {
+        listPaths: /^\/(trenches|terminal|feed)?\/?$/,
+        linkSelectors: ['a[href*="/trade/solana/"]', 'a[href*="pump.fun/coin/"]', 'a[href*="solscan.io/token/"]'],
+        // Every Trenches card has Padre's own SOL quick-buy pill at the
+        // bottom — the chip sits immediately left of it, covering nothing.
+        placement: 'before-buy-button',
+        buyButtonPattern: '\\bSOL\\b',
+        containerMode: 'heuristic',
+        kind: 'mint',
       },
     },
     {
@@ -97,6 +121,15 @@
         if (addr) return { kind: 'mint', address: addr };
         const tail = pathTail();
         return tail ? { kind: 'mint', address: tail } : null;
+      },
+      // Trenches is GMGN's home feed; cards navigate by JS but carry
+      // pump.fun/coin/<mint> icon links (and some /sol/token/ anchors).
+      rowBuy: {
+        listPaths: /^\/(trenches)?\/?$/,
+        linkSelectors: ['a[href*="/sol/token/"]', 'a[href*="pump.fun/coin/"]', 'a[href*="solscan.io/token/"]'],
+        placement: 'badge',
+        containerMode: 'heuristic',
+        kind: 'mint',
       },
     },
     {
@@ -212,5 +245,7 @@
     return 'https://dexscreener.com/solana/' + (pairAddress || mint);
   }
 
-  window.PaperTrenchSites = { ADAPTERS, currentSite, firstBase58, BASE58_RE, tokenUrlFor };
+  const api = { ADAPTERS, currentSite, firstBase58, BASE58_RE, tokenUrlFor };
+  if (typeof window !== 'undefined') window.PaperTrenchSites = api;
+  if (typeof self !== 'undefined') self.PaperTrenchSites = api;
 })();

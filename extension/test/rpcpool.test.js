@@ -1,0 +1,201 @@
+/* Keyless RPC endpoint pool.
+ *
+ * PaperTrench ships no API key, because an extension bundle is public — Avast
+ * (7M users), Awesome Screen Recorder (3M) and Equatio (5M) all leaked live
+ * credentials exactly that way. A shipped key would also mean one shared rate
+ * limit for every user of the product.
+ *
+ * Public Solana RPC limits are enforced per IP, so keyless endpoints scale
+ * across installs automatically. They do throttle and disappear, though, so
+ * these tests pin the failover behaviour that keeps the feed alive.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+const vm = require('node:vm');
+
+const ROOT = path.join(__dirname, '..');
+
+function loadPool(fetchImpl) {
+  const self = {};
+  self.self = self;
+  const ctx = vm.createContext({
+    self,
+    fetch: fetchImpl,
+    AbortController: function () { this.signal = {}; this.abort = () => {}; },
+    setTimeout, clearTimeout,
+    Map, Set, Promise, JSON, Math, Date, Number, String, Array, Object, Boolean,
+    Error, RegExp, Infinity, isFinite,
+  });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'rpc-pool.js'), 'utf8'), ctx, {
+    filename: 'rpc-pool.js',
+  });
+  return self.PTRpcPool;
+}
+
+const okResponse = (result) => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ jsonrpc: '2.0', id: 1, result }),
+});
+
+/* ---------------- no shipped credentials ---------------- */
+
+test('no endpoint in the shipped pool carries an API key', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  for (const endpoint of P.PUBLIC_ENDPOINTS) {
+    const urls = [endpoint.http, endpoint.ws].filter(Boolean).join(' ');
+    assert.doesNotMatch(urls, /api[-_]?key=|\/v1\/[0-9a-f]{16,}|token=/i,
+      `${endpoint.id} looks like it embeds a credential: ${urls}`);
+  }
+});
+
+test('the shipped source contains no credential-shaped literal', () => {
+  // The exact scan a bundle scraper would run.
+  for (const file of ['rpc-pool.js', 'onchain-feed.js', 'onchain.js']) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    assert.doesNotMatch(src, /sk-[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{12,}/,
+      `${file} contains something shaped like a live credential`);
+  }
+});
+
+test('the default settings ship no RPC key and no forced endpoint', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'engine.js'), 'utf8');
+  assert.match(src, /rpcUrl: ''/,
+    'rpcUrl must default to empty, meaning the keyless pool');
+});
+
+/* ---------------- failover ---------------- */
+
+test('a throttled endpoint fails over instead of killing the price feed', async () => {
+  const seen = [];
+  const P = loadPool(async (url) => {
+    seen.push(url);
+    // First endpoint is rate-limited, exactly what a public node does.
+    if (seen.length === 1) return { ok: false, status: 429, json: async () => ({}) };
+    return okResponse({ value: 'live' });
+  });
+
+  const result = await P.call('getAccountInfo', []);
+  assert.deepEqual(result, { value: 'live' }, 'the call must still succeed');
+  assert.ok(seen.length >= 2, 'a 429 must be retried on a different endpoint');
+  assert.notEqual(seen[0], seen[1], 'failover must move to a different provider');
+});
+
+test('an endpoint that returns an rpc error is treated as a failure', async () => {
+  let calls = 0;
+  const P = loadPool(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { ok: true, status: 200, json: async () => ({ error: { message: 'blocked' } }) };
+    }
+    return okResponse('recovered');
+  });
+
+  assert.equal(await P.call('getHealth', []), 'recovered');
+  assert.ok(calls >= 2, 'an rpc-level error must fail over too');
+});
+
+test('when every endpoint is down the caller gets an error, never a fake price', async () => {
+  const P = loadPool(async () => { throw new Error('network down'); });
+  await assert.rejects(() => P.call('getAccountInfo', []),
+    'a total outage must surface as an error rather than a fabricated value');
+});
+
+/* ---------------- health ranking ---------------- */
+
+test('a repeatedly failing endpoint is benched behind healthy ones', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  const first = P.ranked()[0];
+
+  P.reportFailure(first.id);
+  P.reportFailure(first.id);
+
+  const afterBenching = P.ranked();
+  assert.notEqual(afterBenching[0].id, first.id,
+    'an endpoint that failed twice must not stay the first choice');
+  assert.ok(afterBenching.some((e) => e.id === first.id),
+    'a benched endpoint is kept for later recovery, not discarded');
+});
+
+test('a benched endpoint recovers once it succeeds again', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  const target = P.ranked()[0];
+
+  P.reportFailure(target.id);
+  P.reportFailure(target.id);
+  P.reportSuccess(target.id, 120);
+
+  assert.equal(P.ranked()[0].id, target.id,
+    'a recovered endpoint must be usable as the first choice again');
+});
+
+test('a faster endpoint is preferred once latency is known', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  const [a, b] = P.ranked();
+
+  P.reportSuccess(a.id, 900);
+  P.reportSuccess(b.id, 90);
+
+  assert.equal(P.ranked()[0].id, b.id, 'the measurably faster endpoint must win');
+});
+
+test('even with everything benched an endpoint is still offered', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  for (const endpoint of P.ranked()) {
+    P.reportFailure(endpoint.id);
+    P.reportFailure(endpoint.id);
+  }
+  assert.ok(P.ranked().length > 0,
+    'a total bench must still yield a least-bad option rather than no feed at all');
+});
+
+/* ---------------- optional user endpoint ---------------- */
+
+test('a user-supplied endpoint is preferred but never required', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  assert.equal(P.hasUserEndpoint(), false, 'no endpoint is required by default');
+  assert.ok(P.ranked().length > 0, 'the keyless pool works with no configuration');
+
+  P.setUserEndpoint('https://my-private-node.example.com');
+  assert.equal(P.hasUserEndpoint(), true);
+  assert.equal(P.ranked()[0].id, 'user', 'a private endpoint must take priority');
+});
+
+test('a malformed user endpoint is ignored rather than breaking the feed', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  for (const bad of ['', 'not a url', 'ftp://nope', null, undefined]) {
+    P.setUserEndpoint(bad);
+    assert.equal(P.hasUserEndpoint(), false, `"${bad}" must not be accepted`);
+    assert.ok(P.ranked().length > 0, 'the public pool must remain usable');
+  }
+});
+
+test('a user http endpoint yields a matching websocket url', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  P.setUserEndpoint('https://my-node.example.com/rpc');
+  const [first] = P.websocketUrls();
+  assert.equal(first.id, 'user');
+  assert.equal(first.url, 'wss://my-node.example.com/rpc');
+});
+
+/* ---------------- websocket ranking ---------------- */
+
+test('only endpoints that actually support websockets are offered for streaming', () => {
+  const P = loadPool(async () => okResponse('ok'));
+  for (const entry of P.websocketUrls()) {
+    assert.ok(entry.url && /^wss?:\/\//.test(entry.url),
+      `${entry.id} offered a non-websocket url: ${entry.url}`);
+  }
+});
+
+test('the feed walks the ranked websocket list instead of one hardcoded url', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'onchain-feed.js'), 'utf8');
+  assert.match(src, /POOL\.websocketUrls\(\)/,
+    'the feed must take its socket endpoints from the pool');
+  assert.match(src, /wsIndex \+= 1/,
+    'a failed socket must advance to a different provider');
+  assert.doesNotMatch(src, /const DEFAULT_RPC/,
+    'the feed must not hardcode a single endpoint any more');
+});

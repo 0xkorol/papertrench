@@ -22,6 +22,14 @@
     balanceStartSol: 10,
     presetsBuy: [0.1, 0.5, 1, 2],
     sellPcts: [25, 50, 75, 100],
+    // One-click trading: a preset amount fires the buy immediately (Axiom /
+    // Padre quick-buy behaviour) instead of only selecting it for the BUY
+    // button. Off returns to the two-step select-then-confirm flow.
+    instantBuyEnabled: true,
+    // Paper quick-buy chip on every token row of the screener pages (Axiom
+    // Pulse, Padre/GMGN Trenches), so a position can be opened without
+    // loading the chart first. Fills at the first preset amount.
+    listQuickBuyEnabled: true,
     feeBps: 100,          // 1% per side, roughly Padre/Axiom territory
     slippageBps: 0,       // extra simulated slippage, 0 = fill at tick price
     recordingEnabled: false,
@@ -42,6 +50,11 @@
     aiEndpoint: 'http://127.0.0.1:8765/v1',
     aiModel: '',
     aiApiKey: '',
+    // Optional private Solana RPC. Empty means "use the built-in keyless
+    // public pool", which is the default and needs no signup from anyone.
+    // Public RPC limits are per IP, so the pool scales across every install.
+    // Power users can paste their own endpoint here for extra headroom.
+    rpcUrl: '',
   };
 
   function defaultSettings() {
@@ -564,6 +577,144 @@
     };
   }
 
+  /* ---------------- P&L calendar ----------------
+   *
+   * The daily performance view Axiom/Padre/GMGN popularized: a month grid
+   * where each day shows the realized result of that day's trades. Their
+   * backends bucket by the viewer's LOCAL day (Axiom passes the browser's
+   * timezone offset to its API), so this does the same — days are local
+   * calendar days, never UTC.
+   *
+   * Daily realized P&L is attributed per SELL (partial exits count on the
+   * day they happen), which matches how those sites treat closes. Buys only
+   * contribute counts and volume; they are not a result until closed.
+   */
+
+  /**
+   * Build one month of calendar cells for the dashboard.
+   *
+   * @param {object} state portfolio state (journal + positions)
+   * @param {number} year  full year, e.g. 2026
+   * @param {number} month 0-based month index (Date convention)
+   * @param {object} [opts] { now: ms } for deterministic tests
+   */
+  function pnlCalendar(state, year, month, opts) {
+    const now = Number(opts && opts.now) || Date.now();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days = [];
+    for (let d = 1; d <= daysInMonth; d += 1) {
+      days.push({
+        day: d,
+        hasTrades: false,
+        realizedSol: 0,
+        buys: 0,
+        sells: 0,
+        volumeBuySol: 0,
+        volumeSellSol: 0,
+        symbols: {},
+      });
+    }
+
+    for (const t of (state && state.journal) || []) {
+      const ts = Number(t.ts);
+      if (!(ts > 0)) continue;
+      const dt = new Date(ts);
+      if (dt.getFullYear() !== year || dt.getMonth() !== month) continue;
+      const cell = days[dt.getDate() - 1];
+      cell.hasTrades = true;
+      if (t.side === 'buy') {
+        cell.buys += 1;
+        cell.volumeBuySol += Number(t.solGross) || 0;
+      } else if (t.side === 'sell') {
+        cell.sells += 1;
+        cell.volumeSellSol += Number(t.solGross) || 0;
+        const pnl = Number(t.pnlSol) || 0;
+        cell.realizedSol += pnl;
+        const symbol = typeof t.symbol === 'string' && t.symbol ? t.symbol : '?';
+        cell.symbols[symbol] = (cell.symbols[symbol] || 0) + pnl;
+      }
+    }
+
+    // Monday-start week rows, the layout every one of those terminals uses.
+    // fill() matters: bare new Array(n) creates HOLES, which .map() silently
+    // skips — the blanks must be real elements or the whole grid shifts left.
+    const leading = (new Date(year, month, 1).getDay() + 6) % 7; // Mon=0
+    const cells = new Array(leading).fill(undefined).concat(days);
+    const weeks = [];
+    for (let i = 0; i < cells.length; i += 7) {
+      const row = cells.slice(i, i + 7);
+      while (row.length < 7) row.push(undefined);
+      weeks.push({
+        days: row,
+        totalSol: row.reduce((sum, c) => sum + (c ? c.realizedSol : 0), 0),
+        hasTrades: row.some((c) => c && c.hasTrades),
+      });
+    }
+
+    const totals = {
+      realizedSol: 0,
+      winDays: 0,
+      lossDays: 0,
+      flatDays: 0,
+      tradeDays: 0,
+      buys: 0,
+      sells: 0,
+      volumeBuySol: 0,
+      volumeSellSol: 0,
+      bestDay: null,
+      worstDay: null,
+    };
+    for (const c of days) {
+      totals.realizedSol += c.realizedSol;
+      totals.buys += c.buys;
+      totals.sells += c.sells;
+      totals.volumeBuySol += c.volumeBuySol;
+      totals.volumeSellSol += c.volumeSellSol;
+      if (!c.hasTrades) continue;
+      totals.tradeDays += 1;
+      if (c.realizedSol > 0) totals.winDays += 1;
+      else if (c.realizedSol < 0) totals.lossDays += 1;
+      else totals.flatDays += 1;
+      if (c.sells > 0) {
+        if (!totals.bestDay || c.realizedSol > totals.bestDay.pnlSol) {
+          totals.bestDay = { day: c.day, pnlSol: c.realizedSol };
+        }
+        if (!totals.worstDay || c.realizedSol < totals.worstDay.pnlSol) {
+          totals.worstDay = { day: c.day, pnlSol: c.realizedSol };
+        }
+      }
+    }
+
+    let openPnlSol = 0;
+    const positions = (state && state.positions) || {};
+    for (const mint of Object.keys(positions)) openPnlSol += unrealizedPnl(positions[mint]);
+
+    const nowDate = new Date(now);
+    const todayDay = nowDate.getFullYear() === year && nowDate.getMonth() === month
+      ? nowDate.getDate()
+      : null;
+
+    return { year, month, days, weeks, totals, openPnlSol, todayDay };
+  }
+
+  /**
+   * Oldest and newest months the journal covers, for calendar navigation.
+   * With no fills yet the range collapses to the current month.
+   */
+  function pnlCalendarRange(state) {
+    let minTs = Infinity;
+    for (const t of (state && state.journal) || []) {
+      const ts = Number(t.ts);
+      if (ts > 0 && ts < minTs) minTs = ts;
+    }
+    const now = new Date();
+    const max = { year: now.getFullYear(), month: now.getMonth() };
+    if (!isFinite(minTs)) return { min: { year: max.year, month: max.month }, max };
+    const first = new Date(minTs);
+    return { min: { year: first.getFullYear(), month: first.getMonth() }, max };
+  }
+
   /**
    * Quantity-weighted average paper fill prices for the token's current round,
    * or its most recently closed round when no position remains. Padre's native
@@ -728,6 +879,8 @@
     equitySol,
     solUsdRate,
     sessionStats,
+    pnlCalendar,
+    pnlCalendarRange,
     averageFillPrices,
     exitQuality,
     exitStats,

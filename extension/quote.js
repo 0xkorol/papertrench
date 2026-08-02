@@ -206,7 +206,135 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 2. Tick validation against the trusted anchor
+   * 2. Fresh-launch bootstrap from the on-screen price
+   * ------------------------------------------------------------------ */
+
+  // A new coin has no Dexscreener/Jupiter anchor yet, but the page already
+  // shows a live price on the chart. These thresholds are used to decide what
+  // the on-screen number actually is, since TradingView bars come through as
+  // unit 'unknown' and can represent USD price, native SOL price, or market cap.
+  // Values below this are typical native SOL prices for memecoins (e.g. 1e-8);
+  // values at or above are usually USD token prices. The gap exists because
+  // a memecoin's native price is tiny while its USD price is 1..3 orders of
+  // magnitude larger (SOL/USD ~200).
+  var BOOTSTRAP_NATIVE_THRESHOLD = 1e-7;
+  var BOOTSTRAP_MCAP_FLOOR = 1000;
+  var BOOTSTRAP_USD_CEILING = 1e6;
+
+  /**
+   * Accept the very first price for a coin no aggregator has indexed yet.
+   *
+   * The on-screen price is treated as the only truthful quote, so the trader
+   * can buy the instant the chart starts printing. Stray page numbers are kept
+   * out by requiring a trusted source or a matching mint, and absurd values are
+   * refused rather than becoming a bogus fill.
+   *
+   * @param {object} pendingToken { mint } — the coin waiting for an anchor
+   * @param {object} tick         bridge payload from the page's own feed
+   * @param {number} solUsd       cached SOL/USD rate (0 if not available yet)
+   */
+  function bootstrapTick(pendingToken, tick, solUsd) {
+    var reject = function (reason) {
+      return {
+        accepted: false,
+        reason: reason,
+        priceNative: null,
+        priceUsd: null,
+        mcap: null,
+        basis: null,
+      };
+    };
+
+    if (!pendingToken || !pendingToken.mint) return reject('no-token');
+    if (!tick || typeof tick !== 'object') return reject('no-candidates');
+    if (tick.mint && tick.mint !== pendingToken.mint) return reject('mint-mismatch');
+
+    var rate = Number(solUsd) > 0 ? Number(solUsd) : null;
+    var candidates = Array.isArray(tick.candidates) ? tick.candidates : [];
+    var tickMcap = Number(tick.mcap);
+
+    // Only trust chart/trade sources or mint-tagged payloads. A random number
+    // scraped off the page must never price a brand-new coin.
+    var trusted = tick.mint === pendingToken.mint
+      || tick.source === 'padre-chart-bar'
+      || tick.source === 'chart-export'
+      || tick.source === 'gmgn-ws-trade'
+      || tick.source === 'gmgn-mcap-candle';
+    if (!trusted) return reject('untrusted-source');
+
+    var accept = function (native, usd, mcap, basis) {
+      return {
+        accepted: true,
+        reason: 'ok',
+        priceNative: native > 0 ? native : null,
+        priceUsd: usd > 0 ? usd : null,
+        mcap: mcap > 0 ? mcap : null,
+        basis: basis,
+      };
+    };
+
+    // GMGN's live trade feed is mint-tagged and quotes in USD. Convert it to
+    // the SOL price the engine trades in.
+    if (tick.source === 'gmgn-ws-trade' && tick.mint === pendingToken.mint && candidates.length) {
+      var usd = Number(candidates[0].value);
+      if (!(usd > 0)) return reject('no-candidates');
+      if (!rate) return reject('no-sol-rate');
+      var native = usd / rate;
+      if (!(native > 0)) return reject('no-sol-rate');
+      return accept(native, usd, null, 'ws-usd');
+    }
+
+    for (var i = 0; i < candidates.length; i++) {
+      var cand = candidates[i];
+      var v = Number(cand && cand.value);
+      if (!(v > 0)) continue;
+      var unit = (cand && cand.unit) || 'unknown';
+
+      if (unit === 'native') {
+        // A memecoin native price is far below 1 SOL. Anything larger is almost
+        // certainly a market cap or a mislabelled USD figure.
+        if (v >= 1) return reject('native-looks-mcap');
+        return accept(v, rate ? v * rate : null, null, 'native');
+      }
+
+      if (unit === 'usd') {
+        if (!rate) return reject('no-sol-rate');
+        if (v >= BOOTSTRAP_USD_CEILING) return reject('mcap-looks-usd');
+        var native = v / rate;
+        if (!(native > 0)) return reject('no-sol-rate');
+        return accept(native, v, null, 'usd');
+      }
+
+      // unit === 'unknown' is the common TradingView chart close case. Use the
+      // magnitude of the close to guess the axis unit.
+      if (unit === 'unknown') {
+        // Market cap values are much larger than token prices and we cannot
+        // derive a token price without an implied supply.
+        if (v >= BOOTSTRAP_MCAP_FLOOR) return reject('mcap-no-supply');
+
+        // Very small values are native SOL prices for memecoins (e.g. 1e-8).
+        if (v < BOOTSTRAP_NATIVE_THRESHOLD) {
+          return accept(v, rate ? v * rate : null, null, 'native');
+        }
+
+        // Mid-range values are USD token prices for most charts.
+        if (rate) {
+          var native = v / rate;
+          if (native > 0) return accept(native, v, null, 'usd');
+        }
+
+        return reject('no-sol-rate');
+      }
+    }
+
+    // A market-cap-only tick has no token price, so nothing can be filled yet.
+    if (tickMcap > 0) return reject('mcap-only-no-supply');
+
+    return reject('no-candidates');
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 3. Tick validation against the trusted anchor
    * ------------------------------------------------------------------ */
 
   // A live price may drift far from the anchor during a memecoin move, but it
@@ -282,6 +410,22 @@
       }
     }
 
+    // SOL-denominated market-cap charts (Axiom's USD/SOL toggle in MC mode)
+    // plot the cap in SOL, which matches NEITHER the USD price band nor the
+    // USD market-cap band — every such tick used to be rejected, freezing the
+    // price to slow polling on exactly the charts the user trades on.
+    const anchorNativeMcap = anchorMcap && anchorUsd
+      ? anchorMcap * (anchorNative / anchorUsd)
+      : null;
+    if (nextNative === null && nextUsd === null
+      && anchorNativeMcap && tickMcap > 0 && withinBand(tickMcap, anchorNativeMcap)) {
+      const ratio = tickMcap / anchorNativeMcap;
+      nextNative = anchorNative * ratio;
+      nextUsd = anchorUsd ? anchorUsd * ratio : null;
+      nextMcap = anchorMcap * ratio;
+      basis = 'native-mcap';
+    }
+
     if (nextNative === null && nextUsd === null) {
       return reject(candidates.length || tickMcap > 0 ? 'out-of-band' : 'no-candidates');
     }
@@ -295,6 +439,13 @@
     }
     if (nextUsd === null && nextNative !== null && anchorUsd) {
       nextUsd = anchorUsd * (nextNative / anchorNative);
+    }
+
+    // Supply is constant during a normal tick, so an accepted price move IS a
+    // market-cap move. Without this, a price-only feed (GMGN trades, Padre
+    // bars) left the headline market cap frozen at the last resolver quote.
+    if (nextMcap === null && anchorMcap && nextNative !== null) {
+      nextMcap = anchorMcap * (nextNative / anchorNative);
     }
 
     return {
@@ -315,7 +466,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 2b. Live-price scheduling
+   * 4. Live-price scheduling
    * ------------------------------------------------------------------ */
 
   // How often the anchor is re-quoted when the page's own feed is not
@@ -330,6 +481,10 @@
   // Beyond this with no new price from any source, the quote is stale and the
   // UI must say so rather than implying the P&L is live.
   var STALE_AFTER_MS = 3000;
+  // Even when the page feed is delivering ticks, the trusted anchor (SOL/USD
+  // rate, implied supply, validation band centre) must be re-fetched at a low
+  // cadence, or a long session slowly drifts away from reality.
+  var ANCHOR_REFRESH_MS = 30_000;
 
   /**
    * Decide, at a given moment, whether a fresh network quote should be issued.
@@ -342,8 +497,12 @@
     if (!s) return false;
     if (s.inFlight) return false;          // never stack requests
     if (s.hidden) return false;            // background tabs do not poll
-    // The page's own feed is fresher than anything we could fetch.
-    if (s.lastPriceAt && now - s.lastPriceAt < FEED_FRESH_MS) return false;
+    // The page's own feed is fresher than anything we could fetch — but the
+    // anchor itself still needs an occasional refresh (see requote(), which
+    // in this situation re-anchors WITHOUT overriding the live price).
+    if (s.lastPriceAt && now - s.lastPriceAt < FEED_FRESH_MS) {
+      return !s.lastPollAt || now - s.lastPollAt >= ANCHOR_REFRESH_MS;
+    }
     // Respect the poll interval.
     if (s.lastPollAt && now - s.lastPollAt < POLL_INTERVAL_MS) return false;
     return true;
@@ -356,7 +515,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 2c. Live position mark
+   * 5. Live position mark
    * ------------------------------------------------------------------ */
 
   /**
@@ -393,7 +552,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 2b. Multi-position tracking (the positions bar)
+   * 6. Multi-position tracking (the positions bar)
    * ------------------------------------------------------------------ */
 
   /**
@@ -503,7 +662,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 3. Header display fields
+   * 7. Header display fields
    * ------------------------------------------------------------------ */
 
   function shortAddress(addr) {
@@ -511,9 +670,60 @@
     return addr.slice(0, 4) + '…' + addr.slice(-4);
   }
 
+  var SUBSCRIPT_DIGITS = '₀₁₂₃₄₅₆₇₈₉';
+
+  function toSubscript(n) {
+    var out = '';
+    var s = String(n);
+    for (var i = 0; i < s.length; i++) out += SUBSCRIPT_DIGITS[Number(s[i])];
+    return out;
+  }
+
+  /**
+   * Human-readable token price.
+   *
+   * Memecoins live at 1e-9. `toExponential` renders that as "3.9690e-8", which
+   * users reported as unreadable noise, and raw decimals render as an
+   * uncountable run of zeros. Every Solana terminal solves this the same way —
+   * subscript-zero notation — so PaperTrench matches that convention:
+   *
+   *   0.00000003969  ->  0.0₇3969
+   *   0.00234        ->  0.00234
+   *   1.5            ->  1.5
+   */
   function formatPrice(p) {
-    if (!(p > 0)) return '';
-    return p < 0.0001 ? p.toExponential(4) : String(Number(p.toPrecision(6)));
+    var value = Number(p);
+    if (!(value > 0) || !isFinite(value)) return '';
+    if (value >= 0.001) return String(Number(value.toPrecision(6)));
+
+    // Count the zeros between the decimal point and the first significant digit.
+    var exponent = Math.floor(Math.log10(value));
+    var leadingZeros = -exponent - 1;
+    var significant = value / Math.pow(10, exponent);
+    var digits = String(Number(significant.toFixed(3))).replace('.', '');
+
+    if (leadingZeros < 4) return String(Number(value.toPrecision(4)));
+    return '0.0' + toSubscript(leadingZeros) + digits;
+  }
+
+  /**
+   * Human-readable market cap / USD magnitude. Never scientific notation, and
+   * never a wall of unseparated digits.
+   */
+  function formatMarketCap(n) {
+    var value = Number(n);
+    if (!(value > 0) || !isFinite(value)) return '';
+    if (value >= 1e12) return '$' + (value / 1e12).toFixed(2) + 'T';
+    if (value >= 1e9) return '$' + (value / 1e9).toFixed(2) + 'B';
+    if (value >= 1e6) return '$' + (value / 1e6).toFixed(2) + 'M';
+    if (value >= 1e3) return '$' + (value / 1e3).toFixed(1) + 'K';
+    return '$' + value.toFixed(2);
+  }
+
+  /** USD price of one token, using the same readable convention as formatPrice. */
+  function formatUsdPrice(p) {
+    var text = formatPrice(p);
+    return text ? '$' + text : '';
   }
 
   /**
@@ -547,9 +757,18 @@
     // user is deciding whether to wait or move on.
     const waitingMs = opts && opts.pendingSince ? Math.max(0, ((opts && opts.now) || Date.now()) - opts.pendingSince) : 0;
     const searching = !hasTrustedPrice && waitingMs > 1200;
-    const priceText = hasTrustedPrice
-      ? formatPrice(Number(token.priceNative)) + ' SOL'
-      : (searching ? 'New coin — waiting for first quote…' : 'Fetching live price…');
+
+    /* Traders quote memecoins by market cap, not unit price. Nobody says
+     * "I bought at 0.0₇3969" — they say "I bought at 240K". So market cap is
+     * the headline figure whenever it is known, and the unit price moves to
+     * the secondary line for the rare case someone wants it. */
+    const hasMcap = Number(token.mcap) > 0;
+    const mcapText = hasMcap ? formatMarketCap(Number(token.mcap)) : '';
+    const priceText = hasMcap
+      ? mcapText
+      : (hasTrustedPrice
+        ? formatPrice(Number(token.priceNative)) + ' SOL'
+        : (searching ? 'New coin — waiting for first quote…' : 'Fetching live price…'));
 
     // A price we hold but can no longer refresh must be visibly marked, so a
     // frozen quote is never mistaken for a live one.
@@ -563,6 +782,9 @@
       address: shortAddress(token.mint),
       fullAddress: token.mint,
       priceText,
+      // What the headline number actually is, so the UI can label it honestly.
+      priceIsMarketCap: hasMcap,
+      mcapText,
       priceUsdText: Number(token.priceUsd) > 0 ? '$' + formatPrice(Number(token.priceUsd)) : '',
       pending: !hasTrustedPrice,
       hasTrustedPrice,
@@ -581,6 +803,7 @@
     normalizePair,
     tokenFromPayload,
     validateTick,
+    bootstrapTick,
     withinBand,
     shouldRequote,
     isPriceStale,
@@ -596,10 +819,13 @@
     headerFields,
     shortAddress,
     formatPrice,
+    formatMarketCap,
+    formatUsdPrice,
     ACCEPT_RATIO,
     POLL_INTERVAL_MS,
     FEED_FRESH_MS,
     STALE_AFTER_MS,
+    ANCHOR_REFRESH_MS,
   };
 
   // Always install the browser global; only export under CommonJS when present.

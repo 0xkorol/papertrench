@@ -317,6 +317,7 @@ function runFreshLaunch(opts) {
           if (!R) return Promise.resolve({});
           if (msg.type === 'pt_resolve') return R.resolve(msg.address);
           if (msg.type === 'pt_refresh') return R.refresh(msg.token);
+          if (msg.type === 'pt_sol_usd') return R.solUsd();
           if (msg.type === 'pt_batch_prices') return R.batchPrices(msg.mints);
           return Promise.resolve({});
         },
@@ -403,8 +404,8 @@ test('a coin only Jupiter knows still resolves and becomes tradeable', async () 
 
   assert.equal(ov.tokenName(), 'BARK',
     'a coin only Jupiter knows must still resolve to a real identity');
-  assert.match(ov.priceText() || '', /SOL/,
-    'and must expose a SOL price so it can actually be paper-traded');
+  assert.match(ov.priceText() || '', /^\$/,
+    'and must show a tradeable level, quoted as a market cap');
 });
 
 test('the coin becomes tradeable the moment any source indexes it', async () => {
@@ -418,6 +419,6 @@ test('the coin becomes tradeable the moment any source indexes it', async () => 
   await ov.advance(2000);
 
   assert.equal(ov.tokenName(), 'BARK', 'the resolved identity must appear');
-  assert.match(ov.priceText() || '', /SOL/,
-    'a real SOL price must be shown once any source resolves the coin');
+  assert.match(ov.priceText() || '', /^\$/,
+    'a real tradeable level must appear once any source resolves the coin');
 });

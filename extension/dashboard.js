@@ -38,7 +38,7 @@ const store = {
   set: (obj) => new Promise((r) => chrome.storage.local.set(obj, r)),
 };
 
-const SECTIONS = ['overview', 'journal', 'rounds', 'replay', 'leaderboard', 'coach', 'settings'];
+const SECTIONS = ['overview', 'calendar', 'journal', 'rounds', 'replay', 'leaderboard', 'coach', 'settings'];
 let currentSection = 'overview';
 
 async function init() {
@@ -195,6 +195,7 @@ function renderSection(id) {
   // Build into a detached element: nothing here is ever painted.
   const staged = document.createElement('div');
   if (id === 'overview') renderOverview(staged);
+  else if (id === 'calendar') renderCalendar(staged);
   else if (id === 'journal') renderJournal(staged);
   else if (id === 'rounds') renderRounds(staged);
   else if (id === 'leaderboard') renderLeaderboard(staged);
@@ -224,6 +225,7 @@ function rebindSection(id, el) {
     drawEquityCurve();
     return;
   }
+  if (id === 'calendar') { bindCalendar(el); return; }
   if (id === 'rounds') {
     el.querySelectorAll('.review-btn').forEach((button) =>
       button.addEventListener('click', () => runReview(button.dataset.id)));
@@ -512,6 +514,104 @@ function emptyState(title, sub) {
   return `<div class="empty"><strong>${esc(title)}</strong><span style="font-size:12px">${esc(sub || '')}</span></div>`;
 }
 
+/* ---------- P&L calendar ----------
+ *
+ * The daily performance grid Axiom/Padre/GMGN show for real wallets, fed by
+ * the paper journal instead. Layout follows theirs: Monday-start weeks, a
+ * weekly-total column, and month navigation bounded by the journal's span.
+ */
+
+// The month currently on screen; null means "the month containing today".
+let calendarView = null;
+
+function monthIndex(y, m) { return y * 12 + m; }
+
+function renderCalendar(el) {
+  const range = E.pnlCalendarRange(state);
+  const now = new Date();
+  const requested = calendarView || { year: now.getFullYear(), month: now.getMonth() };
+  const viewIdx = Math.max(
+    monthIndex(range.min.year, range.min.month),
+    Math.min(monthIndex(range.max.year, range.max.month), monthIndex(requested.year, requested.month))
+  );
+  const view = { year: Math.floor(viewIdx / 12), month: ((viewIdx % 12) + 12) % 12 };
+  calendarView = view;
+
+  const cal = E.pnlCalendar(state, view.year, view.month);
+  const t = cal.totals;
+  const isCurrentMonth = cal.todayDay !== null;
+  const monthName = new Date(view.year, view.month, 1)
+    .toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const atMin = viewIdx <= monthIndex(range.min.year, range.min.month);
+  const atMax = viewIdx >= monthIndex(range.max.year, range.max.month);
+  const cls = (v) => (v > 0 ? 'green' : v < 0 ? 'red' : 'dim');
+  const signed = (v) => `${v > 0 ? '+' : ''}${fmt(v, 2)}`;
+
+  const summary = `
+    <div class="cal-summary">
+      <span>Realized <strong class="${cls(t.realizedSol)}">${signed(t.realizedSol)} SOL</strong></span>
+      <span>Days <strong>${t.winDays}<span class="green">W</span> · ${t.lossDays}<span class="red">L</span>${t.flatDays ? ` · ${t.flatDays} flat` : ''}</strong></span>
+      ${t.bestDay ? `<span>Best <strong class="green">${signed(t.bestDay.pnlSol)}</strong> <span class="dim">(${monthName.split(' ')[0].slice(0, 3)} ${t.bestDay.day})</span></span>` : ''}
+      ${t.worstDay && t.worstDay.pnlSol < 0 ? `<span>Worst <strong class="red">${signed(t.worstDay.pnlSol)}</strong> <span class="dim">(${monthName.split(' ')[0].slice(0, 3)} ${t.worstDay.day})</span></span>` : ''}
+      ${isCurrentMonth ? `<span>Open <strong class="${cls(cal.openPnlSol)}">${signed(cal.openPnlSol)} SOL</strong> <span class="dim">unrealized</span></span>` : ''}
+    </div>`;
+
+  const header = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    .map((d) => `<div class="cal-head">${d}</div>`).join('') + '<div class="cal-head cal-week-head">Week</div>';
+
+  const body = cal.weeks.map((week) => {
+    const cells = week.days.map((c) => {
+      if (!c) return '<div class="cal-day blank" aria-hidden="true"></div>';
+      const tone = !c.hasTrades ? '' : c.realizedSol > 0 ? 'win' : c.realizedSol < 0 ? 'loss' : 'flat';
+      const today = c.day === cal.todayDay ? ' today' : '';
+      const tip = c.sells
+        ? Object.entries(c.symbols).map(([s, p]) => `${s} ${signed(p)}`).join('  ·  ')
+        : (c.buys ? 'Open entries only — nothing realized yet' : '');
+      const parts = [];
+      if (c.buys) parts.push(`${c.buys} buy${c.buys > 1 ? 's' : ''}`);
+      if (c.sells) parts.push(`${c.sells} sell${c.sells > 1 ? 's' : ''}`);
+      return `<div class="cal-day ${tone}${today}"${tip ? ` title="${esc(tip)}"` : ''}>
+        <span class="cal-date">${c.day}</span>
+        ${c.sells
+          ? `<span class="cal-pnl">${signed(c.realizedSol)}</span>`
+          : '<span class="cal-pnl cal-zero">0</span>'}
+        ${parts.length ? `<span class="cal-trades">${parts.join(' · ')}</span>` : ''}
+      </div>`;
+    }).join('');
+    const wk = week.hasTrades
+      ? `<span class="${cls(week.totalSol)}">${signed(week.totalSol)}</span>`
+      : '<span class="cal-week-empty">0</span>';
+    return cells + `<div class="cal-week">${wk}</div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="card">
+      <h3>P&amp;L calendar
+        <span class="cal-nav">
+          <button class="cal-nav-btn" data-cal="-1" ${atMin ? 'disabled' : ''} aria-label="Previous month">‹</button>
+          <span class="cal-month">${monthName}</span>
+          <button class="cal-nav-btn" data-cal="1" ${atMax ? 'disabled' : ''} aria-label="Next month">›</button>
+        </span>
+      </h3>
+      ${summary}
+      ${(state.journal || []).length === 0
+        ? '<div class="cal-summary"><span class="dim">No paper trades yet — your daily results will fill in as you buy and sell.</span></div>'
+        : ''}
+      <div class="cal-grid">${header}${body}</div>
+    </div>`;
+}
+
+function bindCalendar(el) {
+  el.querySelectorAll('.cal-nav-btn').forEach((button) => {
+    button.addEventListener('click', () => {
+      const cur = calendarView || { year: new Date().getFullYear(), month: new Date().getMonth() };
+      const next = cur.month + Number(button.dataset.cal);
+      calendarView = { year: cur.year + Math.floor(next / 12), month: ((next % 12) + 12) % 12 };
+      renderSection('calendar');
+    });
+  });
+}
+
 /* ---------- journal ---------- */
 
 function renderJournal(el) {
@@ -521,7 +621,7 @@ function renderJournal(el) {
       <td><strong>${esc(t.symbol)}</strong></td>
       <td class="dim">${esc(t.site)}</td>
       <td class="num">${fmt(t.qty, 4)}</td>
-      <td class="num">${fmt(t.priceNative, 8)}</td>
+      <td class="num">${fillLevel(t)}</td>
       <td class="num">${fmt(t.solGross, 4)}</td>
       <td class="num dim">${fmt(t.solGross - (t.solNet || 0), 4)}</td>
       <td class="num ${t.pnlSol === undefined ? 'dim' : t.pnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">
@@ -533,7 +633,7 @@ function renderJournal(el) {
     <div class="card"><h3>All fills <span class="tag">${(state.journal || []).length}</span></h3>
       <div class="log">
         <table>
-          <thead><tr><th>Side</th><th>Token</th><th>Site</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Gross</th><th class="num">Fee</th><th class="num">P&L</th><th>When</th></tr></thead>
+          <thead><tr><th>Side</th><th>Token</th><th>Site</th><th class="num">Qty</th><th class="num">Market cap</th><th class="num">Gross</th><th class="num">Fee</th><th class="num">P&L</th><th>When</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="9">${emptyState('No fills yet', 'Paper trades will be journaled here.')}</td></tr>`}</tbody>
         </table>
       </div>
@@ -1128,7 +1228,7 @@ function syncTape(view) {
     shell.tape.innerHTML = events.map((item, index) => {
       const offset = Math.max(0, item.at - replay.openedAt);
       const detail = item.trade
-        ? `${fmt(item.trade.solGross, 3)} SOL @ ${fmt(item.trade.priceNative, 9)}${
+        ? `${fmt(item.trade.solGross, 3)} SOL @ ${fillLevel(item.trade)}${
             item.trade.pnlSol !== undefined && item.trade.pnlSol !== null
               ? ` · <span class="${item.trade.pnlSol >= 0 ? 'green' : 'red'}">${item.trade.pnlSol >= 0 ? '+' : ''}${fmt(item.trade.pnlSol, 3)} SOL</span>` : ''}`
         : item.frame ? 'chart frame captured'
@@ -1285,7 +1385,7 @@ function renderReplayTape(events, cursor, replay) {
     const active = index === cursor;
     const offset = Math.max(0, event.at - replay.openedAt);
     const detail = event.trade
-      ? `${fmt(event.trade.solGross, 3)} SOL @ ${fmt(event.trade.priceNative, 9)}${
+      ? `${fmt(event.trade.solGross, 3)} SOL @ ${fillLevel(event.trade)}${
           event.trade.pnlSol !== undefined && event.trade.pnlSol !== null
             ? ` · <span class="${event.trade.pnlSol >= 0 ? 'green' : 'red'}">${event.trade.pnlSol >= 0 ? '+' : ''}${fmt(event.trade.pnlSol, 3)} SOL</span>` : ''}`
       : event.frame ? 'chart frame captured'
@@ -1314,7 +1414,7 @@ function eventIcon(event) {
 function eventLabel(event) {
   if (!event) return 'Moment';
   if (event.source === 'papertrench' && event.trade) {
-    return `${event.trade.side === 'buy' ? 'Paper buy' : 'Paper sell'} · ${fmt(event.trade.solGross, 3)} SOL @ ${fmt(event.trade.priceNative, 9)} SOL`;
+    return `${event.trade.side === 'buy' ? 'Paper buy' : 'Paper sell'} · ${fmt(event.trade.solGross, 3)} SOL @ ${fillLevel(event.trade)}`;
   }
   if (event.frame) return `Chart frame · ${event.frame.kind || 'interval'}`;
   return `Moment · ${event.kind}`;
@@ -1341,16 +1441,23 @@ function openShareCard(roundId) {
   const trades = (state.journal || []).filter((t) => (round.tradeIds || []).includes(t.id));
   const buys = trades.filter((t) => t.side === 'buy');
   const sells = trades.filter((t) => t.side === 'sell');
-  const weighted = (list) => {
+  const weighted = (list, field) => {
     const qty = list.reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
     if (!(qty > 0)) return null;
-    return list.reduce((sum, t) => sum + (Number(t.qty) || 0) * (Number(t.priceNative) || 0), 0) / qty;
+    const total = list.reduce(
+      (sum, t) => sum + (Number(t.qty) || 0) * (Number(t[field]) || 0), 0
+    );
+    return total > 0 ? total / qty : null;
   };
 
   cardModelCurrent = PC.cardModel({
     ...round,
-    entryPrice: weighted(buys),
-    exitPrice: weighted(sells),
+    entryPrice: weighted(buys, 'priceNative'),
+    exitPrice: weighted(sells, 'priceNative'),
+    // Quantity-weighted market cap at entry and exit — the figures the trade
+    // actually gets described by when the card is shared.
+    entryMcap: weighted(buys, 'mcap'),
+    exitMcap: weighted(sells, 'mcap'),
   }, { handle: (settings.leaderboardIdentity || {}).handle || '' });
 
   if (!cardModelCurrent) return;
@@ -1758,6 +1865,8 @@ function renderSettings(el) {
         <div class="field"><label for="set-fee">Fee bps per side (100 = 1%)</label><input id="set-fee" type="number" min="0" step="1" value="${settings.feeBps}"></div>
         <div class="field"><label for="set-slippage">Simulated slippage bps</label><input id="set-slippage" type="number" min="0" step="1" value="${settings.slippageBps}"><small>Extra price impact on fills. 0 fills at the live tick.</small></div>
         <div class="field"><label for="set-presets">Quick-buy presets (SOL)</label><input id="set-presets" type="text" value="${esc(settings.presetsBuy.join(', '))}"><small>Comma separated, shown as buttons in the overlay.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-instant-buy" ${settings.instantBuyEnabled !== false ? 'checked' : ''}> One-click quick buy</label><small>Tapping a preset amount fires the buy immediately, like Axiom and Padre. Off makes presets only select the amount for the BUY button.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-list-quick-buy" ${settings.listQuickBuyEnabled !== false ? 'checked' : ''}> Screener row quick-buy chips</label><small>A "P" chip on every token row of Axiom Pulse, Padre Trenches and GMGN Trenches — buys the first preset amount without opening the chart.</small></div>
         <div class="field"><label for="set-sellpcts">Quick-sell presets (%)</label><input id="set-sellpcts" type="text" value="${esc(settings.sellPcts.join(', '))}"></div>
       </div>
       <div class="card">
@@ -1825,6 +1934,8 @@ function gatherSettingsFromForm() {
     feeBps: Number(document.getElementById('set-fee').value) || 0,
     slippageBps: Number(document.getElementById('set-slippage').value) || 0,
     presetsBuy: presets.length ? presets : [0.1, 0.5, 1, 2],
+    instantBuyEnabled: document.getElementById('set-instant-buy').checked,
+    listQuickBuyEnabled: document.getElementById('set-list-quick-buy').checked,
     sellPcts: sellPcts.length ? sellPcts : [25, 50, 75, 100],
     aiEndpoint: document.getElementById('set-endpoint').value.trim() || DEFAULTS.aiEndpoint,
     aiModel: document.getElementById('set-model').value.trim(),
@@ -1853,6 +1964,20 @@ async function saveFromForm() {
 function fmt(n, dp = 4) {
   if (n === null || n === undefined || isNaN(n)) return '—';
   return Number(n).toLocaleString(undefined, { maximumFractionDigits: dp });
+}
+
+/**
+ * How a fill is described to a trader.
+ *
+ * Every fill records the market cap it happened at, and that is the figure
+ * traders quote ("in at 240K"). The unit price is only shown when a fill
+ * predates market-cap capture.
+ */
+function fillLevel(trade) {
+  if (!trade) return '—';
+  const mcap = Number(trade.mcap);
+  if (mcap > 0) return PC.formatMarketCap(mcap) + ' MC';
+  return PC.formatPrice(trade.priceNative) + ' SOL';
 }
 
 function timeAgo(ts) {

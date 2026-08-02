@@ -178,6 +178,23 @@
     return out;
   }
 
+  /**
+   * Expose the cached SOL/USD rate so the UI can convert on-screen USD prices
+   * into SOL-denominated fills while a brand-new coin is still unindexed. The
+   * rate is fetched alongside every Jupiter resolve and refreshed on demand.
+   */
+  async function solUsd() {
+    var now = Date.now();
+    if (now - solUsdCache.at < SOL_USD_TTL_MS && solUsdCache.value > 0) return solUsdCache.value;
+
+    var payload = await getJson(jupiterUrl(Q.WSOL_MINT), 4000);
+    if (!payload) return 0;
+
+    var rate = Q.solUsdFromJupiter(payload);
+    if (rate > 0) solUsdCache = { at: now, value: rate };
+    return rate || 0;
+  }
+
   function clearCache() { cache.clear(); }
 
   var api = {
@@ -185,6 +202,7 @@
     refresh: refresh,
     batchPrices: batchPrices,
     clearCache: clearCache,
+    solUsd: solUsd,
     BASE: BASE,
     BATCH_CHUNK: BATCH_CHUNK,
   };

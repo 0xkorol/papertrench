@@ -326,6 +326,7 @@ function runOverlayBar(positions, opts) {
           if (!R) return Promise.resolve({});
           if (msg.type === 'pt_resolve') return R.resolve(msg.address);
           if (msg.type === 'pt_refresh') return R.refresh(msg.token);
+          if (msg.type === 'pt_sol_usd') return R.solUsd();
           if (msg.type === 'pt_batch_prices') return R.batchPrices(msg.mints);
           return Promise.resolve({});
         },

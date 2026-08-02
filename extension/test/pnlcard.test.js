@@ -167,10 +167,22 @@ test('a background is cover-fitted and centred, never stretched', () => {
 /* ---------------- formatting helpers ---------------- */
 
 test('prices stay readable across the whole memecoin range', () => {
-  assert.match(PC.formatPrice(0.0000000387), /e-8$/, 'sub-0.0001 prices use exponent form');
+  // A shared card gets screenshotted and posted, so exponent form ("3.87e-8")
+  // is the worst possible rendering. Sub-cent prices use subscript-zero
+  // notation instead, matching the overlay and every Solana terminal.
+  const tiny = PC.formatPrice(0.0000000387);
+  assert.doesNotMatch(tiny, /e[+-]/i, 'a shared card must never post exponent form');
+  assert.match(tiny, /^0\.0[₀-₉]/, `expected subscript-zero notation, got "${tiny}"`);
+
   assert.equal(PC.formatPrice(1.25), '1.25');
   assert.equal(PC.formatPrice(0), '—', 'no price is shown as a dash, never as zero');
   assert.equal(PC.formatPrice(-1), '—');
+});
+
+test('market caps on a shared card read as money', () => {
+  assert.equal(PC.formatMarketCap(240000), '$240.0K');
+  assert.equal(PC.formatMarketCap(255830000), '$255.83M');
+  assert.equal(PC.formatMarketCap(0), '—', 'an unknown cap is a dash, never $0');
 });
 
 test('hold time is humanised', () => {

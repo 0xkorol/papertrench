@@ -51,12 +51,37 @@ test('a fresh quote is requested on a fast cadence, not every 10s', () => {
 
 test('polling is suspended while the page feed is supplying fresh ticks', () => {
   const now = 1_000_000;
-  const s = { lastPriceAt: now - 100, lastPollAt: 0, inFlight: false, hidden: false };
+  const s = { lastPriceAt: now - 100, lastPollAt: now - 5_000, inFlight: false, hidden: false };
   assert.equal(Q.shouldRequote(s, now), false, 'a live feed makes polling redundant');
 
   // Once the feed goes quiet, polling resumes.
   s.lastPriceAt = now - (Q.FEED_FRESH_MS + 1);
   assert.equal(Q.shouldRequote(s, now), true, 'a silent feed must resume polling');
+});
+
+test('a live feed still allows a periodic anchor refresh', () => {
+  // The anchor supplies the SOL/USD rate, the implied supply, and the
+  // validation band centre. A live feed must NOT starve it forever, or a
+  // long session drifts — but the refresh happens at a slow cadence and
+  // requote() then re-anchors without overriding the live price level.
+  const now = 1_000_000;
+  const live = { lastPriceAt: now - 100, inFlight: false, hidden: false };
+
+  assert.equal(
+    Q.shouldRequote(Object.assign({}, live, { lastPollAt: now - (Q.ANCHOR_REFRESH_MS + 1) }), now),
+    true,
+    'an aged anchor must be refreshed even while the feed is live'
+  );
+  assert.equal(
+    Q.shouldRequote(Object.assign({}, live, { lastPollAt: 0 }), now),
+    true,
+    'a never-fetched anchor must be fetched immediately'
+  );
+  assert.equal(
+    Q.shouldRequote(Object.assign({}, live, { lastPollAt: now - 5_000 }), now),
+    false,
+    'a recent anchor plus a live feed means no network call'
+  );
 });
 
 test('requests never stack and hidden tabs do not poll', () => {
@@ -275,6 +300,7 @@ function runOverlay(priceSeries) {
           if (!R) return Promise.resolve({});
           if (msg.type === 'pt_resolve') return R.resolve(msg.address);
           if (msg.type === 'pt_refresh') return R.refresh(msg.token);
+          if (msg.type === 'pt_sol_usd') return R.solUsd();
           if (msg.type === 'pt_batch_prices') return R.batchPrices(msg.mints);
           return Promise.resolve({});
         },

@@ -22,6 +22,10 @@
   const R = {
     resolve: (address) => sendMessage({ type: 'pt_resolve', address }).then(okOrNull),
     refresh: (token) => sendMessage({ type: 'pt_refresh', token }).then(okOrNull),
+    solUsd: () => sendMessage({ type: 'pt_sol_usd' }).then((r) => (typeof r === 'number' && r > 0 ? r : 0)).catch(() => 0),
+    onchainWatch: (mint, pool) => sendMessage({ type: 'pt_onchain_watch', mint, pool }).then(okOrNull),
+    onchainUnwatch: (mint) => sendMessage({ type: 'pt_onchain_unwatch', mint }).catch(() => null),
+    onchainQuote: (mint) => sendMessage({ type: 'pt_onchain_quote', mint }).then(okOrNull),
     batchPrices: (mints) => sendMessage({ type: 'pt_batch_prices', mints }).then((r) => (r && typeof r === 'object' && !r.error) ? r : {}),
     clearCache: () => { if (resolver && typeof resolver.clearCache === 'function') resolver.clearCache(); },
   };
@@ -57,13 +61,35 @@
   const ARMED_BUY_TTL_MS = 60_000;
   let lastRenderedPrice = null; // drives the tick flash
   let lastPriceAt = 0;
+  let pageQuoteSeq = 0;
+  const pageQuoteWaiters = new Set();
   let resolving = false;
+  // True once live chain state is streaming for the token on screen.
+  let onchainLive = false;
   // Fresh-launch tracking: how long the current address has been unresolved.
   let pendingSince = 0;
   let pendingAttempts = 0;
+  let pendingSolUsd = 0;      // warmed SOL/USD rate for bootstrapping USD ticks
   let fastDetectTimer = null;
   let lastCmTickPrice = 0; // avoids feeding chart markers the same price repeatedly
   const CM = window.PTChartMarkers; // chart bubble markers
+  const TF = window.PTTitleFeed;    // zero-cost market-cap change signal
+  // Which unit band accepted the site's chart ticks ('usd' | 'native' |
+  // 'mcap' | 'native-mcap'). This is the ground truth for the chart's Y
+  // axis, so average lines are drawn in exactly that unit.
+  let chartAxisBasis = null;
+
+  /**
+   * Sites whose charts are TradingView, where PaperTrench draws NATIVE marks
+   * and order lines instead of an SVG overlay.
+   *
+   * Native drawing is the only way markers stay glued to the candles when the
+   * user pans, zooms, or the chart auto-scales. Padre and Axiom both load the
+   * TradingView library and expose a widget with `activeChart()`, so one code
+   * path serves both.
+   */
+  const NATIVE_TV_SITES = new Set(['padre', 'axiom']);
+  function usesNativeChart() { return Boolean(site && NATIVE_TV_SITES.has(site.id)); }
   const AT = window.PTAttest;       // tamper-evident fill chain
   const profitAlertLevels = new Map(); // mint -> highest threshold already handled
   // Positions bar: prices for tokens whose charts are NOT on screen.
@@ -190,7 +216,16 @@
   function onBridgeMessage(event) {
     if (event.source !== window || !event.data || event.data.source !== 'papertrench-bridge') return;
     const ev = event.data;
-    if (ev.type === 'tick') handlePageTick(ev.payload);
+    if (ev.type === 'tick') { noteRowPrice(ev.payload); handlePageTick(ev.payload); }
+    else if (ev.type === 'row-buy') {
+      // A quick-buy chip injected by the MAIN-world bridge was tapped; the
+      // fill pipeline itself lives here. The done-signal lets the bridge
+      // clear the chip's busy state.
+      if (ev.payload && ev.payload.address) {
+        doRowBuy(ev.payload.address, null)
+          .finally(() => sendPadreMarker('row-buy-done', null));
+      }
+    }
     else if (ev.type === 'padre-hook-status') {
       padreHookStatus = { ...padreHookStatus, ...(ev.payload || {}) };
       renderSiteStatus();
@@ -200,6 +235,10 @@
     } else if (ev.type === 'paper-lines-status') {
       lastLineStatus = ev.payload || null;
       renderSiteStatus();
+    } else if (ev.type === 'gmgn-lines-status') {
+      // The GMGN bridge reports only lifecycle status; its labels live on the
+      // native TradingView lines rather than in the PaperTrench card.
+      renderSiteStatus();
     }
   }
   window.addEventListener('message', onBridgeMessage);
@@ -208,19 +247,53 @@
     window.postMessage({ source: 'papertrench-content', type, payload: payload || null }, '*');
   }
 
+  /**
+   * Value model for the generic SVG overlay. GMGN is not a price chart:
+   * its live iframe symbol is `sol/<mint>/USD/MCAP` and its candle endpoint
+   * returns market-cap OHLC values. Thus markers must be placed with market
+   * cap but continue to display the trader's USD token fill.
+   */
+  function genericChartPoint(priceNative, priceUsd, mcap) {
+    const usd = Number(priceUsd) > 0 ? Number(priceUsd) : Number(priceNative);
+    const liveSupply = token && Number(token.mcap) > 0 && Number(token.priceUsd) > 0
+      ? Number(token.mcap) / Number(token.priceUsd)
+      : null;
+    const chartMcap = Number(mcap) > 0 ? Number(mcap)
+      : (liveSupply && usd > 0 ? usd * liveSupply : null);
+
+    // The hover figure is the market cap of that fill whenever it is known,
+    // because that is the number the trader remembers the entry by.
+    if (chartMcap > 0) {
+      const plot = site && site.id === 'gmgn' ? chartMcap : usd;
+      return { plot, display: chartMcap, currency: 'MCAP' };
+    }
+    return { plot: usd, display: usd, currency: Number(priceUsd) > 0 ? 'USD' : 'SOL' };
+  }
+
   /* -------------------- price handling -------------------- */
 
   /**
    * A tick from the page's own feed may only refine a price we already trust.
-   * Until the resolver has produced an anchor there is nothing to validate
-   * against, so ticks are ignored rather than guessed at — that is what keeps
-   * a stray page number off the display and out of fills.
+   *
+   * For a brand-new coin with no anchor, the FIRST trustworthy on-screen price
+   * is bootstrapped directly. This is what makes sniping possible before
+   * Dexscreener or Jupiter have indexed the token.
    */
   function handlePageTick(payload) {
-    if (!payload || !token || !token.priceNative) return;
+    if (!payload || !token) return;
 
-    const verdict = Q.validateTick(token, payload);
-    if (!verdict.accepted) return;
+    let verdict = null;
+    if (Number(token.priceNative) > 0) {
+      verdict = Q.validateTick(token, payload);
+    } else {
+      verdict = Q.bootstrapTick(token, payload, pendingSolUsd);
+    }
+    if (!verdict || !verdict.accepted) return;
+
+    // A live chart tick that validates tells us which unit the chart plots.
+    if ((payload.source === 'padre-chart-bar' || payload.source === 'chart-export') && verdict.basis) {
+      chartAxisBasis = verdict.basis;
+    }
 
     const oldNative = Number(token.priceNative);
     token.priceNative = verdict.priceNative;
@@ -229,6 +302,9 @@
     token.priceSource = payload.source || 'page-feed';
 
     lastPriceAt = Date.now();
+    pageQuoteSeq += 1;
+    for (const resolve of pageQuoteWaiters) resolve();
+    pageQuoteWaiters.clear();
     flushArmedBuy();
     // A duplicate tick still proves the feed is alive, but it does not need a
     // position mark, storage write, or DOM render.
@@ -238,7 +314,7 @@
     if (series.length > SERIES_CAP) series.shift();
     E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
     maybeProfitAlert(token.mint);
-    if (CM && (!site || site.id !== 'padre')) CM.tickPrice(token.priceNative);
+    if (CM && !usesNativeChart()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
     persistSoon();
     // Event-driven hot path: render in this same task, with no timer wait.
     renderHeader();
@@ -278,6 +354,15 @@
       });
       pendingSince = Date.now();
       pendingAttempts = 0;
+      // Anchor the bridge to this token before the resolver finishes, so bars
+      // and chart exports from a preloaded other-token chart do not leak in.
+      sendPadreMarker('paper-axis', {
+        pairAddress: candidate.kind === 'pair' ? candidate.address : null,
+        mint: candidate.kind === 'mint' ? candidate.address : null,
+      });
+      // Warm the SOL/USD rate so a USD on-screen price can be filled the moment
+      // it appears. resolveViaJupiter will also populate this cache shortly.
+      R.solUsd().then((rate) => { if (rate > 0) pendingSolUsd = rate; }).catch(() => {});
     }
 
     try {
@@ -294,6 +379,24 @@
       data.srcAddress = candidate.address;
       data.kind = candidate.kind;
       setToken(data);
+      // Tell the bridge which address this page is about, so ticks, exports
+      // and drawing only come from the chart instance showing THIS token.
+      sendPadreMarker('paper-axis', { pairAddress: data.pairAddress, mint: data.mint });
+      // The site publishes its live market cap in document.title, which changes
+      // the instant the page re-renders — cheaper and earlier than any network
+      // read. It refreshes the DISPLAYED cap between chain updates; it never
+      // prices a fill, and it is validated against chain state before use.
+      startTitleSignal();
+      // Start streaming live pool state. Until this connects, prices come from
+      // the aggregator and are labelled as such rather than presented as live.
+      if (data.pairAddress) {
+        R.onchainWatch(data.mint, data.pairAddress).then((reply) => {
+          if (token && token.mint === data.mint) {
+            onchainLive = Boolean(reply && reply.live);
+            renderSiteStatus();
+          }
+        }).catch(() => {});
+      }
       pendingSince = 0;
       pendingAttempts = 0;
       // After the token is resolved and state is current, restore any
@@ -305,7 +408,12 @@
       // Transient network failure: keep the pending token and retry, rather
       // than dropping a token the user may be about to snipe.
       pendingAttempts += 1;
-    } finally { resolving = false; }
+    } finally {
+      resolving = false;
+      // The resolver warms the SOL/USD cache even when the token is still
+      // unindexed; capture that rate for pending-token bootstraps.
+      R.solUsd().then((rate) => { if (rate > 0) pendingSolUsd = rate; }).catch(() => {});
+    }
   }
 
 
@@ -323,17 +431,30 @@
       posEls = null;
       lastRenderedPrice = null;
     }
+    if (prevMint && (!token || token.mint !== prevMint)) {
+      // Release the previous token's chain subscription immediately; a stale
+      // stream is both wasted bandwidth and a source of wrong-token prices.
+      onchainLive = false;
+      R.onchainUnwatch(prevMint);
+      // The title signal is anchored to the previous token's cap; a stale
+      // anchor would validate the new token's title against the wrong scale.
+      stopTitleSignal();
+    }
     if (token && token.mint !== prevMint) {
       series = []; marks = [];
       lastPriceAt = 0;
       lastCmTickPrice = 0;
-      if (site && site.id === 'padre') {
+      chartAxisBasis = null;
+      if (usesNativeChart()) {
         // Padre uses its own TradingView getMarks pipeline. Clear native paper
         // marks for the previous token; do not mount the generic SVG overlay.
         sendPadreMarker('paper-marker-clear');
         sendPadreMarker('paper-lines-clear');
         if (CM) CM.destroyChartMarkers();
       } else if (CM) {
+        // The generic SVG state is token-scoped. GMGN also owns native
+        // TradingView average lines, so clear those before reusing its chart.
+        if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
         CM.clearMarkers();
         CM.initChartMarkers();
       }
@@ -342,10 +463,11 @@
     if (!token) {
       stopPriceLoop();
       if (CM) CM.destroyChartMarkers();
-      if (site && site.id === 'padre') {
+      if (usesNativeChart()) {
         sendPadreMarker('paper-marker-clear');
         sendPadreMarker('paper-lines-clear');
       }
+      if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
     }
     renderAll();
     // The resolver may have just supplied the first quote this coin ever had.
@@ -388,9 +510,10 @@
       // so there is nothing to re-mark here.
       // Only feed chart markers if the price actually changed, to avoid
       // unnecessary SVG rebuilds on every 100ms heartbeat.
-      if (CM && (!site || site.id !== 'padre') && token.priceNative && token.priceNative !== lastCmTickPrice) {
-        lastCmTickPrice = token.priceNative;
-        CM.tickPrice(token.priceNative);
+      const chartPrice = genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot;
+      if (CM && !usesNativeChart() && chartPrice > 0 && chartPrice !== lastCmTickPrice) {
+        lastCmTickPrice = chartPrice;
+        CM.tickPrice(chartPrice);
       }
       renderHeader();
       renderPosition();
@@ -409,6 +532,28 @@
       if (!fresh || !(fresh.priceNative > 0)) return;
       if (fresh.mint && fresh.mint !== token.mint) return;
 
+      // When the page's own feed is live, the CHART owns the price level —
+      // the P&L must stay pegged to what the trader sees on screen, not to
+      // an aggregator's delayed quote. The network fetch then only refreshes
+      // what the feed cannot supply: the SOL/USD rate and the implied
+      // supply, both of which drift slowly over a session.
+      const feedLive = lastPriceAt
+        && Date.now() - lastPriceAt < Q.STALE_AFTER_MS
+        && Number(token.priceNative) > 0
+        && token.priceSource !== 'resolver';
+      if (feedLive) {
+        const rate = Number(fresh.priceUsd) > 0 ? fresh.priceUsd / fresh.priceNative : null;
+        if (rate) token.priceUsd = token.priceNative * rate;
+        if (Number(fresh.mcap) > 0 && Number(fresh.priceUsd) > 0 && Number(token.priceUsd) > 0) {
+          const supply = fresh.mcap / fresh.priceUsd;
+          token.mcap = token.priceUsd * supply;
+        }
+        persistSoon();
+        renderHeader();
+        renderPosition();
+        return;
+      }
+
       token.priceNative = fresh.priceNative;
       if (fresh.priceUsd) token.priceUsd = fresh.priceUsd;
       if (fresh.mcap) token.mcap = fresh.mcap;
@@ -419,7 +564,7 @@
       if (series.length > SERIES_CAP) series.shift();
       E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
       maybeProfitAlert(token.mint);
-      if (CM && (!site || site.id !== 'padre')) CM.tickPrice(token.priceNative);
+      if (CM && !usesNativeChart()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
       persistSoon();
       renderHeader();
       renderPosition();
@@ -562,6 +707,205 @@
     toast(`${pos.symbol} crossed +${crossed * interval}% paper P&L 🔔`);
   }
 
+  /**
+   * Draw a fill on the site's own chart.
+   *
+   * Padre and Axiom take native TradingView marks; GMGN takes a native
+   * execution shape positioned on its market-cap axis. Only sites with no
+   * usable chart API fall back to the SVG overlay, because a native shape is
+   * the only thing that stays glued to its candle through pan and zoom.
+   */
+  function drawFillOnChart(fill) {
+    const markerTs = fill.ts;
+    const point = genericChartPoint(fill.priceNative, fill.priceUsd, fill.mcap);
+
+    if (usesNativeChart()) {
+      sendPadreMarker('paper-marker', {
+        ts: markerTs,
+        priceNative: fill.priceNative,
+        // The bridge picks whichever of these magnitudes matches the site
+        // chart's Y axis (token USD price vs market cap) when it has to draw
+        // the fill as a Y-anchored execution shape.
+        priceUsd: fill.priceUsd || null,
+        mcap: point.currency === 'MCAP' ? point.display : null,
+        side: fill.side,
+        solAmount: fill.solAmount,
+        symbol: token && token.symbol,
+      });
+      return;
+    }
+
+    if (site && site.id === 'gmgn') {
+      sendPadreMarker('gmgn-marker', {
+        ts: markerTs,
+        mcap: point.currency === 'MCAP' ? point.display : null,
+        side: fill.side,
+        text: `${fill.side === 'buy' ? 'PT Buy' : 'PT Sell'} ${Q.formatMarketCap(point.display)}`,
+      });
+      return;
+    }
+
+    if (CM) {
+      CM.addMarker({
+        ts: markerTs,
+        price: point.plot,
+        displayPrice: point.display,
+        side: fill.side,
+        solAmount: fill.solAmount,
+        symbol: token && token.symbol,
+        currency: point.currency,
+      });
+    }
+  }
+
+  /* -------------------- page-title market-cap signal -------------------- */
+
+  let stopTitleListener = null;
+
+  /**
+   * Watch the site's own title for market-cap changes.
+   *
+   * This is a display accelerator, not a price source. The cap it produces is
+   * validated against the market cap chain state already established, so a
+   * mis-parse cannot move the number on screen, and it never touches a fill.
+   */
+  function startTitleSignal() {
+    if (!TF || !site) return;
+    stopTitleSignal();
+    stopTitleListener = TF.onMarketCap((mcap) => {
+      if (!token || !(mcap > 0)) return;
+      // Supply is constant over a trade, so a cap move IS a price move. Scale
+      // the held price by the same ratio to keep every figure consistent.
+      const previous = Number(token.mcap);
+      if (previous > 0 && Number(token.priceNative) > 0) {
+        const ratio = mcap / previous;
+        token.priceNative = Number(token.priceNative) * ratio;
+        if (Number(token.priceUsd) > 0) token.priceUsd = Number(token.priceUsd) * ratio;
+      }
+      token.mcap = mcap;
+      renderHeader();
+      renderPosition();
+    });
+    TF.start(site.id, () => (token && Number(token.mcap) > 0 ? Number(token.mcap) : null));
+  }
+
+  function stopTitleSignal() {
+    if (stopTitleListener) { stopTitleListener(); stopTitleListener = null; }
+    if (TF) TF.stop();
+  }
+  onTeardown(stopTitleSignal);
+
+  /* -------------------- action-time quotes and fills -------------------- */
+
+  // A displayed price is not automatically a tradeable price. A trade gets a
+  // page quote only if it was received within this window; otherwise it waits
+  // briefly for the site's live feed, then performs one direct resolver quote.
+  const ACTION_QUOTE_MAX_AGE_MS = 350;
+  const ACTION_PAGE_WAIT_MS = 175;
+
+  function quoteSnapshot() {
+    if (!token || !(Number(token.priceNative) > 0)) return null;
+    return {
+      mint: token.mint,
+      priceNative: Number(token.priceNative),
+      priceUsd: Number(token.priceUsd) > 0 ? Number(token.priceUsd) : null,
+      mcap: Number(token.mcap) > 0 ? Number(token.mcap) : null,
+      source: token.priceSource || 'unknown',
+      receivedAt: lastPriceAt,
+    };
+  }
+
+  function waitForNewPageQuote(afterSeq, timeoutMs) {
+    if (pageQuoteSeq > afterSeq) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = () => { pageQuoteWaiters.delete(done); resolve(pageQuoteSeq > afterSeq); };
+      pageQuoteWaiters.add(done);
+      setTimeout(done, timeoutMs);
+    });
+  }
+
+  /**
+   * Convert a live on-chain observation into a fill-ready quote.
+   *
+   * The chain gives a SOL-denominated price. USD and market cap are derived
+   * from the same observation using the SOL/USD and supply ratios the resolver
+   * already established, so the fill, the panel, the marker and the average
+   * line can never disagree with each other.
+   */
+  function quoteFromOnchain(observation) {
+    if (!observation || !(observation.priceNative > 0)) return null;
+    if (!token || token.mint !== observation.mint) return null;
+
+    const anchorNative = Number(token.priceNative);
+    const anchorUsd = Number(token.priceUsd);
+    const usdPerSol = anchorNative > 0 && anchorUsd > 0 ? anchorUsd / anchorNative : null;
+    const priceUsd = usdPerSol ? observation.priceNative * usdPerSol : null;
+
+    const anchorMcap = Number(token.mcap);
+    const mcap = anchorMcap > 0 && anchorUsd > 0 && priceUsd
+      ? anchorMcap * (priceUsd / anchorUsd)
+      : null;
+
+    return {
+      mint: observation.mint,
+      priceNative: observation.priceNative,
+      priceUsd,
+      mcap,
+      slot: observation.slot,
+      source: 'onchain',
+      receivedAt: observation.observedAt,
+    };
+  }
+
+  async function quoteForTrade() {
+    const startMint = token && token.mint;
+    if (!startMint) return null;
+
+    // Chain state is the authority. It is the only source that is not behind
+    // by construction, so it is asked first and trusted absolutely.
+    const observation = await R.onchainQuote(startMint);
+    const onchain = quoteFromOnchain(observation);
+    if (onchain) return onchain;
+
+    const initial = quoteSnapshot();
+    if (initial && Date.now() - initial.receivedAt <= ACTION_QUOTE_MAX_AGE_MS) return initial;
+
+    const seqAtClick = pageQuoteSeq;
+    // Prefer an imminent site-feed update (Padre bar / GMGN worker) over an
+    // aggregator response because it is the price represented by that chart.
+    await waitForNewPageQuote(seqAtClick, ACTION_PAGE_WAIT_MS);
+    if (!token || token.mint !== startMint) return null;
+    const pageQuote = quoteSnapshot();
+    if (pageQuote && pageQuoteSeq > seqAtClick && Date.now() - pageQuote.receivedAt <= ACTION_QUOTE_MAX_AGE_MS) {
+      return pageQuote;
+    }
+
+    // The feed is quiet. Take exactly one action-time resolver quote rather
+    // than filling from the stale display snapshot. If the page ticks while it
+    // is in flight, the newer page quote wins.
+    const fresh = await R.refresh(token);
+    if (!token || token.mint !== startMint || !fresh || !(Number(fresh.priceNative) > 0)) return null;
+    if (fresh.mint && fresh.mint !== startMint) return null;
+    if (pageQuoteSeq > seqAtClick) {
+      const newerPageQuote = quoteSnapshot();
+      if (newerPageQuote && Date.now() - newerPageQuote.receivedAt <= ACTION_QUOTE_MAX_AGE_MS) return newerPageQuote;
+    }
+
+    // Keep GMGN's chart-scale market cap from its own market-cap feed when it
+    // is available; Dexscreener is the fallback quote, not the chart authority.
+    const inheritedMcap = site && site.id === 'gmgn' && Number(token.mcap) > 0 && Number(token.priceUsd) > 0 && Number(fresh.priceUsd) > 0
+      ? Number(token.mcap) * (Number(fresh.priceUsd) / Number(token.priceUsd))
+      : Number(fresh.mcap) || null;
+    return {
+      mint: startMint,
+      priceNative: Number(fresh.priceNative),
+      priceUsd: Number(fresh.priceUsd) > 0 ? Number(fresh.priceUsd) : null,
+      mcap: inheritedMcap,
+      source: 'action-resolver',
+      receivedAt: Date.now(),
+    };
+  }
+
   /* -------------------- fills -------------------- */
 
   let mutationChain = Promise.resolve();
@@ -628,33 +972,35 @@
    * doesn't lose the visual trade history.
    */
   function restoreMarkersFromJournal() {
-    if (!CM || !token || !token.mint) return;
+    if (!token || !token.mint) return;
     const fills = (state.journal || []).filter(
       (t) => t.mint === token.mint && (t.side === 'buy' || t.side === 'sell')
     ).reverse(); // journal is newest-first; we want chronological
     for (const f of fills) {
-      const marker = {
+      drawFillOnChart({
         ts: f.ts,
-        priceNative: f.priceNative,
         side: f.side,
+        priceNative: f.priceNative,
+        priceUsd: f.priceUsd,
+        mcap: f.mcap,
         solAmount: f.solGross,
-        symbol: f.symbol || token.symbol,
-      };
-      if (site && site.id === 'padre') sendPadreMarker('paper-marker', marker);
-      else CM.addMarker({ ...marker, price: marker.priceNative });
+      });
     }
   }
 
   function syncAveragePriceLines() {
-    if (!site || site.id !== 'padre') return;
     if (!settings.averagePriceLinesEnabled || !token || !token.mint) {
-      sendPadreMarker('paper-lines-clear');
+      if (usesNativeChart()) sendPadreMarker('paper-lines-clear');
+      if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
+      if (CM && site && !usesNativeChart()) CM.clearAverageLines();
       return;
     }
 
     const averages = E.averageFillPrices(state, token.mint);
     if (!averages) {
-      sendPadreMarker('paper-lines-clear');
+      if (usesNativeChart()) sendPadreMarker('paper-lines-clear');
+      if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
+      if (CM && site && !usesNativeChart()) CM.clearAverageLines();
       return;
     }
 
@@ -668,11 +1014,82 @@
       ? averages.avgSellUsd
       : (usdPerNative && Number(averages.avgSellNative) > 0 ? averages.avgSellNative * usdPerNative : null);
 
-    sendPadreMarker('paper-lines', {
-      enabled: true,
-      avgBuyUsd,
-      avgSellUsd,
-    });
+    // Padre uses its native TradingView bridge for lines
+    if (usesNativeChart()) {
+      // Include the market-cap equivalents: Axiom (and Padre) can chart either
+      // token USD price or market cap, and the bridge matches the line level
+      // to the live bar close so it lands on the visible axis.
+      const nativeSupply = Number(token.mcap) > 0 && Number(token.priceUsd) > 0
+        ? Number(token.mcap) / Number(token.priceUsd)
+        : null;
+      sendPadreMarker('paper-lines', {
+        enabled: true,
+        // Ground truth from the live chart ticks: draw in exactly the unit
+        // the chart's Y axis is showing (price vs MC, USD vs SOL).
+        axisBasis: chartAxisBasis,
+        avgBuyUsd,
+        avgSellUsd,
+        avgBuyMcap: nativeSupply && avgBuyUsd ? avgBuyUsd * nativeSupply : null,
+        avgSellMcap: nativeSupply && avgSellUsd ? avgSellUsd * nativeSupply : null,
+        // Axiom's chart can also be SOL-denominated (its USD/SOL toggle), so
+        // the SOL price and the SOL-valued market cap go along as candidates;
+        // the bridge picks whichever magnitude matches the live bar close.
+        avgBuyNative: Number(averages.avgBuyNative) > 0
+          ? averages.avgBuyNative
+          : (usdPerNative && avgBuyUsd ? avgBuyUsd / usdPerNative : null),
+        avgSellNative: Number(averages.avgSellNative) > 0
+          ? averages.avgSellNative
+          : (usdPerNative && avgSellUsd ? avgSellUsd / usdPerNative : null),
+        avgBuyMcapNative: nativeSupply && Number(averages.avgBuyNative) > 0
+          ? averages.avgBuyNative * nativeSupply
+          : null,
+        avgSellMcapNative: nativeSupply && Number(averages.avgSellNative) > 0
+          ? averages.avgSellNative * nativeSupply
+          : null,
+      });
+    }
+
+    if (CM && !usesNativeChart()) {
+      if (site && site.id === 'gmgn') {
+        // GMGN's TradingView symbol ends in `/USD/MCAP`: its Y axis is market
+        // cap. Scale the USD fill prices by GMGN's live implied supply, but
+        // retain the true average token price in the line label.
+        const supply = Number(token.mcap) > 0 && Number(token.priceUsd) > 0
+          ? Number(token.mcap) / Number(token.priceUsd)
+          : null;
+        if (supply) {
+          // GMGN's own chart manager is available through its React-held
+          // TradingView instance. Ask the MAIN-world bridge to use native
+          // order lines so panning, zooming, and auto-scale stay exact.
+          sendPadreMarker('gmgn-lines', {
+            enabled: true,
+            avgBuyMcap: avgBuyUsd ? avgBuyUsd * supply : null,
+            avgSellMcap: avgSellUsd ? avgSellUsd * supply : null,
+            // GMGN's axis IS market cap, so the label states the cap the line
+            // sits at — the same figure the trader would quote out loud.
+            avgBuyText: avgBuyUsd ? `PT Avg Buy ${Q.formatMarketCap(avgBuyUsd * supply)}` : '',
+            avgSellText: avgSellUsd ? `PT Avg Sell ${Q.formatMarketCap(avgSellUsd * supply)}` : '',
+          });
+          CM.clearAverageLines();
+        } else {
+          sendPadreMarker('gmgn-lines-clear');
+          CM.clearAverageLines();
+        }
+      } else {
+        // Non-GMGN generic adapters plot USD token price, but the LABEL still
+        // reads in market cap so it matches how the entry is discussed.
+        const supply = Number(token.mcap) > 0 && Number(token.priceUsd) > 0
+          ? Number(token.mcap) / Number(token.priceUsd)
+          : null;
+        CM.setAverageLines({
+          avgBuyPrice: avgBuyUsd,
+          avgSellPrice: avgSellUsd,
+          avgBuyLabel: supply && avgBuyUsd ? avgBuyUsd * supply : avgBuyUsd,
+          avgSellLabel: supply && avgSellUsd ? avgSellUsd * supply : avgSellUsd,
+          currency: supply ? 'MCAP' : 'USD',
+        });
+      }
+    }
   }
 
   let persistTimer = null;
@@ -687,16 +1104,46 @@
     }, 800);
   }
 
+  // Re-entrancy guard: an instant preset tap (or a double-click) while a buy
+  // is still pricing must not stack a second fill on top of the first.
+  let buyInFlight = false;
+
+  /**
+   * Every buy — the big BUY button or a one-click preset tap — comes through
+   * here so the pending-token arming and the in-flight guard apply equally.
+   */
+  function requestBuy(amt) {
+    if (!(amt > 0)) return toast('Pick a SOL amount first');
+    if (buyInFlight) return toast('Buy already in progress…');
+    primeAudio();
+
+    // A brand-new coin may still be resolving. Rather than refusing the
+    // click — which reads as broken — arm the buy and fire it the moment a
+    // trusted price lands. This is the difference between "buggy" and
+    // "waiting", and it is what makes sniping a fresh launch feel possible.
+    if (!token || !token.priceNative) {
+      if (!token) return toast('No token detected on this page');
+      armedBuy = { amount: amt, at: Date.now(), mint: token.mint };
+      renderBuyButton();
+      toast('Buy armed — fires the instant the first quote lands');
+      return;
+    }
+    buyInFlight = true;
+    doBuy(amt).finally(() => { buyInFlight = false; });
+  }
+
   async function doBuy(solAmount) {
     if (!token) return toast('No token detected on this page');
-    if (!token.priceNative) return toast('Need SOL-denominated price to paper buy. Try waiting one tick or refresh the chart.');
+    const fillQuote = await quoteForTrade();
+    if (!fillQuote) return toast('Could not obtain a fresh price — paper buy not filled.');
     try {
       const result = await withState(async () => {
+        if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper buy could be filled');
         const hadPosition = Boolean(state.positions[token.mint]);
         const { trade, position } = E.buy(state, settings, {
           ts: Date.now(), mint: token.mint, pairAddress: token.pairAddress,
           symbol: token.symbol, name: token.name, site: site.id,
-          priceNative: token.priceNative, priceUsd: token.priceUsd, mcap: token.mcap,
+          priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
           solAmount,
         });
         // Commit the fill to the evidence chain before persisting, so the
@@ -705,17 +1152,14 @@
         await store.set({ [E.STORAGE_KEYS.state]: state });
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'buy' });
-        if (site && site.id === 'padre') {
-          sendPadreMarker('paper-marker', {
-            ts: markerTs,
-            priceNative: trade.priceNative,
-            side: 'buy',
-            solAmount,
-            symbol: token.symbol,
-          });
-        } else if (CM) {
-          CM.addMarker({ ts: markerTs, price: trade.priceNative, side: 'buy', solAmount, symbol: token.symbol });
-        }
+        drawFillOnChart({
+          ts: markerTs,
+          side: 'buy',
+          priceNative: trade.priceNative,
+          priceUsd: trade.priceUsd,
+          mcap: trade.mcap,
+          solAmount,
+        });
         syncAveragePriceLines();
         if (!hadPosition) profitAlertLevels.set(token.mint, 0);
         return { trade, position, opened: !hadPosition };
@@ -730,7 +1174,9 @@
         }).catch(() => {});
         runTradeEffect('buy');
         playTradeSound('buy');
-        toast(`Bought ${E.fmt(solAmount, 3)} SOL of ${token.symbol} (paper)`);
+        // Confirm the fill in the unit the trader thinks in: "at 240K".
+        const atMcap = mcapAtPrice(result.trade.priceNative);
+        toast(`Bought ${E.fmt(solAmount, 3)} SOL of ${token.symbol}${atMcap ? ` at ${fmtMoney(atMcap)} MC` : ''} (paper)`);
       }
     } catch (err) { toast(err.message || 'Buy failed'); }
     renderAll();
@@ -738,28 +1184,27 @@
 
   async function doSell(fraction) {
     if (!token) return toast('No token detected on this page');
-    if (!token.priceNative) return toast('Need SOL-denominated price to paper sell. Try waiting one tick or refresh the chart.');
+    const fillQuote = await quoteForTrade();
+    if (!fillQuote) return toast('Could not obtain a fresh price — paper sell not filled.');
     try {
       const result = await withState(async () => {
+        if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper sell could be filled');
         const { trade, position, round } = E.sell(state, settings, {
           ts: Date.now(), mint: token.mint, site: site.id,
-          qtyFraction: fraction, priceNative: token.priceNative, priceUsd: token.priceUsd,
+          qtyFraction: fraction, priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
         });
         await commitFill(trade);
         await store.set({ [E.STORAGE_KEYS.state]: state });
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'sell' });
-        if (site && site.id === 'padre') {
-          sendPadreMarker('paper-marker', {
-            ts: markerTs,
-            priceNative: trade.priceNative,
-            side: 'sell',
-            solAmount: trade.solGross,
-            symbol: token.symbol,
-          });
-        } else if (CM) {
-          CM.addMarker({ ts: markerTs, price: trade.priceNative, side: 'sell', solAmount: trade.solGross, symbol: token.symbol });
-        }
+        drawFillOnChart({
+          ts: markerTs,
+          side: 'sell',
+          priceNative: trade.priceNative,
+          priceUsd: trade.priceUsd,
+          mcap: trade.mcap,
+          solAmount: trade.solGross,
+        });
         syncAveragePriceLines();
         if (round) profitAlertLevels.delete(token.mint);
         return { trade, position, round };
@@ -776,7 +1221,8 @@
         runTradeEffect('sell');
         playTradeSound('sell');
         const pnl = result.trade.pnlSol;
-        toast(`Sold ${Math.round(fraction * 100)}% — ${pnl >= 0 ? '+' : ''}${E.fmt(pnl)} SOL paper`);
+        const exitMcap = mcapAtPrice(result.trade.priceNative);
+        toast(`Sold ${Math.round(fraction * 100)}%${exitMcap ? ` at ${fmtMoney(exitMcap)} MC` : ''} — ${pnl >= 0 ? '+' : ''}${E.fmt(pnl)} SOL paper`);
         if (result.round) toast(`Round closed: ${result.round.pnlSol >= 0 ? '+' : ''}${E.fmt(result.round.pnlSol)} SOL (${result.round.pnlPct.toFixed(1)}%)`);
       }
     } catch (err) { toast(err.message || 'Sell failed'); }
@@ -1579,6 +2025,7 @@
     els.priceUsd = shadow.getElementById('pt-price-usd');
     els.balance = shadow.getElementById('pt-balance');
     els.buyPresets = shadow.getElementById('pt-buy-presets');
+    els.buyLabel = shadow.getElementById('pt-buy-label');
     els.custom = shadow.getElementById('pt-custom');
     els.btnBuy = shadow.getElementById('pt-buy');
     els.position = shadow.getElementById('pt-position');
@@ -1640,20 +2087,7 @@
       const sel = els.buyPresets.querySelector('.pt-preset.sel');
       const amt = custom > 0 ? custom : sel ? Number(sel.dataset.amt) : 0;
       if (!(amt > 0)) return toast('Pick a SOL amount first');
-      primeAudio();
-
-      // A brand-new coin may still be resolving. Rather than refusing the
-      // click — which reads as broken — arm the buy and fire it the moment a
-      // trusted price lands. This is the difference between "buggy" and
-      // "waiting", and it is what makes sniping a fresh launch feel possible.
-      if (!token || !token.priceNative) {
-        if (!token) return toast('No token detected on this page');
-        armedBuy = { amount: amt, at: Date.now(), mint: token.mint };
-        renderBuyButton();
-        toast('Buy armed — fires the instant the first quote lands');
-        return;
-      }
-      doBuy(amt);
+      requestBuy(amt);
     });
 
     const drag = shadow.getElementById('pt-drag');
@@ -1677,11 +2111,19 @@
 
   function renderPresets() {
     const list = settings.presetsBuy || [0.1, 0.5, 1, 2];
-    els.buyPresets.innerHTML = list.map((a, i) => `<button class="pt-preset${i === 1 ? ' sel' : ''}" data-amt="${a}">${a} SOL</button>`).join('');
+    const instant = settings.instantBuyEnabled !== false;
+    if (els.buyLabel) {
+      els.buyLabel.textContent = instant ? 'Quick buy — tap to fill (SOL)' : 'Quick buy (SOL)';
+    }
+    els.buyPresets.innerHTML = list.map((a, i) =>
+      `<button class="pt-preset${i === 1 ? ' sel' : ''}" data-amt="${a}" title="${instant ? 'Buy this amount instantly' : 'Select this amount'}">${a} SOL</button>`
+    ).join('');
     els.buyPresets.querySelectorAll('.pt-preset').forEach((b) => {
       b.addEventListener('click', () => {
         els.buyPresets.querySelectorAll('.pt-preset').forEach((x) => x.classList.remove('sel'));
         b.classList.add('sel'); els.custom.value = '';
+        // One-click quick buy: the tap IS the order, like Axiom and Padre.
+        if (instant) requestBuy(Number(b.dataset.amt));
       });
     });
   }
@@ -1707,21 +2149,27 @@
       if (els.subtitle) els.subtitle.textContent = 'Open a token page to begin';
       return;
     }
-    if (site.id !== 'padre') {
-      els.footSite.textContent = `Site: ${site.name}`;
+    // The price source is stated plainly. "CHAIN" means the fill price comes
+    // from pool state at `processed` commitment; anything else is an
+    // aggregator running behind, and the user deserves to know which.
+    const feed = onchainLive ? ' · CHAIN ⚡' : '';
+    if (!usesNativeChart()) {
+      els.footSite.textContent = `Site: ${site.name}${feed}`;
       if (els.subtitle) els.subtitle.textContent = site.name;
       return;
     }
+    // Padre and Axiom both drive native TradingView marks and order lines, so
+    // the hook status is reported against whichever site is in front of us.
     const live = padreHookStatus.barsHooked ? 'LIVE ✓' : 'live connecting…';
     const markersReady = padreHookStatus.marksHooked ? 'MARKS ✓' : 'marks connecting…';
     const lines = settings.averagePriceLinesEnabled
       ? ` · ${(lastLineStatus && lastLineStatus.ok) || padreHookStatus.linesReady ? 'LINES ✓' : 'lines connecting…'}`
       : '';
-    els.footSite.textContent = `Padre · ${live} · ${markersReady}${lines}`;
+    els.footSite.textContent = `${site.name} · ${live} · ${markersReady}${lines}${feed}`;
     if (els.subtitle) {
       els.subtitle.textContent = padreHookStatus.barsHooked
-        ? 'Padre · live feed connected'
-        : 'Padre · connecting…';
+        ? `${site.name} · live feed connected`
+        : `${site.name} · connecting…`;
     }
   }
 
@@ -1742,10 +2190,13 @@
     // Amber for both "no price yet" and "price has gone stale" — either way the
     // number on screen is not currently live.
     els.price.classList.toggle('pt-price-stale', f.pending || f.stale);
-    const usdLine = f.priceUsdText
-      ? `${f.priceUsdText}${token && token.mcap ? ' · MC ' + fmtMoney(token.mcap) : ''}`
-      : '';
-    els.priceUsd.textContent = f.stale ? `${usdLine} · reconnecting…`.trim() : usdLine;
+
+    // The headline is market cap, so the second line carries the label and the
+    // unit price rather than repeating the cap.
+    const secondary = f.priceIsMarketCap
+      ? `MC · ${f.priceUsdText || (f.hasTrustedPrice ? Q.formatPrice(token.priceNative) + ' SOL' : '')}`.trim()
+      : (f.priceUsdText || '');
+    els.priceUsd.textContent = f.stale ? `${secondary} · reconnecting…`.trim() : secondary;
   }
 
   function renderBalance() {
@@ -1951,6 +2402,135 @@
       // would mean two storage round trips per fill for no benefit.
     } catch (_) {
       /* evidence is best-effort; never interfere with trading */
+    }
+  }
+
+  /* -------------------- screener row quick buys --------------------
+   *
+   * Axiom Pulse, Padre Trenches and GMGN Trenches give every token row its
+   * own one-click buy so a trade can be opened without loading the chart.
+   * PaperTrench mirrors that: a small "P <amount>" chip is appended to every
+   * token-row link on the screener pages, and tapping it paper-buys the
+   * first preset amount. The fill lands in the positions bar immediately,
+   * exactly like the site's own quick buy moves you to the position.
+   */
+
+  const ROW_ADDR_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
+  // Newest USD price per mint from the site's OWN realtime feed (GMGN's
+  // token_activity ticks carry a mint). A row buy prefers this over a
+  // network quote because the screener is showing that very price.
+  const recentRowPrices = new Map(); // mint -> { usd, at }
+  const ROW_PRICE_TTL_MS = 10_000;
+  let rowBuyScanAt = 0;
+  let rowBuyInFlight = false;
+
+  function noteRowPrice(payload) {
+    if (!payload || typeof payload.mint !== 'string' || !ROW_ADDR_RE.test(payload.mint)) return;
+    const cand = Array.isArray(payload.candidates)
+      ? payload.candidates.find((c) => c && c.unit === 'usd' && Number(c.value) > 0)
+      : null;
+    if (!cand) return;
+    recentRowPrices.set(payload.mint, { usd: Number(cand.value), at: Date.now() });
+    if (recentRowPrices.size > 300) recentRowPrices.delete(recentRowPrices.keys().next().value);
+  }
+
+  /**
+   * Chips on screener rows are injected by the MAIN-world bridge (only it can
+   * read React fibers, which rows without an address link need for their
+   * token identity). This just forwards the scan request on a light cadence.
+   */
+  function scanRowBuys() {
+    if (!site || !site.rowBuy || settings.listQuickBuyEnabled === false) return;
+    if (!site.rowBuy.listPaths.test(location.pathname)) return;
+    const now = Date.now();
+    if (now - rowBuyScanAt < 350) return;
+    rowBuyScanAt = now;
+
+    sendPadreMarker('row-scan', {
+      amount: (settings.presetsBuy || [0.1])[0],
+      linkSelectors: site.rowBuy.linkSelectors,
+      placement: site.rowBuy.placement,
+      buyButtonPattern: site.rowBuy.buyButtonPattern || null,
+      containerMode: site.rowBuy.containerMode || 'heuristic',
+    });
+  }
+
+  // Rows stream in continuously (virtualized lists, infinite scroll). A light
+  // observer makes chips appear with the row instead of on the next poll.
+  let rowBuyObserver = null;
+  function startRowBuyObserver() {
+    if (rowBuyObserver || !document.body) return;
+    let debounce = null;
+    rowBuyObserver = new MutationObserver(() => {
+      if (debounce) return;
+      debounce = setTimeout(() => { debounce = null; scanRowBuys(); }, 200);
+    });
+    rowBuyObserver.observe(document.body, { childList: true, subtree: true });
+    onTeardown(() => {
+      try { rowBuyObserver && rowBuyObserver.disconnect(); } catch (_) {}
+      rowBuyObserver = null;
+    });
+  }
+
+  /** Paper-buy the first preset amount of a screener row's token. */
+  async function doRowBuy(address, button) {
+    if (rowBuyInFlight) return toast('Row buy already in progress…');
+    rowBuyInFlight = true;
+    if (button) button.classList.add('busy');
+    primeAudio();
+    try {
+      const amount = (settings.presetsBuy || [0.1])[0];
+      const data = await R.resolve(address);
+      if (!data || !(data.priceNative > 0)) {
+        toast('Could not price that token yet — open its chart to buy');
+        return;
+      }
+      // The screener's own realtime price wins when it is fresh: that is the
+      // number the user just looked at before tapping.
+      const live = data.mint && recentRowPrices.get(data.mint);
+      if (live && Date.now() - live.at < ROW_PRICE_TTL_MS && Number(data.priceUsd) > 0) {
+        const rate = data.priceUsd / data.priceNative;
+        data.priceUsd = live.usd;
+        data.priceNative = live.usd / rate;
+        data.priceSource = 'row-feed';
+      }
+
+      const result = await withState(async () => {
+        const opened = !state.positions[data.mint];
+        const { trade, position } = E.buy(state, settings, {
+          ts: Date.now(), mint: data.mint, pairAddress: data.pairAddress,
+          symbol: data.symbol, name: data.name, site: site.id,
+          solAmount: amount,
+          priceNative: data.priceNative, priceUsd: data.priceUsd, mcap: data.mcap,
+        });
+        await commitFill(trade);
+        await store.set({ [E.STORAGE_KEYS.state]: state });
+        return { trade, position, opened };
+      });
+      if (!result) return;
+      sendMessage({
+        type: 'pt_trade_event',
+        kind: 'buy',
+        opened: result.opened,
+        session: summarizeSession(result.position),
+        trade: summarizeTrade(result.trade),
+      }).catch(() => {});
+      runTradeEffect('buy');
+      playTradeSound('buy');
+      const atMcap = result.trade.mcap ? ` at ${fmtMoney(result.trade.mcap)} MC` : '';
+      toast(`Bought ${E.fmt(amount, 3)} SOL of ${result.trade.symbol}${atMcap} (paper)`);
+      if (result.opened) profitAlertLevels.set(data.mint, 0);
+      // The positions bar is the screener's answer to a row buy: the new
+      // position shows up in the rail instantly, chart one click away.
+      pollPositionPrices();
+      renderPositionsBar();
+      // If this token's chart happens to be on screen, refresh the card too.
+      if (token && token.mint === data.mint) renderAll();
+    } catch (err) {
+      toast(err.message || 'Row buy failed');
+    } finally {
+      rowBuyInFlight = false;
+      if (button) button.classList.remove('busy');
     }
   }
 
@@ -2282,7 +2862,9 @@
     if (!mark) return;
 
     posEls.qty.textContent = `${E.fmt(mark.qty, 2)} ${pos.symbol}`;
-    posEls.entry.textContent = `${trimSci(mark.avgEntry)} SOL`;
+    // "I got in at 240K" is how the entry is actually discussed, so the card
+    // shows the market cap at entry whenever the cap is known.
+    posEls.entry.textContent = entryText(mark.avgEntry);
     posEls.value.textContent = `${E.fmt(mark.valueSol, 4)} SOL`;
 
     const sign = mark.pnlSol >= 0 ? '+' : '';
@@ -2406,8 +2988,34 @@
     setTimeout(() => d.remove(), 4200);
   }
 
-  function trimSci(p) { return p < 0.0001 ? p.toExponential(2) : p.toFixed(8); }
-  function fmtMoney(n) { return n >= 1e9 ? '$' + (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'K' : '$' + Number(n).toFixed(0); }
+  // Prices and market caps share one readable convention across the whole
+  // overlay. Scientific notation ("3.97e-8") was reported as unreadable, so
+  // sub-cent values use subscript-zero notation instead.
+  function trimSci(p) { return Q.formatPrice(p); }
+  function fmtMoney(n) { return Q.formatMarketCap(n); }
+
+  /**
+   * Market cap implied by a SOL-denominated price for the token on screen.
+   *
+   * Supply is constant on the timescale of a trade, so the live cap and the
+   * live price move together. Scaling the current cap by the price ratio gives
+   * the cap AT THAT PRICE without needing a second data source, which is what
+   * keeps the entry figure consistent with the header.
+   */
+  function mcapAtPrice(priceNative) {
+    if (!(priceNative > 0) || !token) return null;
+    const nowPrice = Number(token.priceNative);
+    const nowMcap = Number(token.mcap);
+    if (!(nowPrice > 0) || !(nowMcap > 0)) return null;
+    return nowMcap * (priceNative / nowPrice);
+  }
+
+  /** Entry figure in the unit traders actually use, price only as a fallback. */
+  function entryText(priceNative) {
+    const mcap = mcapAtPrice(priceNative);
+    if (mcap) return `${fmtMoney(mcap)} MC`;
+    return `${trimSci(priceNative)} SOL`;
+  }
 
   if (contextAlive()) chrome.runtime.onMessage.addListener((msg) => {
     if (contextDead) return;
@@ -2451,8 +3059,11 @@
       // Cheap no-op when nothing changed, so an idle bar does not churn the
       // DOM (and cannot fight the user's horizontal scroll or a live click).
       renderPositionsBar();
+      // Screener rows render continuously; catch new ones on this cadence.
+      scanRowBuys();
     }, 1000);
     pollPositionPrices();
+    startRowBuyObserver();
 
     await detectLoop();
   }

@@ -8,9 +8,12 @@
  */
 
 
-if (typeof importScripts === 'function') importScripts('replay.js', 'quote.js', 'resolver.js');
+if (typeof importScripts === 'function') {
+  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js');
+}
 const RP = self.PTReplay;
 const R = self.PaperTrenchResolver;
+const FEED = self.PTOnchainFeed;
 
 const DEFAULTS = {
   balanceStartSol: 10,
@@ -426,6 +429,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try { sendResponse(await R.resolve(message.address)); } catch (e) { sendResponse(null); }
         break;
 
+      case 'pt_sol_usd':
+        try { sendResponse(await R.solUsd()); } catch (e) { sendResponse(0); }
+        break;
+
       case 'pt_refresh':
         if (!isValidTokenForRefresh(message.token)) { sendResponse(null); break; }
         try { sendResponse(await R.refresh(message.token)); } catch (e) { sendResponse(null); }
@@ -437,6 +444,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try { sendResponse(await R.batchPrices(mints)); } catch (e) { sendResponse({}); }
         break;
       }
+
+      // Begin streaming live pool state for the token on screen. Prices then
+      // arrive from chain state at `processed` commitment instead of from an
+      // aggregator running ~2-3s behind.
+      case 'pt_onchain_watch': {
+        if (!FEED || !isSolanaAddress(message.mint) || !isSolanaAddress(message.pool)) {
+          sendResponse({ live: false });
+          break;
+        }
+        try {
+          // An empty rpcUrl is the normal case: the keyless public pool.
+          const settings = await getSettings();
+          FEED.configure({ rpcUrl: settings.rpcUrl || null });
+          sendResponse({ live: await FEED.watch(message.mint, message.pool) });
+        } catch (e) { sendResponse({ live: false }); }
+        break;
+      }
+
+      case 'pt_onchain_unwatch':
+        if (FEED && isSolanaAddress(message.mint)) FEED.unwatch(message.mint);
+        sendResponse({ ok: true });
+        break;
+
+      // The authoritative price at click time. Null means no fresh on-chain
+      // observation exists, and the caller must not invent one.
+      case 'pt_onchain_quote':
+        if (!FEED || !isSolanaAddress(message.mint)) { sendResponse(null); break; }
+        sendResponse(FEED.currentQuote(message.mint));
+        break;
 
       default:
         sendResponse({ error: 'unknown message type' });

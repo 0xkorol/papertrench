@@ -173,6 +173,48 @@ test('a Padre market-cap chart tick derives the live token price instantly', () 
   assert.equal(verdict.mcap, a.mcap * 1.25);
 });
 
+test('a SOL-denominated market-cap chart tick is accepted and converted', () => {
+  // Axiom's USD/SOL toggle in MC mode plots the cap in SOL. That value
+  // matches neither the USD price band nor the USD market-cap band, and was
+  // previously rejected — freezing the price (and the P&L) on SOL-MC charts.
+  const a = anchor();
+  assert.ok(a.mcap > 0 && a.priceUsd > 0);
+  const solMcap = a.mcap * (a.priceNative / a.priceUsd);
+  const moved = solMcap * 1.1;
+
+  const verdict = Q.validateTick(a, {
+    candidates: [{ value: moved, unit: 'unknown' }],
+    mcap: moved,
+    source: 'padre-chart-bar',
+  });
+
+  assert.equal(verdict.accepted, true, 'SOL market-cap ticks must validate');
+  assert.equal(verdict.basis, 'native-mcap');
+  assert.ok(Math.abs(verdict.priceNative - a.priceNative * 1.1) / a.priceNative < 1e-12,
+    'the SOL price must move by the chart ratio');
+  assert.ok(Math.abs(verdict.mcap - a.mcap * 1.1) / a.mcap < 1e-12,
+    'the USD market cap must move by the same ratio');
+});
+
+test('a price-only tick moves the market cap by the same ratio', () => {
+  // Supply is constant tick to tick, so the headline market cap must follow
+  // every accepted price move. Before this, a live trade feed (GMGN
+  // token_activity) updated the price while the displayed cap stayed frozen
+  // at the last resolver quote.
+  const a = anchor();
+  assert.ok(a.mcap > 0, 'fixture should carry a market cap anchor');
+
+  const native = Q.validateTick(a, { candidates: [{ value: a.priceNative * 1.2, unit: 'native' }] });
+  assert.equal(native.accepted, true);
+  assert.ok(Math.abs(native.mcap - a.mcap * 1.2) / a.mcap < 1e-12,
+    'a native price move must scale the market cap');
+
+  const usd = Q.validateTick(a, { candidates: [{ value: a.priceUsd * 0.9, unit: 'usd' }] });
+  assert.equal(usd.accepted, true);
+  assert.ok(Math.abs(usd.mcap - a.mcap * 0.9) / a.mcap < 1e-12,
+    'a USD-only trade tick must scale the market cap too');
+});
+
 test('band edges: just-inside is accepted, just-outside is rejected', () => {
   const a = anchor();
   const ratio = Q.ACCEPT_RATIO;
@@ -194,6 +236,126 @@ test('band edges: just-inside is accepted, just-outside is rejected', () => {
   assert.equal(belowOutside.accepted, false, 'band must be symmetric');
 });
 
+/* ---------------- bootstrap from an on-screen price ---------------- */
+
+const SOL_USD = 200;
+
+function pendingToken() {
+  return { mint: '3PTQpne3b7kjJEvDYDMBHSuRjTDUh6HSin2xMyW3pump', pending: true };
+}
+
+test('a pending token boots from a tiny chart close treated as native SOL', () => {
+  const v = 1.05e-8; // native SOL price
+  const verdict = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: v, unit: 'unknown', key: 'chartExportClose' }],
+    mcap: v,
+  }, SOL_USD);
+
+  assert.equal(verdict.accepted, true, 'a tiny unknown close must bootstrap as native');
+  assert.equal(verdict.priceNative, v);
+  assert.equal(verdict.priceUsd, v * SOL_USD);
+  assert.equal(verdict.basis, 'native');
+});
+
+test('a pending token boots from a USD chart close using the SOL rate', () => {
+  const usd = 0.0000021;
+  const verdict = Q.bootstrapTick(pendingToken(), {
+    source: 'padre-chart-bar',
+    candidates: [{ value: usd, unit: 'unknown', key: 'padreChartClose' }],
+    mcap: usd,
+  }, SOL_USD);
+
+  assert.equal(verdict.accepted, true, 'a USD close must convert to native');
+  assert.equal(verdict.priceUsd, usd);
+  assert.ok(Math.abs(verdict.priceNative - usd / SOL_USD) < 1e-18);
+  assert.equal(verdict.basis, 'usd');
+});
+
+test('a GMGN mint-tagged USD trade bootstraps without ambiguity', () => {
+  const mint = pendingToken().mint;
+  const usd = 0.000123;
+  const verdict = Q.bootstrapTick(pendingToken(), {
+    source: 'gmgn-ws-trade',
+    mint,
+    candidates: [{ value: usd, unit: 'usd', key: 'tokenActivityPriceUsd' }],
+  }, SOL_USD);
+
+  assert.equal(verdict.accepted, true);
+  assert.equal(verdict.priceUsd, usd);
+  assert.equal(verdict.priceNative, usd / SOL_USD);
+  assert.equal(verdict.basis, 'ws-usd');
+});
+
+test('bootstrap refuses a USD price when the SOL rate is not yet available', () => {
+  const usd = 0.0000021;
+  const verdict = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: usd, unit: 'unknown', key: 'chartExportClose' }],
+    mcap: usd,
+  }, 0);
+
+  assert.equal(verdict.accepted, false);
+  assert.equal(verdict.reason, 'no-sol-rate');
+});
+
+test('bootstrap refuses a market-cap-only tick because supply is unknown', () => {
+  const verdict = Q.bootstrapTick(pendingToken(), {
+    source: 'gmgn-mcap-candle',
+    candidates: [],
+    mcap: 1234567,
+  }, SOL_USD);
+
+  assert.equal(verdict.accepted, false);
+  assert.equal(verdict.reason, 'mcap-only-no-supply');
+});
+
+test('bootstrap refuses an untrusted or mismatched source', () => {
+  const other = 'SomeOtherMint11111111111111111111111111111';
+  const own = pendingToken().mint;
+
+  const mismatch = Q.bootstrapTick(pendingToken(), {
+    source: 'gmgn-ws-trade',
+    mint: other,
+    candidates: [{ value: 0.0001, unit: 'usd' }],
+  }, SOL_USD);
+  assert.equal(mismatch.accepted, false, 'mint mismatch must be rejected');
+
+  const stray = Q.bootstrapTick(pendingToken(), {
+    source: 'ws',
+    candidates: [{ value: 0.0001, unit: 'usd' }],
+  }, SOL_USD);
+  assert.equal(stray.accepted, false, 'untrusted generic source must be rejected');
+});
+
+test('the header switches from "waiting" to a price after bootstrap', () => {
+  const token = { ...pendingToken(), priceNative: 1.05e-8, priceUsd: 1.05e-8 * SOL_USD };
+  const h = Q.headerFields(token, { now: Date.now(), pendingSince: 0, lastPriceAt: Date.now() });
+
+  assert.equal(h.pending, false);
+  assert.equal(h.hasTrustedPrice, true);
+  assert.doesNotMatch(h.priceText, /waiting for first quote/i, 'price must replace the waiting text');
+  assert.match(h.priceText, /SOL/);
+});
+
+test('after bootstrap, later chart ticks refine the price like a normal anchor', () => {
+  // A bootstrap token has a price but no Dexscreener anchor yet. The next
+  // on-screen bar should still be validated against the bootstrap price.
+  const native = 1.05e-8;
+  const token = { ...pendingToken(), priceNative: native, priceUsd: native * SOL_USD };
+  const moved = native * 1.3;
+
+  const verdict = Q.validateTick(token, {
+    source: 'chart-export',
+    candidates: [{ value: moved, unit: 'unknown', key: 'chartExportClose' }],
+    mcap: moved,
+  });
+
+  assert.equal(verdict.accepted, true);
+  assert.ok(Math.abs(verdict.priceNative - moved) < 1e-18);
+  assert.equal(verdict.basis, 'native');
+});
+
 /* ---------------- criterion 3: header fields ---------------- */
 
 test('header shows the real name and the address as DISTINCT fields', () => {
@@ -206,7 +368,9 @@ test('header shows the real name and the address as DISTINCT fields', () => {
   assert.equal(h.titleIsAddress, false, 'title must never be the contract address');
   assert.equal(h.pending, false);
   assert.equal(h.hasTrustedPrice, true);
-  assert.match(h.priceText, /SOL$/);
+  // Traders quote memecoins by market cap, so that is the headline figure.
+  assert.equal(h.priceIsMarketCap, true);
+  assert.match(h.priceText, /^\$/, 'the headline reads as a market cap');
 });
 
 test('header reports an explicit pending state instead of a fabricated price', () => {

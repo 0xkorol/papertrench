@@ -81,7 +81,10 @@ test('a Padre token URL resolves to a real name and a trusted anchor price', asy
   assert.notEqual(header.title, header.address, 'name and CA must be distinct fields');
   assert.equal(header.titleIsAddress, false, 'the title must never be the CA');
   assert.equal(header.pending, false, 'a resolved token is not pending');
-  assert.match(header.priceText, /SOL$/);
+  // The headline reads in market cap, the unit traders actually quote.
+  assert.match(header.priceText, /^\$/);
+  assert.ok(token.priceNative > 0,
+    'and the SOL price is still held underneath so the token can be paper-traded');
 });
 
 test('the bogus 0.44 SOL page tick cannot reach the display or a fill', async () => {

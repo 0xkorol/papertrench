@@ -463,6 +463,69 @@
     .coverage.unavailable { color: var(--faint); }
     .warn { color: var(--amber); font-size: 12px; margin: 10px 0 0; }
 
+    /* ---------------- P&L calendar ---------------- */
+
+    .cal-nav { display: inline-flex; align-items: center; gap: 9px; margin-left: auto; }
+    .cal-month {
+      min-width: 128px; text-align: center;
+      font-size: 13px; font-weight: 750; color: var(--text);
+      text-transform: none; letter-spacing: 0;
+    }
+    .cal-nav-btn {
+      width: 26px; height: 26px; padding: 0; line-height: 1;
+      border-radius: var(--r-sm); border: 1px solid var(--line);
+      background: var(--raised); color: var(--dim);
+      font-family: inherit; font-size: 15px; cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .cal-nav-btn:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); }
+    .cal-nav-btn:disabled { opacity: 0.35; cursor: default; }
+
+    .cal-summary {
+      display: flex; flex-wrap: wrap; gap: 7px 20px;
+      margin-bottom: 15px; font-size: 12px; color: var(--dim);
+    }
+    .cal-summary strong { color: var(--text); font-weight: 750; }
+
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr) 64px; gap: 5px; }
+    .cal-head {
+      padding-bottom: 5px; text-align: center;
+      font-size: 9.5px; font-weight: 750; letter-spacing: 0.9px;
+      text-transform: uppercase; color: var(--faint);
+    }
+    .cal-week-head { text-align: right; }
+    .cal-day {
+      min-height: 60px; padding: 7px 8px;
+      display: flex; flex-direction: column; gap: 2px;
+      background: rgba(255, 255, 255, 0.018);
+      border: 1px solid var(--line); border-radius: var(--r-sm);
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .cal-day.blank { visibility: hidden; }
+    .cal-day .cal-date { font-size: 10px; font-weight: 700; color: var(--faint); }
+    .cal-day .cal-pnl { margin-top: 1px; font-size: 13.5px; font-weight: 800; letter-spacing: -0.3px; }
+    .cal-day .cal-trades { margin-top: auto; font-size: 9.5px; color: var(--faint); }
+    .cal-day.win { background: rgba(52, 211, 153, 0.07); border-color: rgba(52, 211, 153, 0.22); }
+    .cal-day.win .cal-pnl { color: var(--green); }
+    .cal-day.loss { background: rgba(255, 95, 86, 0.07); border-color: rgba(255, 95, 86, 0.22); }
+    .cal-day.loss .cal-pnl { color: var(--red); }
+    .cal-day.flat .cal-pnl { color: var(--dim); }
+    .cal-day .cal-pnl.cal-zero { color: var(--faint); font-weight: 650; }
+    .cal-day.today {
+      border-color: rgba(255, 157, 69, 0.6);
+      box-shadow: 0 0 0 1px rgba(255, 157, 69, 0.25);
+    }
+    .cal-day.today .cal-date { color: var(--amber-2); }
+    .cal-week {
+      display: flex; align-items: center; justify-content: flex-end;
+      align-self: stretch;
+      padding: 7px 8px;
+      font-size: 12.5px; font-weight: 800;
+      background: rgba(255, 255, 255, 0.018);
+      border: 1px solid var(--line); border-radius: var(--r-sm);
+    }
+    .cal-week-empty { color: var(--faint); font-weight: 400; }
+
     .replay-signal, .replay-topic, .replay-post, .replay-chat {
       padding: 10px 12px; margin: 9px 0;
       background: rgba(255,255,255,0.028);
@@ -532,6 +595,7 @@
     </div>
     <nav>
       <button class="active" data-section="overview">Overview</button>
+      <button data-section="calendar">Calendar</button>
       <button data-section="journal">Journal</button>
       <button data-section="rounds">Rounds</button>
       <button data-section="replay">Replay</button>
@@ -544,6 +608,7 @@
     <aside id="sidebar"></aside>
     <main>
       <section id="overview" class="section"></section>
+      <section id="calendar" class="section hidden"></section>
       <section id="journal" class="section hidden"></section>
       <section id="rounds" class="section hidden"></section>
       <section id="replay" class="section hidden"></section>

@@ -39,12 +39,40 @@
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  /** Compact price formatting that stays readable across 1e-9 … 1e3. */
+  const SUBSCRIPT_DIGITS = '₀₁₂₃₄₅₆₇₈₉';
+
+  /**
+   * Compact price formatting that stays readable across 1e-9 … 1e3.
+   *
+   * A shared card gets screenshotted and posted, so "3.969e-8" is the worst
+   * possible rendering. Sub-cent values use subscript-zero notation, matching
+   * the overlay and every Solana terminal.
+   */
   function formatPrice(value) {
     const price = num(value);
     if (!(price > 0)) return '—';
-    if (price < 0.0001) return price.toExponential(3);
-    return String(Number(price.toPrecision(6)));
+    if (price >= 0.001) return String(Number(price.toPrecision(6)));
+
+    const exponent = Math.floor(Math.log10(price));
+    const leadingZeros = -exponent - 1;
+    if (leadingZeros < 4) return String(Number(price.toPrecision(4)));
+
+    const significant = price / Math.pow(10, exponent);
+    const digits = String(Number(significant.toFixed(3))).replace('.', '');
+    let subscript = '';
+    for (const ch of String(leadingZeros)) subscript += SUBSCRIPT_DIGITS[Number(ch)];
+    return '0.0' + subscript + digits;
+  }
+
+  /** Market cap for the card rail — the unit traders quote entries in. */
+  function formatMarketCap(value) {
+    const n = num(value);
+    if (!(n > 0)) return '—';
+    if (n >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T';
+    if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+    return '$' + n.toFixed(2);
   }
 
   function formatSol(value, dp = 3) {
@@ -106,8 +134,14 @@
       pnlSolText: `${win ? '+' : ''}${formatSol(pnlSol)} SOL`,
       investedText: `${formatSol(invested)} SOL`,
       returnedText: returned === null ? '—' : `${formatSol(returned)} SOL`,
-      entryText: formatPrice(source.entryPrice ?? source.avgEntry),
-      exitText: formatPrice(source.exitPrice ?? source.lastPriceNative),
+      // Entry and exit read as market caps when they are known, because that
+      // is how a trade gets described: "in at 240K, out at 900K".
+      entryText: num(source.entryMcap) > 0
+        ? formatMarketCap(source.entryMcap)
+        : formatPrice(source.entryPrice ?? source.avgEntry),
+      exitText: num(source.exitMcap) > 0
+        ? formatMarketCap(source.exitMcap)
+        : formatPrice(source.exitPrice ?? source.lastPriceNative),
       heldText: formatHeld(source.heldMs),
       accent: win ? COLORS.green : COLORS.red,
       statusText: open ? 'OPEN POSITION' : 'CLOSED',
@@ -294,7 +328,7 @@
   const api = {
     WIDTH, HEIGHT, COLORS, WATERMARK_TEXT, BRAND_TEXT,
     cardModel, drawCard, coverRect,
-    formatPrice, formatSol, formatHeld, shortMint,
+    formatPrice, formatMarketCap, formatSol, formatHeld, shortMint,
   };
 
   if (typeof window !== 'undefined') window.PTPnlCard = api;

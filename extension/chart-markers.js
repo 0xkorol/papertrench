@@ -37,7 +37,12 @@
   let chartContainer = null;
   let resizeObs = null;
   let domObserver = null;
-  let markers = []; // {ts, price, side, solAmount, symbol}
+  let markers = []; // {ts, price, side, solAmount, symbol, currency}
+  let averageLines = {
+    avgBuyPrice: null, avgSellPrice: null,
+    avgBuyLabel: null, avgSellLabel: null,
+    currency: 'SOL',
+  };
   let priceRange = { min: 0, max: 0 };
   let series = [];
   let scanTimer = null;
@@ -52,6 +57,7 @@
   // range hasn't moved meaningfully.
   let lastRenderedRange = { min: 0, max: 0 };
   let lastRenderedCount = -1;
+  let lastRenderedAvgCount = 0;
 
   /* ---------------- chart container discovery ---------------- */
 
@@ -68,14 +74,25 @@
     '[class*="chartWrapper"]',
     '[class*="chart-container"]',
     '[class*="chartContainer"]',
+    // GMGN-specific — GMGN mounts its TradingView iframe here.
+    '#global-tv-overlay',
+    '#chart_anchor_container_main',
+    '[class*="kline"]',
+    '[class*="k-line"]',
+    '[class*="KlineChart"]',
+    '[class*="price-chart"]',
+    '[class*="token-chart"]',
+    '[class*="trading_chart"]',
+    // BullX / Dexscreener / Birdeye
+    '[class*="ChartContainer"]',
+    '[class*="chart-area"]',
+    '[class*="chartArea"]',
     // Generic chart containers
     '[class*="chart"]',
     '[data-chart]',
     '[id*="chart"]',
     '[id*="tv"]',
     '[class*="tv_chart"]',
-    '[class*="price-chart"]',
-    '[class*="priceChart"]',
     // Canvas-based charts (TradingView, lightweight-charts, etc.)
     'canvas',
     // Generic containers that might wrap a chart
@@ -102,7 +119,10 @@
     score += Math.min(rect.width / 100, 10);
     score += Math.min(rect.height / 100, 5);
 
-    // Class/id name bonuses
+    // Class/id name bonuses. GMGN's TradingView iframe is deliberately
+    // hosted at #global-tv-overlay; it must beat broad page shell matches.
+    if (id === 'global-tv-overlay') score += 100;
+    if (id === 'chart_anchor_container_main') score += 90;
     if (/chart/.test(cls)) score += 20;
     if (/chart/.test(id)) score += 15;
     if (/tradingview|tv[_-]/.test(cls)) score += 15;
@@ -301,18 +321,25 @@
     // This prevents 60fps SVG rebuilds when tickPrice is called but the
     // price range hasn't actually moved.
     const count = markers.length;
+    const avgLinesNow = (averageLines.avgBuyPrice != null ? 1 : 0) + (averageLines.avgSellPrice != null ? 1 : 0);
     const rangeChanged =
       Math.abs(priceRange.min - lastRenderedRange.min) > Math.abs(priceRange.min) * 0.001 ||
       Math.abs(priceRange.max - lastRenderedRange.max) > Math.abs(priceRange.max) * 0.001;
-    if (count === lastRenderedCount && !rangeChanged) return;
+    if (count === lastRenderedCount && !rangeChanged && avgLinesNow === lastRenderedAvgCount) return;
 
     lastRenderedCount = count;
+    lastRenderedAvgCount = avgLinesNow;
     lastRenderedRange = { min: priceRange.min, max: priceRange.max };
 
     // Clear existing SVG content
     while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
 
-    if (!markers.length) return;
+    if (!markers.length) {
+      // No bubbles yet, but average lines may still need rendering
+      renderAverageLines();
+      if (fallbackEl) removeFallback();
+      return;
+    }
 
     const visible = markers.slice(-MAX_MARKERS);
     for (const m of visible) {
@@ -363,8 +390,94 @@
       svgEl.appendChild(tooltip);
     }
 
+    // Draw average price lines on top of markers
+    renderAverageLines();
+
     // Remove fallback if we're rendering on the chart
     if (fallbackEl) removeFallback();
+  }
+
+  /* ---------------- average price lines ---------------- */
+
+  function renderAverageLines() {
+    if (!svgEl || !chartContainer) return;
+    const w = chartContainer.clientWidth || 800;
+
+    // Avg buy line
+    if (averageLines.avgBuyPrice != null && priceRange.max > priceRange.min) {
+      const y = priceToY(averageLines.avgBuyPrice);
+      if (y > 0 && y < (chartContainer.clientHeight || 400)) {
+        drawHorizontalLine(y, w, '#34D399', 'AVG BUY', averageLines.avgBuyPrice, averageLines.avgBuyLabel);
+      }
+    }
+    // Avg sell line
+    if (averageLines.avgSellPrice != null && priceRange.max > priceRange.min) {
+      const y = priceToY(averageLines.avgSellPrice);
+      if (y > 0 && y < (chartContainer.clientHeight || 400)) {
+        drawHorizontalLine(y, w, '#FF5F56', 'AVG SELL', averageLines.avgSellPrice, averageLines.avgSellLabel);
+      }
+    }
+  }
+
+  /**
+   * Chart-side value text.
+   *
+   * `MCAP` is preferred wherever a market cap is available, because that is the
+   * figure traders actually read off a memecoin chart. Unit price is the
+   * fallback for the rare case no cap is known.
+   */
+  function formatChartPrice(price, currency) {
+    if (currency === 'MCAP') {
+      return Q && typeof Q.formatMarketCap === 'function'
+        ? Q.formatMarketCap(price)
+        : '$' + price;
+    }
+    const text = Q && typeof Q.formatPrice === 'function' ? Q.formatPrice(price) : String(price);
+    return currency === 'USD' ? '$' + text : text + ' SOL';
+  }
+
+  function drawHorizontalLine(y, width, color, label, plotPrice, labelPrice) {
+    // Dashed line across the chart
+    const line = document.createElementNS(SVG_NS, 'line');
+    line.setAttribute('x1', 0);
+    line.setAttribute('y1', y);
+    line.setAttribute('x2', width);
+    line.setAttribute('y2', y);
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '1.2');
+    line.setAttribute('stroke-dasharray', '6 4');
+    line.setAttribute('opacity', '0.7');
+    line.style.pointerEvents = 'none';
+    svgEl.appendChild(line);
+
+    // Label pill at the right edge
+    const labelText = `${label} ${formatChartPrice(labelPrice || plotPrice, averageLines.currency)}`;
+    const pillW = labelText.length * 6.2 + 12;
+    const pillH = 16;
+    const pillX = width - pillW - 2;
+    const pillY = y - pillH - 2;
+
+    const bg = document.createElementNS(SVG_NS, 'rect');
+    bg.setAttribute('x', pillX);
+    bg.setAttribute('y', pillY);
+    bg.setAttribute('width', pillW);
+    bg.setAttribute('height', pillH);
+    bg.setAttribute('rx', 4);
+    bg.setAttribute('fill', color);
+    bg.setAttribute('opacity', '0.85');
+    bg.style.pointerEvents = 'none';
+    svgEl.appendChild(bg);
+
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', pillX + 6);
+    text.setAttribute('y', pillY + 11.5);
+    text.setAttribute('font-size', '9');
+    text.setAttribute('font-weight', '700');
+    text.setAttribute('font-family', 'ui-sans-serif, system-ui, sans-serif');
+    text.setAttribute('fill', '#000');
+    text.style.pointerEvents = 'none';
+    text.textContent = labelText;
+    svgEl.appendChild(text);
   }
 
   function createSvgTooltip(m) {
@@ -375,7 +488,7 @@
 
     const lines = [
       `${m.side === 'buy' ? '🟢 Buy' : '🔴 Sell'} (Paper)`,
-      `Price: ${Q.formatPrice(m.price)} SOL`,
+      `Price: ${formatChartPrice(m.displayPrice || m.price, m.currency || 'SOL')}`,
       `Amount: ${m.solAmount.toFixed(3)} SOL`,
     ];
     if (m.symbol) lines.push(`Token: ${m.symbol}`);
@@ -462,7 +575,7 @@
       dot.appendChild(badge);
 
       const info = document.createElement('span');
-      info.textContent = `${Q.formatPrice(m.price)} SOL · ${m.solAmount.toFixed(2)}`;
+      info.textContent = `${formatChartPrice(m.displayPrice || m.price, m.currency || 'SOL')} · ${m.solAmount.toFixed(2)} SOL`;
       dot.appendChild(info);
 
       const age = document.createElement('span');
@@ -517,6 +630,10 @@
       side: m.side || 'buy',
       solAmount: m.solAmount || 0,
       symbol: m.symbol || '',
+      // `price` positions the marker on the chart. On GMGN that is market
+      // cap, while `displayPrice` remains the human-readable token fill.
+      displayPrice: Number(m.displayPrice) > 0 ? Number(m.displayPrice) : m.price,
+      currency: m.currency === 'USD' || m.currency === 'MCAP' ? m.currency : 'SOL',
     });
     if (markers.length > MAX_MARKERS) markers.shift();
     updatePriceRange(m.price);
@@ -536,10 +653,12 @@
 
   function clearMarkers() {
     markers = [];
+    averageLines = { avgBuyPrice: null, avgSellPrice: null, avgBuyLabel: null, avgSellLabel: null, currency: 'SOL' };
     series = [];
     priceRange = { min: 0, max: 0 };
     lastRenderedRange = { min: 0, max: 0 };
     lastRenderedCount = -1;
+    lastRenderedAvgCount = 0;
     if (svgEl) while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
     removeFallback();
   }
@@ -582,14 +701,41 @@
     renderPending = false; // cancel any pending debounced render
     chartContainer = null;
     markers = [];
+    averageLines = { avgBuyPrice: null, avgSellPrice: null, avgBuyLabel: null, avgSellLabel: null, currency: 'SOL' };
     series = [];
     priceRange = { min: 0, max: 0 };
+    lastRenderedAvgCount = 0;
+  }
+
+  /**
+   * Set horizontal average buy/sell price lines on the chart.
+   * Pass null or omit a value to leave that line unchanged;
+   * pass `undefined` explicitly to clear it.
+   */
+  function setAverageLines(opts) {
+    if (!opts) return;
+    if (opts.avgBuyPrice !== undefined) averageLines.avgBuyPrice = opts.avgBuyPrice;
+    if (opts.avgSellPrice !== undefined) averageLines.avgSellPrice = opts.avgSellPrice;
+    if (opts.avgBuyLabel !== undefined) averageLines.avgBuyLabel = opts.avgBuyLabel;
+    if (opts.avgSellLabel !== undefined) averageLines.avgSellLabel = opts.avgSellLabel;
+    if (opts.currency !== undefined) {
+      averageLines.currency = opts.currency === 'USD' || opts.currency === 'MCAP' ? opts.currency : 'SOL';
+    }
+    requestRender();
+  }
+
+  /** Clear both average price lines. */
+  function clearAverageLines() {
+    averageLines = { avgBuyPrice: null, avgSellPrice: null, avgBuyLabel: null, avgSellLabel: null, currency: 'SOL' };
+    requestRender();
   }
 
   const api = {
     addMarker,
     tickPrice,
     clearMarkers,
+    setAverageLines,
+    clearAverageLines,
     initChartMarkers,
     destroyChartMarkers,
     // Exposed for testing
@@ -597,6 +743,7 @@
     _timeToX: timeToX,
     _updatePriceRange: updatePriceRange,
     _getMarkers: () => markers,
+    _getAverageLines: () => ({ ...averageLines }),
     _getPriceRange: () => priceRange,
     _findChartContainer: findChartContainer,
     _scoreChartCandidate: scoreChartCandidate,

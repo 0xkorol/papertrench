@@ -63,6 +63,15 @@ function runBridge() {
   FakeWebSocket.CLOSING = 2;
   FakeWebSocket.CLOSED = 3;
 
+  function FakeSharedWorker() {
+    const listeners = {};
+    this.port = {
+      addEventListener(type, listener) { listeners[type] = listener; },
+      start() {},
+      emit(data) { if (listeners.message) listeners.message({ data }); },
+    };
+  }
+
   function FakeXHR() {}
   FakeXHR.prototype.send = function () {};
   FakeXHR.prototype.addEventListener = function () {};
@@ -72,12 +81,20 @@ function runBridge() {
       _options: { datafeed },
       activeChart: () => chart,
     },
-    fetch: () => Promise.resolve({
-      headers: { get: () => 'application/json' },
-      clone: () => ({ text: () => Promise.resolve('{}') }),
-    }),
+    fetch: (url) => {
+      const isGmgnMcap = String(url).includes('/api/v1/token_mcap_candles/');
+      const body = isGmgnMcap
+        ? JSON.stringify({ data: { list: [{ close: '123456789.12' }, { close: '123999999.45' }] } })
+        : '{}';
+      return Promise.resolve({
+        url: String(url),
+        headers: { get: () => 'application/json' },
+        clone: () => ({ text: () => Promise.resolve(body) }),
+      });
+    },
     XMLHttpRequest: FakeXHR,
     WebSocket: FakeWebSocket,
+    SharedWorker: FakeSharedWorker,
     EventSource: undefined,
     addEventListener(type, fn) { listeners[type] = fn; },
     postMessage(message) { emitted.push(message); },
@@ -267,4 +284,30 @@ test('average lines update in place and are removed when disabled', () => {
 
   send('paper-lines-clear');
   assert.equal(fill.removed, true, 'disabling must remove the remaining native line');
+});
+
+test('GMGN market-cap candles emit their latest close as the exact chart-scale tick', async () => {
+  const env = runBridge();
+  await env.win.fetch('https://gmgn.ai/api/v1/token_mcap_candles/sol/TestMint?resolution=1m');
+  // The fetch interceptor schedules clone().text(), so let the promise chain drain.
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const message = env.emitted.find((m) => m.type === 'tick' && m.payload?.source === 'gmgn-mcap-candle');
+  assert.ok(message, 'GMGN mcap candle response must emit a chart-scale tick');
+  assert.equal(message.payload.candidates.length, 0, 'market cap must not be misclassified as a token price');
+  assert.equal(message.payload.mcap, 123999999.45, 'the newest candle close is GMGN\'s active chart value');
+});
+
+test('GMGN SharedWorker price messages are forwarded as live page quotes', () => {
+  const env = runBridge();
+  const worker = new env.win.SharedWorker('gmgn-realtime-worker.js');
+  const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  worker.port.emit({ token: { priceUsd: '0.00001234', mint } });
+
+  const message = env.emitted.find((m) => m.type === 'tick' && m.payload?.source === 'shared-worker');
+  assert.ok(message, 'the worker port must feed a realtime quote into the bridge');
+  assert.equal(message.payload.mint, mint);
+  assert.equal(message.payload.candidates[0].value, 0.00001234);
+  assert.equal(message.payload.candidates[0].unit, 'usd');
 });
