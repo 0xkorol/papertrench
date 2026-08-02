@@ -81,8 +81,10 @@ PaperTrench is not on the Chrome Web Store yet. Loading it unpacked takes about 
 
 1. **Download** — grab the latest [release zip](../../releases) and unzip it, or clone this repo.
 2. Open **`chrome://extensions`** and turn on **Developer mode** (top right).
-3. Click **Load unpacked** and select the **`extension/`** folder.
+3. Click **Load unpacked** and select the folder that contains **`manifest.json`** — the unzipped release folder itself, or the **`extension/`** folder if you cloned the repo.
 4. Pin PaperTrench so the popup is one click away.
+
+> **Getting "Manifest file is missing or unreadable"?** The folder you selected doesn't have `manifest.json` at its top level. Open the folder you unzipped and select the level where `manifest.json` sits.
 
 Open any supported token page and the overlay appears within a second or two.
 
