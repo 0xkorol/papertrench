@@ -570,5 +570,5 @@ footer { border-top: 1px solid var(--line); padding: 42px 0; }
 @media (prefers-reduced-motion: reduce) {
   .reveal { opacity: 1; transform: none; transition: none; }
   .marquee-track { animation: none; }
-  .paper-panel { animation: none; }
+  .pt-box, .pt-box::before, .pt-banner::after, .pt-buy-btn::after, .pt-dot, .hero-badge .dot, .rec-dot { animation: none; }
 }

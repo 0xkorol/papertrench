@@ -288,6 +288,7 @@
           ctx.font = '700 10.5px "JetBrains Mono", monospace';
           ctx.textAlign = 'center';
           ctx.fillText('SELL 1.0 ◎ @ 0.0000402', tx, ty + 3.5);
+          ctx.textAlign = 'left';
         }
       });
     }
