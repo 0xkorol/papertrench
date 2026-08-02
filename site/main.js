@@ -113,12 +113,17 @@
     const fills = [ { i: 22, side: 'b' }, { i: 38, side: 'b' }, { i: 58, side: 's' }, { i: 76, side: 's' } ];
 
     let tick = 0;
+    let lastTs = 0;
 
-    function step() {
+    function step(ts) {
+      // time-based ticking so speed is refresh-rate independent (~60 steps/s)
+      if (ts - lastTs < 15) return;
+      lastTs = ts;
       tick++;
       const last = candles[candles.length - 1];
-      const drift = Math.sin(tick / 14) * 1.4 + 0.2;
-      last.c = Math.max(30, last.c + drift * 0.3 + (Math.random() - 0.48) * 1.8);
+      // mean-reverting walk keeps price/balance/P&L in a plausible band
+      const drift = Math.sin(tick / 14) * 1.4 + (100 - last.c) * 0.015;
+      last.c = Math.max(30, last.c + drift * 0.3 + (Math.random() - 0.5) * 1.8);
       last.h = Math.max(last.h, last.c);
       last.l = Math.min(last.l, last.c);
       if (tick % 24 === 0) {
@@ -179,8 +184,8 @@
       ctx.beginPath(); ctx.arc(w - cw / 2, y(lc.c), 4, 0, Math.PI * 2); ctx.fill();
     }
 
-    runLoop(canvas, () => {
-      if (!reduced) step();
+    runLoop(canvas, (ts) => {
+      if (!reduced) step(ts);
       draw();
     });
   }
@@ -312,10 +317,11 @@
     const fillEl = document.getElementById('recFill');
     const scrubEl = document.getElementById('recScrub');
     const timeEl = document.getElementById('recTime');
-    let rt = 0;
+    let rt0 = null;
 
-    function drawRec() {
-      rt += reduced ? 0 : 0.0022;
+    function drawRec(ts) {
+      if (rt0 === null) rt0 = ts;
+      const rt = (ts - rt0) / 7580; // full sweep ~7.6s regardless of refresh rate
       const prog = reduced ? 0.62 : (0.5 + 0.5 * Math.sin(rt * Math.PI * 2 - Math.PI / 2)) * 0.9 + 0.05;
       const { ctx, w, h } = fitCanvas(recCanvas);
       ctx.clearRect(0, 0, w, h);
