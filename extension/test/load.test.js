@@ -260,7 +260,9 @@ test('the manifest requests only the permissions the extension actually uses', (
     ['activeTab', 'offscreen', 'storage', 'tabs', 'unlimitedStorage'].sort());
   assert.ok(!manifest.permissions.includes('alarms'),
     'the alarm was only used for external polling, which this build does not do');
-  assert.equal(manifest.version, '1.1.0');
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(manifest.version, pkg.version,
+    'manifest.json and package.json must agree on the version');
 });
 
 /* ---------------- message contract ---------------- */
