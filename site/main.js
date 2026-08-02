@@ -52,7 +52,7 @@
     loops.set(canvas, { drawOnce });
     if (reduced) {
       const vio = new IntersectionObserver((es) => {
-        if (es[0].isIntersecting) { drawOnce(); vio.disconnect(); }
+        if (es[es.length - 1].isIntersecting) { drawOnce(); vio.disconnect(); }
       }, { threshold: 0.05 });
       vio.observe(canvas);
       return;
@@ -63,7 +63,7 @@
       rafId = visible ? requestAnimationFrame(tick) : 0;
     };
     new IntersectionObserver((es) => {
-      visible = es[0].isIntersecting;
+      visible = es[es.length - 1].isIntersecting;
       if (visible && !rafId) rafId = requestAnimationFrame(tick);
     }, { threshold: 0.05 }).observe(canvas);
   }
