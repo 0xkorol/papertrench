@@ -1867,6 +1867,7 @@ function renderSettings(el) {
         <div class="field"><label for="set-presets">Quick-buy presets (SOL)</label><input id="set-presets" type="text" value="${esc(settings.presetsBuy.join(', '))}"><small>Comma separated, shown as buttons in the overlay.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-instant-buy" ${settings.instantBuyEnabled !== false ? 'checked' : ''}> One-click quick buy</label><small>Tapping a preset amount fires the buy immediately, like Axiom and Padre. Off makes presets only select the amount for the BUY button.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-list-quick-buy" ${settings.listQuickBuyEnabled !== false ? 'checked' : ''}> Screener row quick-buy chips</label><small>A "P" chip on every token row of Axiom Pulse, Padre Trenches and GMGN Trenches — buys the first preset amount without opening the chart.</small></div>
+    <div class="field"><label for="set-list-quick-buy-size">Screener chip size <span id="val-list-quick-buy-size">${(settings.listQuickBuySize || 1).toFixed(2)}</span>x</label><input id="set-list-quick-buy-size" type="range" min="0.6" max="1.5" step="0.05" value="${Number(settings.listQuickBuySize || 1).toFixed(2)}"><small>Make the trench / pulse snipe chips larger or smaller to fit your screen density.</small></div>
         <div class="field"><label for="set-sellpcts">Quick-sell presets (%)</label><input id="set-sellpcts" type="text" value="${esc(settings.sellPcts.join(', '))}"></div>
       </div>
       <div class="card">
@@ -1902,6 +1903,11 @@ function renderSettings(el) {
 /** Wire the settings form. Called after the section is in the document. */
 function bindSettings() {
   document.getElementById('save-settings').addEventListener('click', saveFromForm);
+  const sizeSlider = document.getElementById('set-list-quick-buy-size');
+  const sizeVal = document.getElementById('val-list-quick-buy-size');
+  if (sizeSlider && sizeVal) {
+    sizeSlider.addEventListener('input', () => { sizeVal.textContent = Number(sizeSlider.value).toFixed(2); });
+  }
   document.getElementById('reset-all').addEventListener('click', async () => {
     if (!confirm('Wipe all paper positions, trades, round trips, screenshots, and session replays?')) return;
     state = E.resetState(settings);
@@ -1936,6 +1942,7 @@ function gatherSettingsFromForm() {
     presetsBuy: presets.length ? presets : [0.1, 0.5, 1, 2],
     instantBuyEnabled: document.getElementById('set-instant-buy').checked,
     listQuickBuyEnabled: document.getElementById('set-list-quick-buy').checked,
+    listQuickBuySize: Math.max(0.6, Math.min(1.5, Number(document.getElementById('set-list-quick-buy-size').value) || 1)),
     sellPcts: sellPcts.length ? sellPcts : [25, 50, 75, 100],
     aiEndpoint: document.getElementById('set-endpoint').value.trim() || DEFAULTS.aiEndpoint,
     aiModel: document.getElementById('set-model').value.trim(),

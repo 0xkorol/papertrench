@@ -2465,6 +2465,7 @@
 
     sendPadreMarker('row-scan', {
       amount: (settings.presetsBuy || [0.1])[0],
+      size: Math.max(0.6, Math.min(1.5, Number(settings.listQuickBuySize) || 1)),
       linkSelectors: site.rowBuy.linkSelectors,
       placement: site.rowBuy.placement,
       buyButtonPattern: site.rowBuy.buyButtonPattern || null,

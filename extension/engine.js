@@ -30,6 +30,9 @@
     // Pulse, Padre/GMGN Trenches), so a position can be opened without
     // loading the chart first. Fills at the first preset amount.
     listQuickBuyEnabled: true,
+    // Scale factor for the screener row quick-buy chip. 1.0 is the default
+    // compact size; users can make it larger on dense trench/pulse screens.
+    listQuickBuySize: 1.0,
     feeBps: 100,          // 1% per side, roughly Padre/Axiom territory
     slippageBps: 0,       // extra simulated slippage, 0 = fill at tick price
     recordingEnabled: false,

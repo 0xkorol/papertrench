@@ -1456,9 +1456,13 @@
 
     el.style.left = anchor.x + 'px';
     el.style.top = anchor.y + 'px';
-    el.style.transform = anchor.align === 'right-center' ? 'translate(-100%, -50%)'
+    const size = Number(entry.size) > 0 ? entry.size : 1;
+    el.style.transformOrigin = anchor.align === 'right-center' ? '100% 50%'
+      : anchor.align === 'right-bottom' ? '100% 100%'
+      : '100% 0%';
+    el.style.transform = (anchor.align === 'right-center' ? 'translate(-100%, -50%)'
       : anchor.align === 'right-bottom' ? 'translate(-100%, -100%)'
-      : 'translateX(-100%)';
+      : 'translate(-100%, 0)') + ' scale(' + size + ')';
     return true;
   }
 
@@ -1562,6 +1566,7 @@
 
   function scanScreenerRows(spec) {
     const amount = numberValue(spec && spec.amount) || 0.1;
+    const size = Math.max(0.6, Math.min(1.5, numberValue(spec && spec.size) || 1));
     const selectors = spec && Array.isArray(spec.linkSelectors) ? spec.linkSelectors : [];
     const groupRows = spec && spec.containerMode === 'group';
     const beforeButton = spec && spec.placement === 'before-buy-button';
@@ -1642,6 +1647,7 @@
       if (existing) {
         existing.address = address;
         existing.verifiedAt = now;
+        existing.size = size;
         continue;
       }
 
@@ -1656,6 +1662,7 @@
         address,
         pill: null,
         verifiedAt: now,
+        size,
         place: { mode: beforeButton ? 'before-buy-button' : (spec && spec.placement) || 'float', pattern },
       };
       // Taps are handled by the window-level capture listener above — a

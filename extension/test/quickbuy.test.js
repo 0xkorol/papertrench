@@ -99,8 +99,22 @@ test('the row chip is styled for the page DOM and has a settings toggle', () => 
   assert.match(css, /\.pt-rowbuy\.busy/);
   assert.equal(E.DEFAULT_SETTINGS.listQuickBuyEnabled, true);
   assert.equal(E.mergeSettings({}).listQuickBuyEnabled, true);
+  assert.equal(E.DEFAULT_SETTINGS.listQuickBuySize, 1.0);
+  assert.equal(E.mergeSettings({}).listQuickBuySize, 1.0);
   assert.match(dashJs, /id="set-list-quick-buy"/);
   assert.match(dashJs, /listQuickBuyEnabled: document\.getElementById\('set-list-quick-buy'\)\.checked/);
+  assert.match(dashJs, /id="set-list-quick-buy-size"/);
+  assert.match(dashJs, /listQuickBuySize:/);
+});
+
+test('the row scan carries the user-chosen chip size to the bridge', () => {
+  const bridge = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
+  assert.match(content, /sendPadreMarker\('row-scan', \{[\s\S]{0,120}size:/,
+    'content script must forward the chip size to the bridge');
+  assert.match(bridge, /const size = Math\.max\(0\.6, Math\.min\(1\.5, numberValue\(spec && spec\.size\) \|\| 1\)\);/,
+    'bridge must read the size from the scan spec');
+  assert.match(bridge, /el\.style\.transform[^;]*scale\(/,
+    'bridge must scale the chip with the user setting');
 });
 
 test('chips live in a fixed overlay layer and never enter the page DOM', () => {
