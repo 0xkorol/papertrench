@@ -802,6 +802,9 @@
   // briefly for the site's live feed, then performs one direct resolver quote.
   const ACTION_QUOTE_MAX_AGE_MS = 350;
   const ACTION_PAGE_WAIT_MS = 175;
+  // A fresh-launch coin has no Dexscreener/Jupiter quote yet, so the on-screen
+  // price is the only price. Keep it tradeable a little longer while pending.
+  const PENDING_ACTION_MAX_AGE_MS = 2000;
 
   function quoteSnapshot() {
     if (!token || !(Number(token.priceNative) > 0)) return null;
@@ -884,7 +887,21 @@
     // than filling from the stale display snapshot. If the page ticks while it
     // is in flight, the newer page quote wins.
     const fresh = await R.refresh(token);
-    if (!token || token.mint !== startMint || !fresh || !(Number(fresh.priceNative) > 0)) return null;
+    if (!token || token.mint !== startMint) return null;
+
+    // A new coin may not be indexed by any aggregator yet. The on-screen price
+    // is the only truthful quote we have, so use it for a little longer rather
+    // than refusing the buy entirely.
+    if (token.pending) {
+      if (pageQuoteSeq > seqAtClick) {
+        const newerPageQuote = quoteSnapshot();
+        if (newerPageQuote && Date.now() - newerPageQuote.receivedAt <= PENDING_ACTION_MAX_AGE_MS) return newerPageQuote;
+      }
+      const stalePageQuote = quoteSnapshot();
+      if (stalePageQuote && Date.now() - stalePageQuote.receivedAt <= PENDING_ACTION_MAX_AGE_MS) return stalePageQuote;
+    }
+
+    if (!fresh || !(Number(fresh.priceNative) > 0)) return null;
     if (fresh.mint && fresh.mint !== startMint) return null;
     if (pageQuoteSeq > seqAtClick) {
       const newerPageQuote = quoteSnapshot();
