@@ -92,6 +92,11 @@ document.getElementById('papertrench-host').shadowRoot.getElementById('pt-buy').
 
 For UI gestures that do not respond well to real mouse drags (e.g. the v1.2.3 positions-bar drag grip), use CDP `Input.dispatchMouseEvent`. The `x`/`y` coordinates are relative to the main frame's viewport, so derive them from `element.getBoundingClientRect()`.
 
+## Windows-specific testing notes
+
+- Screenshot and video artifacts are written to `C:\Users\Administrator\screenshots\` and `C:\tmp\devin-recordings\`. `upload_attachment` does not accept `C:\...` paths directly; copy files to `C:\tmp\...` and reference them with `/tmp/...` POSIX-style paths.
+- The `computer` typing tool may mangle bracket/colon strings such as `http://[::]:8080/v1` or `http://localhost.:8765/v1`. For these cases use CDP `Runtime.evaluate` to set `document.getElementById('set-endpoint').value` and trigger `document.getElementById('test-ai').click()`, then read `document.getElementById('ai-test-result').textContent` for the visible outcome.
+
 ## Common gotchas
 - Dexscreener/Birdeye/GMGN may show Cloudflare or login walls; the service worker still resolves the token via Dexscreener API because the overlay uses background price resolution, not the page DOM.
 - The overlay is taller than the default 1024x768 capture area; drag the `#pt-drag` header up or maximize the browser to reveal buy/sell buttons.
