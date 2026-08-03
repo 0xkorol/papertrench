@@ -7,7 +7,7 @@
 
 'use strict';
 
-const DEFAULTS = { balanceStartSol: 10 };
+const DEFAULTS = { balanceStartSol: 10, overlayHideWhenNoToken: true };
 
 function $(id) { return document.getElementById(id); }
 
@@ -64,6 +64,11 @@ async function load() {
     deltaEl.textContent = `${up ? '▲' : '▼'} ${up ? '+' : ''}${fmt(stats.equityVsStart, 3)} SOL (${up ? '+' : ''}${pct.toFixed(1)}%)`;
     deltaEl.className = 'delta ' + (up ? 'green' : 'red');
 
+    const autoHide = settings.overlayHideWhenNoToken !== false;
+    $('toggle').textContent = autoHide
+      ? 'Show overlay everywhere'
+      : 'Hide overlay on non-coin pages';
+
     $('cash').textContent = fmt(state.cashSol, 2);
     $('open').textContent = stats.openPositions;
     $('rounds').textContent = stats.rounds;
@@ -88,13 +93,23 @@ async function load() {
 
 async function toggleOverlay() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'pt_toggle_overlay' });
-    window.close();
-  } catch (e) {
-    $('status').textContent = 'No PaperTrench panel on this tab — reload the page first.';
+  // Try to flip the active tab's overlay first. If the content script is not
+  // running, update storage directly so the next page load respects the choice.
+  if (tab) {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'pt_toggle_overlay' });
+      window.close();
+      return;
+    } catch (_) {}
   }
+  const stored = await chrome.storage.local.get(['pt_settings']);
+  const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+  const newSettings = { ...settings, overlayHideWhenNoToken: !settings.overlayHideWhenNoToken };
+  await chrome.storage.local.set({ pt_settings: newSettings });
+  chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  $('status').textContent = tab
+    ? 'Updated — the overlay will respond once you reload this page.'
+    : 'Updated.';
 }
 
 async function resetWallet() {

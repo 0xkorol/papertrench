@@ -39,6 +39,10 @@
     framesEnabled: true,  // capture page screenshots for the AI coach
     autoReview: false,    // auto-run AI review when a round trip closes
     overlayEnabled: true,
+    // Hide the overlay on pages where no token is detected (e.g., a project's
+    // home page or a screener without a selected token). It pops back the
+    // moment the user opens a coin page.
+    overlayHideWhenNoToken: true,
     // Feedback features. On by default so a fill is unmistakable; every one
     // of them can be switched off individually in Settings.
     tradeEffectsEnabled: true,
@@ -71,7 +75,7 @@
   // Bumped when a default changes in a way existing users should receive.
   // Stored settings normally win over defaults, so without this a user who
   // installed before the change would keep the old value forever.
-  const SETTINGS_REVISION = 2;
+  const SETTINGS_REVISION = 3;
 
   /**
    * Merge stored settings over defaults, applying one-time migrations.
@@ -81,6 +85,8 @@
    * for them — not because the user chose it, but because that was the default.
    * The migration adopts the new defaults ONCE and records that it ran, so a
    * deliberate opt-out afterwards is never overridden.
+   *
+   * Revision 3 starts hiding the overlay on pages without a detected token.
    */
   function mergeSettings(stored) {
     const merged = Object.assign(defaultSettings(), stored || {});
@@ -91,6 +97,9 @@
       merged.tradeEffectsEnabled = DEFAULT_SETTINGS.tradeEffectsEnabled;
       merged.tradeSoundsEnabled = DEFAULT_SETTINGS.tradeSoundsEnabled;
       merged.averagePriceLinesEnabled = DEFAULT_SETTINGS.averagePriceLinesEnabled;
+    }
+    if (revision < 3) {
+      merged.overlayHideWhenNoToken = DEFAULT_SETTINGS.overlayHideWhenNoToken;
     }
     merged.settingsRevision = SETTINGS_REVISION;
     return merged;

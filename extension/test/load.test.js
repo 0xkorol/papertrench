@@ -347,6 +347,26 @@ test('live ticks are validated against a trusted anchor, not the last tick', () 
     'ticks with a mismatched mint must be rejected');
 });
 
+test('the overlay can be auto-hidden when no token is detected', () => {
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'engine.js'), 'utf8');
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const dashboardSrc = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  const popupSrc = fs.readFileSync(path.join(ROOT, 'popup.js'), 'utf8');
+
+  assert.match(engineSrc, /overlayHideWhenNoToken:\s*true/,
+    'the default must hide the overlay when no token is detected');
+  assert.match(engineSrc, /SETTINGS_REVISION = 3/,
+    'settings revision must be bumped for the new overlay default');
+  assert.match(contentSrc, /function updateOverlayVisibility/,
+    'content.js must hide the overlay host when no token is present');
+  assert.match(contentSrc, /function toggleOverlayAutoHide/,
+    'content.js must have a quick visibility toggle in the panel header');
+  assert.match(dashboardSrc, /set-overlay-auto-hide/,
+    'dashboard settings must expose the auto-hide toggle');
+  assert.match(popupSrc, /overlayHideWhenNoToken/,
+    'popup.js must read and toggle the auto-hide setting');
+});
+
 test('average mcap lines are drawn from the live bar close, not a stale resolver mcap', () => {
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
 
