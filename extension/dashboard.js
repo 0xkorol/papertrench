@@ -1878,7 +1878,8 @@ function renderSettings(el) {
       </div>
       <div class="card">
         <h3>AI &amp; Recording</h3>
-        <div class="field"><label for="set-endpoint">AI endpoint (OpenAI-compatible)</label><input id="set-endpoint" type="text" value="${esc(settings.aiEndpoint)}"></div>
+        <div class="field"><label for="set-endpoint">AI endpoint (OpenAI-compatible)</label><input id="set-endpoint" type="text" value="${esc(settings.aiEndpoint)}" placeholder="https://api.openai.com/v1 or http://127.0.0.1:8765/v1"></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-ai-allow-local" ${settings.aiAllowLocalEndpoint ? 'checked' : ''}> Allow local/private AI endpoints</label><small>Enable only if you run a self-hosted (localhost, 127.0.0.1, or LAN) OpenAI-compatible shim. Off blocks SSRF to internal addresses.</small></div>
         <div class="field"><label for="set-model">AI model</label><input id="set-model" type="text" value="${esc(settings.aiModel || '')}" placeholder="endpoint default"><small>Optional override. Blank uses the endpoint's own default.</small></div>
         <div class="field"><label for="set-key">API key</label><input id="set-key" type="password" value="${esc(settings.aiApiKey || '')}" autocomplete="off" placeholder="optional"><small>Only needed if your BYOK setup requires a bearer token.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-rec" ${settings.recordingEnabled ? 'checked' : ''}> Record screen while a position is open</label><small>Chrome asks for screen permission once per session.</small></div>
@@ -1937,7 +1938,8 @@ function bindSettings() {
     await store.set({ pt_settings: settingsNow });
     settings = settingsNow;
     const models = await chrome.runtime.sendMessage({ type: 'pt_ai_models' });
-    if (models?.models?.length) out.textContent = `OK — ${models.models.length} model(s) found: ${models.models.slice(0, 3).join(', ')}`;
+    if (models?.error) out.textContent = `Error: ${models.error}`;
+    else if (models?.models?.length) out.textContent = `OK — ${models.models.length} model(s) found: ${models.models.slice(0, 3).join(', ')}`;
     else out.textContent = 'No models reachable. Check endpoint and that your BYOK shim is running.';
   });
 }
@@ -1956,6 +1958,7 @@ function gatherSettingsFromForm() {
     listQuickBuySize: Math.max(0.6, Math.min(1.5, Number(document.getElementById('set-list-quick-buy-size').value) || 1)),
     sellPcts: sellPcts.length ? sellPcts : [25, 50, 75, 100],
     aiEndpoint: document.getElementById('set-endpoint').value.trim() || DEFAULTS.aiEndpoint,
+    aiAllowLocalEndpoint: document.getElementById('set-ai-allow-local').checked,
     aiModel: document.getElementById('set-model').value.trim(),
     aiApiKey: document.getElementById('set-key').value.trim(),
     recordingEnabled: document.getElementById('set-rec').checked,

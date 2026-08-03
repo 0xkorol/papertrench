@@ -54,17 +54,19 @@
     profitAlertsEnabled: false,
     profitAlertPct: 10,
     averagePriceLinesEnabled: true,
-    settingsRevision: 2,
+    settingsRevision: 4,
     // Padre-style top rail listing every open paper position.
     positionsBarEnabled: true,
     // Saved left/top offsets for the draggable positions bar. null means the
     // bar should auto-measure against the host site header on first paint.
     positionsBarLeft: null,
     positionsBarTop: null,
-    // AI backend (OpenAI-compatible). Defaults to the local BYOK shim.
-    aiEndpoint: 'http://127.0.0.1:8765/v1',
+    // AI backend (OpenAI-compatible). Empty by default; the user must set a
+    // public endpoint or opt-in to local/private endpoints below.
+    aiEndpoint: '',
     aiModel: '',
     aiApiKey: '',
+    aiAllowLocalEndpoint: false,
     // Optional private Solana RPC. Empty means "use the built-in keyless
     // public pool", which is the default and needs no signup from anyone.
     // Public RPC limits are per IP, so the pool scales across every install.
@@ -79,7 +81,7 @@
   // Bumped when a default changes in a way existing users should receive.
   // Stored settings normally win over defaults, so without this a user who
   // installed before the change would keep the old value forever.
-  const SETTINGS_REVISION = 3;
+  const SETTINGS_REVISION = 4;
 
   /**
    * Merge stored settings over defaults, applying one-time migrations.
@@ -91,7 +93,12 @@
    * deliberate opt-out afterwards is never overridden.
    *
    * Revision 3 starts hiding the overlay on pages without a detected token.
+   *
+   * Revision 4 removes the insecure default local AI endpoint and adds an
+   * explicit opt-in for local/private AI endpoints. Existing installs that still
+   * carry the old default have it cleared, and local/private access defaults off.
    */
+  const OLD_LOCAL_AI_ENDPOINT = 'http://127.0.0.1:8765/v1';
   function mergeSettings(stored) {
     const merged = Object.assign(defaultSettings(), stored || {});
     if (!stored) return merged;
@@ -104,6 +111,12 @@
     }
     if (revision < 3) {
       merged.overlayHideWhenNoToken = DEFAULT_SETTINGS.overlayHideWhenNoToken;
+    }
+    if (revision < 4) {
+      if (merged.aiEndpoint === OLD_LOCAL_AI_ENDPOINT) {
+        merged.aiEndpoint = '';
+      }
+      merged.aiAllowLocalEndpoint = false;
     }
     merged.settingsRevision = SETTINGS_REVISION;
     return merged;

@@ -46,6 +46,7 @@ function serviceWorker() {
     Error,
     Set,
     Map,
+    URL,
     URLSearchParams,
     AbortController,
     Uint8Array,
@@ -123,7 +124,7 @@ function serviceWorker() {
     }
   };
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8'), context, { filename: 'background.js' });
-  return { values, fetchCalls, get listener() { return messageListener; } };
+  return { values, fetchCalls, get listener() { return messageListener; }, get isAllowedEndpoint() { return context.isAllowedEndpoint; } };
 }
 
 function send(listener, message) {
@@ -175,5 +176,110 @@ test('service worker captures a real pt_trade_event into the replay store', asyn
   assert.equal(closed.ok, true);
   assert.equal(worker.values.pt_replays[0].status, 'closed');
   assert.equal(worker.values.pt_replays[0].roundId, 'round-worker');
+});
+
+test('isAllowedEndpoint blocks SSRF targets and allows public endpoints', () => {
+  const worker = serviceWorker();
+  const allow = worker.isAllowedEndpoint;
+  assert.equal(typeof allow, 'function');
+
+  // Valid public endpoints.
+  assert.equal(allow('https://api.openai.com/v1'), true);
+  assert.equal(allow('http://api.openai.com/v1'), true);
+  assert.equal(allow('https://ai.example.com:8443/path'), true);
+
+  // Non-HTTP(S) and malformed URLs.
+  assert.equal(allow('ftp://api.openai.com/v1'), false);
+  assert.equal(allow('file:///etc/passwd'), false);
+  assert.equal(allow('not a url'), false);
+  assert.equal(allow(''), false);
+
+  // URLs with credentials are rejected.
+  assert.equal(allow('https://user:pass@api.openai.com/v1'), false);
+
+  // Cloud metadata / link-local always blocked, even with local opt-in.
+  assert.equal(allow('http://169.254.169.254/latest/meta-data/'), false);
+  assert.equal(allow('http://169.254.169.254/latest/meta-data/', true), false);
+
+  // Localhost / loopback blocked by default, allowed with opt-in.
+  assert.equal(allow('http://127.0.0.1:8765/v1'), false);
+  assert.equal(allow('http://127.1:8765/v1'), false);
+  assert.equal(allow('http://0x7f000001:8765/v1'), false);
+  assert.equal(allow('http://2130706433:8765/v1'), false);
+  assert.equal(allow('http://localhost:8765/v1'), false);
+  assert.equal(allow('http://localhost.:8765/v1'), false, 'trailing-dot localhost must be treated as localhost');
+  assert.equal(allow('http://localhost.localdomain:8765/v1'), false);
+  assert.equal(allow('http://127.0.0.1:8765/v1', true), true);
+  assert.equal(allow('http://localhost:8765/v1', true), true);
+  assert.equal(allow('http://localhost.:8765/v1', true), true);
+
+  // Private ranges blocked by default, allowed with opt-in.
+  assert.equal(allow('http://10.0.0.1/v1'), false);
+  assert.equal(allow('http://172.16.0.1/v1'), false);
+  assert.equal(allow('http://192.168.1.1/v1'), false);
+  assert.equal(allow('http://100.64.0.1/v1'), false);
+  assert.equal(allow('http://10.0.0.1/v1', true), true);
+  assert.equal(allow('http://192.168.1.1/v1', true), true);
+
+  // 0.0.0.0 always blocked.
+  assert.equal(allow('http://0.0.0.0/v1'), false);
+  assert.equal(allow('http://0.0.0.0/v1', true), false);
+
+  // IPv6 loopback and link-local.
+  assert.equal(allow('http://[::]/v1'), false, 'unspecified IPv6 must be blocked unconditionally');
+  assert.equal(allow('http://[::]/v1', true), false);
+  assert.equal(allow('http://[::1]/v1'), false);
+  assert.equal(allow('http://[::1]/v1', true), true);
+  assert.equal(allow('http://[fe80::1]/v1'), false);
+  assert.equal(allow('http://[::ffff:127.0.0.1]/v1'), false);
+  assert.equal(allow('http://[::ffff:192.168.1.1]/v1', true), true);
+});
+
+test('ai proxy blocks disallowed endpoints and fetches allowed ones', async () => {
+  const worker = serviceWorker();
+
+  // Malicious cloud metadata endpoint is rejected with no network call.
+  worker.values.pt_settings = {
+    aiEndpoint: 'http://169.254.169.254/latest/meta-data/',
+    aiAllowLocalEndpoint: false,
+  };
+  const blocked = await send(worker.listener, { type: 'pt_ai_chat', messages: [], maxTokens: 100 });
+  assert.ok(blocked.error, 'blocked endpoint must return an error');
+  assert.equal(worker.fetchCalls.length, 0, 'no network call for blocked endpoint');
+
+  // Public endpoint is fetched.
+  worker.values.pt_settings = {
+    aiEndpoint: 'https://api.openai.com/v1',
+    aiAllowLocalEndpoint: false,
+  };
+  const models = await send(worker.listener, { type: 'pt_ai_models' });
+  assert.equal(Array.isArray(models.models), true);
+  assert.ok(worker.fetchCalls.some((u) => u.startsWith('https://api.openai.com/v1/models')), 'public endpoint is fetched');
+
+  // Local endpoint is rejected unless explicitly allowed.
+  worker.values.pt_settings = {
+    aiEndpoint: 'http://127.0.0.1:8765/v1',
+    aiAllowLocalEndpoint: false,
+  };
+  const localBlocked = await send(worker.listener, { type: 'pt_ai_models' });
+  assert.ok(localBlocked.error, 'local endpoint blocked when opt-in is off');
+
+  worker.values.pt_settings = {
+    aiEndpoint: 'http://127.0.0.1:8765/v1',
+    aiAllowLocalEndpoint: true,
+  };
+  worker.fetchCalls.length = 0;
+  const localAllowed = await send(worker.listener, { type: 'pt_ai_models' });
+  assert.equal(Array.isArray(localAllowed.models), true);
+  assert.ok(worker.fetchCalls.some((u) => u.startsWith('http://127.0.0.1:8765/v1/models')), 'local endpoint fetched when opt-in is on');
+
+  // Legacy default local endpoint is migrated to empty and rejected.
+  worker.values.pt_settings = {
+    aiEndpoint: 'http://127.0.0.1:8765/v1',
+    aiAllowLocalEndpoint: false,
+    settingsRevision: 3,
+  };
+  const migrated = await send(worker.listener, { type: 'pt_ai_chat', messages: [], maxTokens: 100 });
+  assert.ok(migrated.error, 'legacy default endpoint is migrated away');
 });
 
