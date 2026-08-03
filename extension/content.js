@@ -381,7 +381,7 @@
       setToken(data);
       // Tell the bridge which address this page is about, so ticks, exports
       // and drawing only come from the chart instance showing THIS token.
-      sendPadreMarker('paper-axis', { pairAddress: data.pairAddress, mint: data.mint });
+      sendPadreMarker('paper-axis', { pairAddress: data.pairAddress, mint: data.mint, symbol: data.symbol });
       // The site publishes its live market cap in document.title, which changes
       // the instant the page re-renders — cheaper and earlier than any network
       // read. It refreshes the DISPLAYED cap between chain updates; it never

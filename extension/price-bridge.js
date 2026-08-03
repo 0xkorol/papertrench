@@ -42,30 +42,49 @@
   // sites plot either token USD price or market cap; the bar close tells us
   // which magnitude the Y axis lives at, so lines and shapes land on it.
   let lastBarClose = 0;
-  // The pair/mint the content script has resolved for THIS page, used to keep
-  // ticks, exports and drawing on the chart instance that matches it. Axiom
-  // preloads charts for OTHER tokens — trusting their closes once put a
-  // different token's price into the P&L and the average lines.
-  let currentSymbolNeedle = null;
+  // The pair/mint/symbol the content script has resolved for THIS page, used
+  // to keep ticks, exports and drawing on the chart instance that matches it.
+  // Axiom preloads charts for OTHER tokens — trusting their closes once put a
+  // different token's price into the P&L and the average lines. Some Axiom
+  // chart symbols carry the token symbol or mint rather than the pair address,
+  // so we match against every identifier we know.
+  const currentSymbolNeedles = [];
 
   function chartSymbolMatches(chart) {
-    if (!currentSymbolNeedle) return true; // nothing resolved yet: permissive
+    if (!currentSymbolNeedles.length) return true; // nothing resolved yet: permissive
     try {
       const symbol = chart && typeof chart.symbol === 'function'
         ? String(chart.symbol()).toUpperCase()
         : '';
       if (!symbol || symbol.indexOf('UNKNOWN') === 0) return false;
-      return symbol.indexOf(currentSymbolNeedle) >= 0;
+      return currentSymbolNeedles.some((n) => symbol.indexOf(n) >= 0);
     } catch (_) {
       return false;
     }
   }
 
   function barSymbolMatches(symbolInfo) {
-    if (!currentSymbolNeedle) return true;
+    if (!currentSymbolNeedles.length) return true;
     const raw = symbolInfo && (symbolInfo.ticker || symbolInfo.name || symbolInfo.symbol);
     if (!raw) return true; // unidentified feed: let validation decide
-    return String(raw).toUpperCase().indexOf(currentSymbolNeedle) >= 0;
+    const s = String(raw).toUpperCase();
+    return currentSymbolNeedles.some((n) => s.indexOf(n) >= 0);
+  }
+
+  function setCurrentSymbolNeedles(payload) {
+    const next = [];
+    for (const key of ['pairAddress', 'mint', 'symbol']) {
+      const v = payload && payload[key];
+      if (typeof v === 'string' && v.length >= 2) {
+        next.push(String(v).toUpperCase());
+      }
+    }
+    const changed = next.length !== currentSymbolNeedles.length
+      || !next.every((n) => currentSymbolNeedles.indexOf(n) >= 0);
+    currentSymbolNeedles.length = 0;
+    for (const n of next) currentSymbolNeedles.push(n);
+    // A new token means the old bar close is no longer a valid axis hint.
+    if (changed) lastBarClose = 0;
   }
   // GMGN runs a private TradingView widget inside a same-origin blob iframe.
   // Its live React chart manager exposes `getActiveChart().createOrderLine()`.
@@ -700,7 +719,10 @@
       }
     }
     ranked.sort((a, b) => b.score - a.score);
-    return ranked.map((entry) => entry.chart);
+    const ordered = ranked.map((entry) => entry.chart);
+    if (!currentSymbolNeedles.length) return ordered;
+    const matched = ordered.filter((c) => chartSymbolMatches(c));
+    return matched.length ? matched : ordered;
   }
 
   function getPadreChart() {
@@ -1202,9 +1224,8 @@
 
     if (type === 'paper-axis') {
       // The page's resolved token identity: ticks, exports and drawing are
-      // only taken from the chart whose symbol contains this address.
-      const needle = payload && (payload.pairAddress || payload.mint);
-      currentSymbolNeedle = needle ? String(needle).toUpperCase() : null;
+      // only taken from the chart whose symbol contains one of these needles.
+      setCurrentSymbolNeedles(payload);
       return;
     }
 
@@ -1706,7 +1727,7 @@
     // Only the chart showing THIS page's token may set the price — a preload
     // chart for another token must not.
     const charts = getRankedCharts();
-    const chart = currentSymbolNeedle
+    const chart = currentSymbolNeedles.length
       ? charts.find((c) => chartSymbolMatches(c))
       : charts[0];
     if (!chart || typeof chart.exportData !== 'function') return;

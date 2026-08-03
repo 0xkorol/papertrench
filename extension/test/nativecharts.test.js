@@ -105,7 +105,7 @@ function runBridge(opts = {}) {
   const axiomChart = {
     clearMarks() {},
     refreshMarks() {},
-    symbol: () => `${AXIOM_PAIR}-USD-123`,
+    symbol: () => opts.axiomChartSymbol || `${AXIOM_PAIR}-USD-123`,
     createOrderLine: () => Promise.resolve(makeAsyncAdapter(orderLines)),
     createExecutionShape: () => Promise.resolve(makeAsyncAdapter(execShapes)),
     exportData: () => Promise.resolve({
@@ -617,6 +617,29 @@ test('ticks and lines ignore a preload chart showing a DIFFERENT token', async (
   await microtasks();
   assert.equal(env.preloadLines.length, 0, 'the wrong-token chart must receive no lines');
   assert.ok(env.orderLines.length >= 1, 'the matching chart received the line');
+});
+
+test('average lines fall back to the token symbol when the pair is not in the chart symbol', async () => {
+  // On Axiom Final Stretch the chart symbol may only contain the token symbol
+  // (e.g. TOKEN/USD) and not the pair/mint address. The bridge must still
+  // identify the real chart and draw the line at the right level.
+  const now = Math.floor(Date.now() / 1000);
+  const env = runBridge({
+    axiom: true,
+    href: 'https://axiom.trade/meme/Pair1',
+    // Override the real chart symbol to a token-symbol-only form.
+    axiomChartSymbol: 'BONK/USD-1',
+    exportRows: [[now - 1, 1, 2, 0.5, 2_000_000]],
+  });
+  env.send('paper-axis', { pairAddress: 'DifferentPair123', mint: null, symbol: 'BONK' });
+  env.runTimers();
+  await microtasks(8);
+
+  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.00001, avgBuyMcap: 2_000_000 });
+  await microtasks();
+
+  const line = env.orderLines.find((l) => l.values.setPrice === 2_000_000);
+  assert.ok(line, 'the average line must be drawn on the chart whose symbol matches the token ticker');
 });
 
 test('the price is pegged to the chart via exportData when live bars never flow', async () => {
