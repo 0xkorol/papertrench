@@ -276,6 +276,9 @@ function isForbiddenIPv4(a, b, c, d, allowLocal) {
 }
 
 function isForbiddenIPv6(ip, allowLocal) {
+  // The unspecified address resolves to loopback on many systems; block it
+  // unconditionally just like 0.0.0.0/8.
+  if (ip === '::') return true;
   if (ip === '::1') return !allowLocal;
   const lower = ip.toLowerCase();
   if (lower.startsWith('::ffff:') || lower.startsWith('::ffff:0:')) {
@@ -300,7 +303,9 @@ function isForbiddenIPv6(ip, allowLocal) {
 }
 
 function isForbiddenHost(host, allowLocal) {
-  const lower = host.toLowerCase();
+  // Strip an optional trailing dot (FQDN form) so "localhost." is treated the
+  // same as "localhost" by the literal and IP checks.
+  const lower = host.toLowerCase().replace(/\.$/, '');
   if (lower === 'localhost' || lower === 'localhost.localdomain' || lower.endsWith('.localhost')) {
     return !allowLocal;
   }

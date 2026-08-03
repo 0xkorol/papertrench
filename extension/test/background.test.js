@@ -207,9 +207,11 @@ test('isAllowedEndpoint blocks SSRF targets and allows public endpoints', () => 
   assert.equal(allow('http://0x7f000001:8765/v1'), false);
   assert.equal(allow('http://2130706433:8765/v1'), false);
   assert.equal(allow('http://localhost:8765/v1'), false);
+  assert.equal(allow('http://localhost.:8765/v1'), false, 'trailing-dot localhost must be treated as localhost');
   assert.equal(allow('http://localhost.localdomain:8765/v1'), false);
   assert.equal(allow('http://127.0.0.1:8765/v1', true), true);
   assert.equal(allow('http://localhost:8765/v1', true), true);
+  assert.equal(allow('http://localhost.:8765/v1', true), true);
 
   // Private ranges blocked by default, allowed with opt-in.
   assert.equal(allow('http://10.0.0.1/v1'), false);
@@ -224,6 +226,8 @@ test('isAllowedEndpoint blocks SSRF targets and allows public endpoints', () => 
   assert.equal(allow('http://0.0.0.0/v1', true), false);
 
   // IPv6 loopback and link-local.
+  assert.equal(allow('http://[::]/v1'), false, 'unspecified IPv6 must be blocked unconditionally');
+  assert.equal(allow('http://[::]/v1', true), false);
   assert.equal(allow('http://[::1]/v1'), false);
   assert.equal(allow('http://[::1]/v1', true), true);
   assert.equal(allow('http://[fe80::1]/v1'), false);
