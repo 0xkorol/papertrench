@@ -424,4 +424,27 @@ test('mergeSettings on a fresh install just returns the defaults', () => {
   const fresh = E.mergeSettings(null);
   assert.equal(fresh.tradeEffectsEnabled, true);
   assert.equal(fresh.balanceStartSol, E.DEFAULT_SETTINGS.balanceStartSol);
+  assert.equal(fresh.aiEndpoint, '', 'fresh install ships with no AI endpoint');
+  assert.equal(fresh.aiAllowLocalEndpoint, false, 'fresh install defaults local/private AI off');
+});
+
+test('mergeSettings migrates the old default local AI endpoint away', () => {
+  const legacy = {
+    settingsRevision: 3,
+    aiEndpoint: 'http://127.0.0.1:8765/v1',
+  };
+  const migrated = E.mergeSettings(legacy);
+  assert.equal(migrated.aiEndpoint, '', 'old default local endpoint is cleared');
+  assert.equal(migrated.aiAllowLocalEndpoint, false, 'local/private opt-in defaults off');
+  assert.equal(migrated.settingsRevision, E.SETTINGS_REVISION);
+});
+
+test('mergeSettings preserves a deliberately chosen public AI endpoint', () => {
+  const custom = {
+    settingsRevision: 3,
+    aiEndpoint: 'https://ai.example.com/v1',
+  };
+  const merged = E.mergeSettings(custom);
+  assert.equal(merged.aiEndpoint, 'https://ai.example.com/v1');
+  assert.equal(merged.aiAllowLocalEndpoint, false);
 });

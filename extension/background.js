@@ -34,10 +34,11 @@ const DEFAULTS = {
   profitAlertPct: 10,
   averagePriceLinesEnabled: true,
   positionsBarEnabled: true,
-  settingsRevision: 3,
-  aiEndpoint: 'http://127.0.0.1:8765/v1',
+  settingsRevision: 4,
+  aiEndpoint: '',
   aiModel: '',
   aiApiKey: '',
+  aiAllowLocalEndpoint: false,
 };
 
 const FRAME_CAP = 80;
@@ -46,9 +47,27 @@ let frameInterval = null;
 let recActive = false;
 let replayMutation = Promise.resolve();
 
+const OLD_LOCAL_AI_ENDPOINT = 'http://127.0.0.1:8765/v1';
+
+function migrateBackgroundSettings(settings) {
+  const revision = Number(settings.settingsRevision) || 0;
+  if (revision < 4) {
+    // The default AI endpoint used to point at a local BYOK shim. Treat an
+    // unchanged install as empty so the new validator does not immediately
+    // block it, and require an explicit opt-in before local/private endpoints
+    // are reachable from the background script.
+    if (settings.aiEndpoint === OLD_LOCAL_AI_ENDPOINT) {
+      settings.aiEndpoint = '';
+    }
+    settings.aiAllowLocalEndpoint = false;
+    settings.settingsRevision = 4;
+  }
+  return settings;
+}
+
 function getSettings() {
   return new Promise((resolve) =>
-    chrome.storage.local.get(['pt_settings'], (value) => resolve({ ...DEFAULTS, ...(value.pt_settings || {}) }))
+    chrome.storage.local.get(['pt_settings'], (value) => resolve(migrateBackgroundSettings({ ...DEFAULTS, ...(value.pt_settings || {}) })))
   );
 }
 
@@ -236,10 +255,84 @@ function recordReplay(sessionValue, roundValue = null) {
 
 /* -------------------- AI proxy -------------------- */
 
+function isForbiddenIPv4(a, b, c, d, allowLocal) {
+  if (a === 0) return true;                                 // 0.0.0.0/8
+  if (a === 10) return !allowLocal;                         // 10.0.0.0/8
+  if (a === 127) return !allowLocal;                        // 127.0.0.0/8
+  if (a === 169 && b === 254) return true;                  // 169.254.0.0/16 link-local / cloud metadata
+  if (a === 172 && b >= 16 && b <= 31) return !allowLocal;  // 172.16.0.0/12
+  if (a === 192 && b === 168) return !allowLocal;           // 192.168.0.0/16
+  if (a === 100 && b >= 64 && b <= 127) return !allowLocal; // 100.64.0.0/10 CGNAT
+  if ((a === 192 && b === 0 && c === 0) ||                  // 192.0.0.0/24
+      (a === 192 && b === 0 && c === 2) ||                  // 192.0.2.0/24 TEST-NET-1
+      (a === 198 && b === 51 && c === 100) ||               // 198.51.100.0/24 TEST-NET-2
+      (a === 203 && b === 0 && c === 113) ||                // 203.0.113.0/24 TEST-NET-3
+      (a === 198 && (b === 18 || b === 19))) {             // 198.18.0.0/15 benchmark
+    return !allowLocal;
+  }
+  if (a >= 224 && a <= 239) return true;                    // 224.0.0.0/4 multicast
+  if (a >= 240) return true;                                // 240.0.0.0/4 + 255.255.255.255
+  return false;
+}
+
+function isForbiddenIPv6(ip, allowLocal) {
+  if (ip === '::1') return !allowLocal;
+  const lower = ip.toLowerCase();
+  if (lower.startsWith('::ffff:') || lower.startsWith('::ffff:0:')) {
+    const rest = lower.replace(/^::ffff(:0)?:/, '');
+    if (rest.includes('.')) {
+      const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(rest);
+      if (ipv4) return isForbiddenIPv4(Number(ipv4[1]), Number(ipv4[2]), Number(ipv4[3]), Number(ipv4[4]), allowLocal);
+    }
+    const parts = rest.split(':').filter(Boolean);
+    if (parts.length) {
+      const lastTwo = parts.slice(-2);
+      const high = parseInt(lastTwo[0] || '0', 16);
+      const low = parseInt(lastTwo[1] || '0', 16);
+      return isForbiddenIPv4((high >> 8) & 255, high & 255, (low >> 8) & 255, low & 255, allowLocal);
+    }
+  }
+  if (/^fe[89ab][0-9a-f]{0,2}:/i.test(ip) || /^fe[89ab][0-9a-f]{0,2}$/i.test(ip)) return true;    // fe80::/10 link-local
+  if (/^f[c-d][0-9a-f]{0,2}:/i.test(ip) || /^f[c-d][0-9a-f]{0,2}$/i.test(ip)) return !allowLocal;   // fc00::/7 unique local
+  if (/^fe[c-f][0-9a-f]{0,2}:/i.test(ip) || /^fe[c-f][0-9a-f]{0,2}$/i.test(ip)) return !allowLocal; // fec0::/10 site-local (deprecated)
+  if (/^ff[0-9a-f]{0,2}:/i.test(ip) || /^ff[0-9a-f]{0,2}$/i.test(ip)) return true;                  // ff00::/8 multicast
+  return false;
+}
+
+function isForbiddenHost(host, allowLocal) {
+  const lower = host.toLowerCase();
+  if (lower === 'localhost' || lower === 'localhost.localdomain' || lower.endsWith('.localhost')) {
+    return !allowLocal;
+  }
+  if (lower.includes(':')) {
+    const ip = lower.replace(/^\[|\]$/g, '');
+    return isForbiddenIPv6(ip, allowLocal);
+  }
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(lower);
+  if (ipv4) {
+    return isForbiddenIPv4(Number(ipv4[1]), Number(ipv4[2]), Number(ipv4[3]), Number(ipv4[4]), allowLocal);
+  }
+  return false;
+}
+
+function isAllowedEndpoint(url, allowLocal = false) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
+    return !isForbiddenHost(parsed.hostname, allowLocal);
+  } catch (_) {
+    return false;
+  }
+}
+
 async function aiChat({ messages, maxTokens }) {
   const settings = await getSettings();
   const endpoint = (settings.aiEndpoint || '').replace(/\/+$/, '');
   if (!endpoint) return { error: 'No AI endpoint configured (open the dashboard → Settings)' };
+  if (!isAllowedEndpoint(endpoint, settings.aiAllowLocalEndpoint)) {
+    return { error: 'AI endpoint URL is not allowed. Enable local/private endpoints in Settings if you run a self-hosted endpoint, otherwise use a public endpoint.' };
+  }
   const body = {
     model: settings.aiModel || 'default',
     messages,
@@ -254,6 +347,7 @@ async function aiChat({ messages, maxTokens }) {
         ...(settings.aiApiKey ? { Authorization: 'Bearer ' + settings.aiApiKey } : {}),
       },
       body: JSON.stringify(body),
+      redirect: 'error',
     });
     if (!response.ok) return { error: `AI endpoint returned ${response.status}` };
     const json = await response.json();
@@ -263,12 +357,18 @@ async function aiChat({ messages, maxTokens }) {
   }
 }
 
+
 async function aiModels() {
   const settings = await getSettings();
   const endpoint = (settings.aiEndpoint || '').replace(/\/+$/, '');
+  if (!endpoint) return { models: [] };
+  if (!isAllowedEndpoint(endpoint, settings.aiAllowLocalEndpoint)) {
+    return { models: [], error: 'AI endpoint URL is not allowed. Enable local/private endpoints in Settings if you run a self-hosted endpoint, otherwise use a public endpoint.' };
+  }
   try {
     const response = await fetch(endpoint + '/models', {
       headers: settings.aiApiKey ? { Authorization: 'Bearer ' + settings.aiApiKey } : {},
+      redirect: 'error',
     });
     if (!response.ok) return { models: [] };
     const json = await response.json();
