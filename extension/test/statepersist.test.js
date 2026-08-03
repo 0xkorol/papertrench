@@ -39,7 +39,8 @@ const BONK = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
  * storage reads on demand and to write behind the storage listener's back
  * (simulating a missed adoption event).
  */
-function runOverlay(priceSeries) {
+function runOverlay(priceSeries, opts) {
+  const options = opts || {};
   const timers = [];
   let now = 1_000_000;
   let failGets = 0;
@@ -126,6 +127,10 @@ function runOverlay(priceSeries) {
 
   let priceIdx = 0;
   const storage = {};
+  // Settings the install already has before the content script boots.
+  if (options.initialSettings) {
+    storage.pt_settings = Object.assign(E.defaultSettings(), options.initialSettings);
+  }
   const storageListeners = [];
   const sandbox = {
     window: win, self: win, document: doc, location: win.location, console,
@@ -322,4 +327,52 @@ test('the quick-sell buttons render for a position adopted from another tab', as
   const buttons = ov.sellButtons();
   assert.equal(buttons.length, 4, 'the position card must offer the four quick-sell buttons');
   assert.deepEqual(buttons.map((b) => b.textContent), ['25%', '50%', '75%', '100%']);
+});
+
+/* ---------------- overlay buy-section toggles ----------------
+ *
+ * The user-facing option to remove the quick buys. Drives the shipped
+ * content.js with the toggles already saved, and asserts exactly which
+ * controls disappear.
+ */
+
+test('the whole buy section disappears when panelBuyEnabled is off', async () => {
+  // Saved at the current revision, so the one-time migration does not
+  // re-adopt the defaults over this opt-out.
+  const ov = runOverlay([0.001], {
+    initialSettings: { panelBuyEnabled: false, settingsRevision: E.SETTINGS_REVISION },
+  });
+
+  await ov.advance(1200);                  // token resolves, panel renders
+
+  for (const id of ['pt-buy-label', 'pt-buy-presets', 'pt-custom', 'pt-buy']) {
+    assert.equal(ov.shadowNodes[id].style.display, 'none',
+      `${id} must be hidden when the buy section is switched off`);
+  }
+});
+
+test('the preset row hides alone while the BUY button stays', async () => {
+  const ov = runOverlay([0.001], {
+    initialSettings: { panelPresetsEnabled: false, settingsRevision: E.SETTINGS_REVISION },
+  });
+
+  await ov.advance(1200);
+
+  assert.equal(ov.shadowNodes['pt-buy-presets'].style.display, 'none',
+    'the one-tap presets must be hidden');
+  assert.notEqual(ov.shadowNodes['pt-buy'].style.display, 'none',
+    'the BUY button must remain available');
+  assert.notEqual(ov.shadowNodes['pt-custom'].style.display, 'none',
+    'the custom amount input must remain available');
+});
+
+test('with both toggles on, every buy control is visible', async () => {
+  const ov = runOverlay([0.001]);
+
+  await ov.advance(1200);
+
+  for (const id of ['pt-buy-label', 'pt-buy-presets', 'pt-custom', 'pt-buy']) {
+    assert.notEqual(ov.shadowNodes[id].style.display, 'none',
+      `${id} must be visible with default settings`);
+  }
 });

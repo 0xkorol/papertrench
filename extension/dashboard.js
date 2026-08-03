@@ -1874,6 +1874,8 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-instant-buy" ${settings.instantBuyEnabled !== false ? 'checked' : ''}> One-click quick buy</label><small>Tapping a preset amount fires the buy immediately, like Axiom and Padre. Off makes presets only select the amount for the BUY button.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-list-quick-buy" ${settings.listQuickBuyEnabled !== false ? 'checked' : ''}> Screener row quick-buy chips</label><small>A "P" chip on every token row of Axiom Pulse, Padre Trenches and GMGN Trenches — buys the first preset amount without opening the chart.</small></div>
     <div class="field"><label for="set-list-quick-buy-size">Screener chip size <span id="val-list-quick-buy-size">${(settings.listQuickBuySize || 1).toFixed(2)}</span>x</label><input id="set-list-quick-buy-size" type="range" min="0.6" max="1.5" step="0.05" value="${Number(settings.listQuickBuySize || 1).toFixed(2)}"><small>Make the trench / pulse snipe chips larger or smaller to fit your screen density.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-panel-buy" ${settings.panelBuyEnabled !== false ? 'checked' : ''}> Buy section in the trade tab</label><small>Shows the quick-buy presets, custom amount and BUY button in the overlay. Off makes the trade tab view-only.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-panel-presets" ${settings.panelPresetsEnabled !== false ? 'checked' : ''}> Quick-buy preset buttons</label><small>The one-tap SOL amount buttons. Off keeps the custom amount and BUY button.</small></div>
         <div class="field"><label for="set-sellpcts">Quick-sell presets (%)</label><input id="set-sellpcts" type="text" value="${esc(settings.sellPcts.join(', '))}"></div>
       </div>
       <div class="card">
@@ -1956,6 +1958,8 @@ function gatherSettingsFromForm() {
     instantBuyEnabled: document.getElementById('set-instant-buy').checked,
     listQuickBuyEnabled: document.getElementById('set-list-quick-buy').checked,
     listQuickBuySize: Math.max(0.6, Math.min(1.5, Number(document.getElementById('set-list-quick-buy-size').value) || 1)),
+    panelBuyEnabled: document.getElementById('set-panel-buy').checked,
+    panelPresetsEnabled: document.getElementById('set-panel-presets').checked,
     sellPcts: sellPcts.length ? sellPcts : [25, 50, 75, 100],
     aiEndpoint: document.getElementById('set-endpoint').value.trim() || DEFAULTS.aiEndpoint,
     aiAllowLocalEndpoint: document.getElementById('set-ai-allow-local').checked,

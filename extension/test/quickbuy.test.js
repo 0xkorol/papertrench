@@ -148,3 +148,43 @@ test('fiber addresses accept only whole base58 values on address-like keys', () 
   assert.match(bridge, /\^\[1-9A-HJ-NP-Za-km-z\]\{32,44\}\$/);
   assert.match(bridge, /image\|img\|logo\|icon\|uri\|url\|banner/);
 });
+
+/* ---------------- removing quick buys from the trade tab ----------------
+ *
+ * Two independent user toggles: hide the one-tap preset row on its own, or
+ * hide the entire buy section (label, presets, custom amount, BUY button)
+ * for a view-only trade tab. Both default on.
+ */
+
+test('the buy toggles default on and migrate onto existing installs', () => {
+  assert.equal(E.DEFAULT_SETTINGS.panelBuyEnabled, true);
+  assert.equal(E.DEFAULT_SETTINGS.panelPresetsEnabled, true);
+  assert.equal(E.mergeSettings({}).panelBuyEnabled, true,
+    'an install from before the toggles must keep its buy section');
+  assert.equal(
+    E.mergeSettings({ settingsRevision: E.SETTINGS_REVISION, panelBuyEnabled: false }).panelBuyEnabled,
+    false,
+    'a deliberate opt-out recorded at the current revision is never overridden'
+  );
+});
+
+test('the overlay hides exactly what each toggle controls', () => {
+  assert.match(content, /settings\.panelBuyEnabled !== false/,
+    'the buy-section master toggle must gate the section');
+  assert.match(content, /settings\.panelPresetsEnabled !== false/,
+    'the preset-row toggle must gate the preset buttons');
+  // The master switch hides every buy control, not just the presets.
+  for (const el of ['buyLabel', 'custom', 'btnBuy', 'buyPresets']) {
+    assert.match(content, new RegExp('els\\.' + el + '\\) els\\.' + el + '\\.style\\.display'),
+      `the visibility pass must cover ${el}`);
+  }
+});
+
+test('the settings page exposes both removal toggles', () => {
+  assert.match(dashJs, /id="set-panel-buy"/);
+  assert.match(dashJs, /id="set-panel-presets"/);
+  assert.match(dashJs, /panelBuyEnabled: document\.getElementById\('set-panel-buy'\)\.checked/,
+    'the buy-section toggle must be persisted with the rest of the settings');
+  assert.match(dashJs, /panelPresetsEnabled: document\.getElementById\('set-panel-presets'\)\.checked/,
+    'the preset-row toggle must be persisted with the rest of the settings');
+});

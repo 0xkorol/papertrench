@@ -2368,11 +2368,24 @@
   function openDashboard() { sendMessage({ type: 'pt_open_dashboard' }); }
 
   function renderPresets() {
+    // Two user toggles strip the buy controls back: the preset row can be
+    // hidden on its own, or the whole buy section (label, presets, custom
+    // amount, BUY button) for a view-only trade tab. Hidden, not removed —
+    // flipping either switch back on restores everything as it was.
+    const sectionOn = settings.panelBuyEnabled !== false;
+    const presetsOn = sectionOn && settings.panelPresetsEnabled !== false;
+    if (els.buyLabel) els.buyLabel.style.display = sectionOn ? '' : 'none';
+    if (els.custom) els.custom.style.display = sectionOn ? '' : 'none';
+    if (els.btnBuy) els.btnBuy.style.display = sectionOn ? '' : 'none';
+    if (els.buyPresets) els.buyPresets.style.display = presetsOn ? '' : 'none';
+
     const list = settings.presetsBuy || [0.1, 0.5, 1, 2];
     const instant = settings.instantBuyEnabled !== false;
-    if (els.buyLabel) {
-      els.buyLabel.textContent = instant ? 'Quick buy — tap to fill (SOL)' : 'Quick buy (SOL)';
+    if (sectionOn && els.buyLabel) {
+      // "Tap to fill" only reads honestly while the tappable row is visible.
+      els.buyLabel.textContent = presetsOn && instant ? 'Quick buy — tap to fill (SOL)' : 'Quick buy (SOL)';
     }
+    if (!presetsOn) return;
     els.buyPresets.innerHTML = list.map((a, i) =>
       `<button class="pt-preset${i === 1 ? ' sel' : ''}" data-amt="${a}" title="${instant ? 'Buy this amount instantly' : 'Select this amount'}">${a} SOL</button>`
     ).join('');

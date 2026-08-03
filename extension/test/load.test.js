@@ -355,8 +355,8 @@ test('the overlay visibility can be toggled between master and auto-hide control
 
   assert.match(engineSrc, /overlayHideWhenNoToken:\s*true/,
     'the default must hide the overlay when no token is detected');
-  assert.match(engineSrc, /SETTINGS_REVISION = 4/,
-    'settings revision must be bumped for the new overlay default');
+  assert.match(engineSrc, /SETTINGS_REVISION = 5/,
+    'settings revision must be bumped for the trade-tab buy toggles');
   assert.match(contentSrc, /function updateOverlayVisibility/,
     'content.js must hide the main panel when no token is present');
   assert.match(contentSrc, /function toggleOverlayAutoHide/,

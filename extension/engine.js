@@ -33,6 +33,14 @@
     // Scale factor for the screener row quick-buy chip. 1.0 is the default
     // compact size; users can make it larger on dense trench/pulse screens.
     listQuickBuySize: 1.0,
+    // Master switch for the buy controls in the trade tab (presets, custom
+    // amount, BUY button). Off makes the panel view-only for people who
+    // never buy from the overlay.
+    panelBuyEnabled: true,
+    // The one-tap preset amount row inside the buy section. Can be hidden
+    // on its own so traders who always type a custom amount keep the BUY
+    // button.
+    panelPresetsEnabled: true,
     feeBps: 100,          // 1% per side, roughly Padre/Axiom territory
     slippageBps: 0,       // extra simulated slippage, 0 = fill at tick price
     recordingEnabled: false,
@@ -81,7 +89,7 @@
   // Bumped when a default changes in a way existing users should receive.
   // Stored settings normally win over defaults, so without this a user who
   // installed before the change would keep the old value forever.
-  const SETTINGS_REVISION = 4;
+  const SETTINGS_REVISION = 5;
 
   /**
    * Merge stored settings over defaults, applying one-time migrations.
@@ -97,6 +105,9 @@
    * Revision 4 removes the insecure default local AI endpoint and adds an
    * explicit opt-in for local/private AI endpoints. Existing installs that still
    * carry the old default have it cleared, and local/private access defaults off.
+   *
+   * Revision 5 adds the trade-tab buy toggles (whole buy section, and the
+   * preset row on its own), both on by default.
    */
   const OLD_LOCAL_AI_ENDPOINT = 'http://127.0.0.1:8765/v1';
   function mergeSettings(stored) {
@@ -117,6 +128,10 @@
         merged.aiEndpoint = '';
       }
       merged.aiAllowLocalEndpoint = false;
+    }
+    if (revision < 5) {
+      merged.panelBuyEnabled = DEFAULT_SETTINGS.panelBuyEnabled;
+      merged.panelPresetsEnabled = DEFAULT_SETTINGS.panelPresetsEnabled;
     }
     merged.settingsRevision = SETTINGS_REVISION;
     return merged;

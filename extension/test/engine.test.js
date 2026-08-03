@@ -448,3 +448,21 @@ test('mergeSettings preserves a deliberately chosen public AI endpoint', () => {
   assert.equal(merged.aiEndpoint, 'https://ai.example.com/v1');
   assert.equal(merged.aiAllowLocalEndpoint, false);
 });
+
+test('revision 5 adds the trade-tab buy toggles, on by default', () => {
+  // An install saved under revision 4 has no record of the new keys; the
+  // migration adopts the defaults once so the buy section stays visible.
+  const rev4 = { settingsRevision: 4, balanceStartSol: 7 };
+
+  const migrated = E.mergeSettings(rev4);
+  assert.equal(migrated.panelBuyEnabled, true);
+  assert.equal(migrated.panelPresetsEnabled, true);
+  assert.equal(migrated.settingsRevision, 5);
+  assert.equal(migrated.balanceStartSol, 7, 'unrelated settings must survive');
+
+  // And a deliberate opt-out recorded at revision 5 is never overridden.
+  const optedOut = { settingsRevision: 5, panelBuyEnabled: false, panelPresetsEnabled: false };
+  const merged = E.mergeSettings(optedOut);
+  assert.equal(merged.panelBuyEnabled, false);
+  assert.equal(merged.panelPresetsEnabled, false);
+});
