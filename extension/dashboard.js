@@ -729,7 +729,13 @@ async function runReview(roundId) {
   );
   const messages = buildCoachMessages(round, trades, roundFrames);
   const resp = await chrome.runtime.sendMessage({ type: 'pt_ai_chat', messages, maxTokens: 2000 });
-  round.aiReview = {
+  // The AI call takes seconds, and a fill can land in storage while it runs.
+  // Annotate the FRESHEST state — reloaded just before the write — so saving
+  // the review can never clobber a trade the user made mid-review.
+  await loadAll();
+  const freshRound = (state.rounds || []).find((r) => r.id === roundId);
+  const target = freshRound || round;
+  target.aiReview = {
     t: Date.now(),
     text: resp?.reply || ('Error: ' + (resp?.error || 'unknown')),
     ok: !resp?.error,

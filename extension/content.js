@@ -183,16 +183,21 @@
    *
    * A dead context is an expected end-of-life condition, not an error worth
    * rejecting into the page's console on every heartbeat.
+   *
+   * get() resolves null when the read FAILED (dead context, lastError, or an
+   * exception) and {} when it succeeded but nothing is stored. Callers must
+   * never treat a failed read as "empty wallet" — that is how a transient
+   * storage hiccup turns into a silent wipe of every open position.
    */
   const store = {
     get: (keys) => new Promise((resolve) => {
-      if (!contextAlive()) { shutdown('invalidated'); resolve({}); return; }
+      if (!contextAlive()) { shutdown('invalidated'); resolve(null); return; }
       try {
         chrome.storage.local.get(keys, (value) => {
-          if (chrome.runtime && chrome.runtime.lastError) { resolve({}); return; }
+          if (chrome.runtime && chrome.runtime.lastError) { resolve(null); return; }
           resolve(value || {});
         });
-      } catch (_) { shutdown('invalidated'); resolve({}); }
+      } catch (_) { shutdown('invalidated'); resolve(null); }
     }),
     set: (obj) => new Promise((resolve) => {
       if (!contextAlive()) { shutdown('invalidated'); resolve(); return; }
@@ -471,8 +476,20 @@
         mcap: Number(token.mcap) || null,
       };
     }
-    // Navigating to a different token invalidates any armed intent.
-    if (token && prevMint && token.mint !== prevMint) armedBuy = null;
+    // Navigating to a different token invalidates any armed intent. But a
+    // pending pair address RESOLVING into its base mint is the same token
+    // gaining its real identity, not a navigation: on pair-URL sites (Axiom,
+    // Photon, BullX) the pending token's mint IS the pair address, and the
+    // resolved record carries the base mint. Dropping the armed buy there
+    // silently killed every snipe at exactly the moment the first quote
+    // landed — the classic "ARMED … but nothing executed" report.
+    if (token && prevMint && token.mint !== prevMint) {
+      const sameTokenResolving = armedBuy
+        && armedBuy.mint === prevMint
+        && (token.pairAddress === prevMint || token.srcAddress === prevMint);
+      if (sameTokenResolving) armedBuy.mint = token.mint;
+      else armedBuy = null;
+    }
     if (!token) armedBuy = null;
     void hadPrice;
     if (!token || token.mint !== prevMint) {
@@ -564,6 +581,20 @@
         lastCmTickPrice = chartPrice;
         CM.tickPrice(chartPrice);
       }
+      // Armed-buy watchdog: no matter which path a price arrives by (page
+      // feed, resolver, a future source), the armed intent fires on the next
+      // beat — and it also EXPIRES visibly. Before this existed, an armed buy
+      // could sit on "ARMED … ON FIRST QUOTE" indefinitely when the quote
+      // that landed never flowed through a flushing path.
+      if (armedBuy) {
+        if (token && Number(token.priceNative) > 0) {
+          flushArmedBuy();
+        } else if (Date.now() - armedBuy.at > ARMED_BUY_TTL_MS) {
+          armedBuy = null;
+          renderBuyButton();
+          toast('Armed buy expired — no quote arrived in time');
+        }
+      }
       renderHeader();
       renderPosition();
     }, PRICE_TICK_MS);
@@ -626,6 +657,11 @@
       persistSoon();
       renderHeader();
       renderPosition();
+      // The first trusted quote for a brand-new pair usually lands HERE — the
+      // resolver indexes it before the site's chart feed is hookable — so an
+      // armed buy must fire from this path too, or the button stays "ARMED"
+      // forever while the price is plainly on screen.
+      flushArmedBuy();
     } catch (e) {
       /* transient network failure; the next beat retries */
     } finally {
@@ -997,8 +1033,52 @@
 
   async function reloadState() {
     const stored = await store.get([E.STORAGE_KEYS.state, E.STORAGE_KEYS.settings]);
+    // A failed read (null) must keep whatever state we already hold: swapping
+    // in a fresh default here is how a transient storage error silently wipes
+    // every open position — and the next heartbeat mark persists that wipe.
+    if (stored === null) return;
     settings = E.mergeSettings(stored[E.STORAGE_KEYS.settings]);
-    state = stored[E.STORAGE_KEYS.state] || E.defaultState(settings);
+    // A missing state key means "never stored"; the in-memory default is
+    // already the correct value for that case, so never fabricate over a
+    // state this session has since populated.
+    if (stored[E.STORAGE_KEYS.state]) state = stored[E.STORAGE_KEYS.state];
+  }
+
+  /**
+   * Adopt wallet state written elsewhere and re-render everything that
+   * depends on it. Shared by the storage listener and the contention guard in
+   * persistSoon, so both paths refresh the UI identically.
+   */
+  function adoptState(next) {
+    const hadPosition = Boolean(token && state.positions && state.positions[token.mint]);
+    state = next;
+    const hasPosition = Boolean(token && state.positions && state.positions[token.mint]);
+    // The card's structure only changes when a position appears or vanishes.
+    if (hadPosition !== hasPosition) posEls = null;
+
+    renderBalance();
+    renderPosition();
+    renderClosedPnl();
+    // A fill in ANOTHER tab changes the portfolio too; without this the bar
+    // would keep showing a chip for a position that is already closed.
+    renderPositionsBar();
+    syncAveragePriceLines();
+  }
+
+  /**
+   * Stamp the current state as the newest version and write it.
+   *
+   * `seq` is a monotonic write counter: every writer bumps it, and a writer
+   * holding an older base can tell it has been overtaken (see persistSoon).
+   * That is what stops a tab whose adoption lagged from blindly clobbering a
+   * fresher wallet — the failure that made open positions, and therefore the
+   * quick-sell buttons, disappear.
+   */
+  function persistStateNow() {
+    state.seq = (Number(state.seq) || 0) + 1;
+    state.updatedAt = Date.now();
+    lastWrittenState = state;
+    return store.set({ [E.STORAGE_KEYS.state]: state });
   }
 
   /**
@@ -1031,19 +1111,7 @@
       if (!next || next === state) return;
       if (lastWrittenState && next === lastWrittenState) return; // our own write
 
-      const hadPosition = Boolean(token && state.positions && state.positions[token.mint]);
-      state = next;
-      const hasPosition = Boolean(token && state.positions && state.positions[token.mint]);
-      // The card's structure only changes when a position appears or vanishes.
-      if (hadPosition !== hasPosition) posEls = null;
-
-      renderBalance();
-      renderPosition();
-      renderClosedPnl();
-      // A fill in ANOTHER tab changes the portfolio too; without this the bar
-      // would keep showing a chip for a position that is already closed.
-      renderPositionsBar();
-      syncAveragePriceLines();
+      adoptState(next);
     };
     chrome.storage.onChanged.addListener(listener);
     onTeardown(() => {
@@ -1186,8 +1254,26 @@
     persistTimer = setTimeout(async () => {
       persistTimer = null;
       if (!contextAlive()) { shutdown('invalidated'); return; }
-      lastWrittenState = state;
-      await store.set({ [E.STORAGE_KEYS.state]: state });
+      // This writer is blind: it debounces marks and knows nothing about what
+      // happened during the wait. If another tab/popup/dashboard wrote a newer
+      // state in the meantime (and the adoption event was missed or is still
+      // racing), writing our copy would clobber it — that is exactly how an
+      // open position silently vanished. Read first; when storage is ahead,
+      // adopt it and re-apply only the live marks this tab actually owns.
+      const stored = await store.get([E.STORAGE_KEYS.state]);
+      if (stored === null) return; // storage unreadable: never write blind
+      const storedState = stored[E.STORAGE_KEYS.state];
+      if (storedState && Number(storedState.seq) > Number(state.seq)) {
+        adoptState(storedState);
+        if (token && token.mint && Number(token.priceNative) > 0) {
+          E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
+        }
+        for (const mint of Object.keys(livePositionPrices)) {
+          const p = livePositionPrices[mint];
+          if (p && Number(p.priceNative) > 0) E.markPosition(state, mint, p.priceNative, p.priceUsd);
+        }
+      }
+      await persistStateNow();
     }, 800);
   }
 
@@ -1236,7 +1322,7 @@
         // Commit the fill to the evidence chain before persisting, so the
         // stored snapshot and its attestation are written atomically.
         await commitFill(trade);
-        await store.set({ [E.STORAGE_KEYS.state]: state });
+        await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'buy' });
         drawFillOnChart({
@@ -1281,7 +1367,7 @@
           qtyFraction: fraction, priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
         });
         await commitFill(trade);
-        await store.set({ [E.STORAGE_KEYS.state]: state });
+        await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'sell' });
         drawFillOnChart({
@@ -2202,7 +2288,7 @@
     shadow.getElementById('pt-settings').addEventListener('click', openDashboard);
     shadow.getElementById('pt-reset').addEventListener('click', async () => {
       if (!confirm(`Reset paper wallet to ${settings.balanceStartSol} SOL? All history is wiped.`)) return;
-      await withState(async () => { state = E.resetState(settings); await store.set({ [E.STORAGE_KEYS.state]: state }); });
+      await withState(async () => { state = E.resetState(settings); await persistStateNow(); });
       syncAveragePriceLines();
       renderAll(); toast('Paper wallet reset');
     });
@@ -2608,7 +2694,7 @@
       };
       await withState(async () => {
         E.setThesis(state, token.mint, payload, Date.now());
-        await store.set({ [E.STORAGE_KEYS.state]: state });
+        await persistStateNow();
       });
       thesisEditing = false;
       thesisEls = null;
@@ -2790,7 +2876,7 @@
           priceNative: data.priceNative, priceUsd: data.priceUsd, mcap: data.mcap,
         });
         await commitFill(trade);
-        await store.set({ [E.STORAGE_KEYS.state]: state });
+        await persistStateNow();
         return { trade, position, opened };
       });
       if (!result) return;

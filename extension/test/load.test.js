@@ -398,3 +398,61 @@ test('average mcap lines are drawn from the live bar close, not a stale resolver
   assert.match(bridgeSrc, /currentPriceNative|currentPriceUsd/,
     'paper-lines payload must include the current token price for scaling');
 });
+
+test('armed buys survive a pair address resolving into its base mint', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  // On pair-URL sites (Axiom, Photon, BullX) the pending token's mint is the
+  // PAIR address. When it resolves, the mint changes — that upgrade must
+  // rebind the armed buy, not drop it, or the snipe dies on the first quote.
+  assert.match(contentSrc, /sameTokenResolving/,
+    'setToken must recognise a pending pair resolving into its mint');
+  assert.match(contentSrc, /armedBuy\.mint = token\.mint/,
+    'the armed intent must be rebound to the resolved mint');
+});
+
+test('armed buys flush from every price path and expire visibly', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  // The resolver path delivers the first quote for most fresh launches; it
+  // must flush the armed buy just like page ticks and setToken do.
+  const requoteBody = contentSrc.slice(
+    contentSrc.indexOf('async function requote'),
+    contentSrc.indexOf('function stopPriceLoop')
+  );
+  assert.match(requoteBody, /flushArmedBuy\(\)/,
+    'requote must flush the armed buy when it adopts the first price');
+
+  // The heartbeat is the universal watchdog: it flushes whatever the price
+  // source was, and it expires stale intents even when no path ever flushes.
+  const loopBody = contentSrc.slice(
+    contentSrc.indexOf('function startPriceLoop'),
+    contentSrc.indexOf('async function requote')
+  );
+  assert.match(loopBody, /flushArmedBuy\(\)/,
+    'the heartbeat must flush an armed buy once any price exists');
+  assert.match(loopBody, /Armed buy expired/,
+    'the heartbeat must expire an armed buy that never got a quote');
+});
+
+test('state writes are seq-stamped and a failed read never fabricates a wallet', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'engine.js'), 'utf8');
+
+  // A failed storage read resolves null — distinct from "succeeded but empty"
+  // — so reloadState can keep the in-memory wallet instead of inventing a
+  // fresh one that the next heartbeat mark would then persist.
+  assert.match(contentSrc, /resolve\(null\)/,
+    'store.get must surface failures as null, not as an empty result');
+  assert.match(contentSrc, /if \(stored === null\) return/,
+    'reloadState must keep the current state when the read fails');
+
+  assert.match(contentSrc, /function persistStateNow/,
+    'all state writes must go through one stamping writer');
+  assert.match(contentSrc, /state\.seq = \(Number\(state\.seq\) \|\| 0\) \+ 1/,
+    'every write must bump the monotonic state seq');
+  assert.match(contentSrc, /Number\(storedState\.seq\) > Number\(state\.seq\)/,
+    'the debounced writer must detect a newer state in storage and adopt it');
+  assert.match(engineSrc, /seq: 0/,
+    'a fresh wallet starts at seq 0');
+});

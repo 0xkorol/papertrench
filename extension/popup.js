@@ -23,6 +23,7 @@ function fmt(n, dp = 4) {
 function freshState(settings) {
   return {
     version: 1,
+    seq: 0,
     cashSol: settings.balanceStartSol,
     startedAt: Date.now(),
     positions: {},

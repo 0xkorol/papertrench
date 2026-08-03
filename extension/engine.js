@@ -112,6 +112,10 @@
   function defaultState(settings = DEFAULT_SETTINGS) {
     return {
       version: 1,
+      // Monotonic write counter bumped by the content script on every state
+      // write. A fresh wallet starts at 0; a writer holding an older seq can
+      // tell it has been overtaken and adopt instead of clobber.
+      seq: 0,
       cashSol: settings.balanceStartSol,
       startedAt: Date.now(),
       positions: {},   // mint -> position

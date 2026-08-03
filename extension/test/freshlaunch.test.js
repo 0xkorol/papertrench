@@ -229,7 +229,14 @@ function runFreshLaunch(opts) {
       removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); if (c._parent === this) c._parent = null; },
       remove() { if (this._parent) this._parent.removeChild(this); },
       setAttribute() {}, getAttribute() { return null; },
-      addEventListener() {}, querySelectorAll() { return []; },
+      addEventListener(type, fn) {
+        if (!this._listeners) this._listeners = {};
+        if (!this._listeners[type]) this._listeners[type] = [];
+        this._listeners[type].push(fn);
+      },
+      click() { ((this._listeners && this._listeners.click) || []).forEach((fn) => fn()); },
+      querySelectorAll() { return []; },
+      value: '',
       querySelector(sel) {
         const m = /data-f="([a-z]+)"/.exec(sel);
         if (m && this._fields[m[1]]) return this._fields[m[1]];
@@ -260,11 +267,14 @@ function runFreshLaunch(opts) {
     addEventListener: () => {}, createTreeWalker: () => ({ nextNode: () => null }),
   };
 
-  const url = `https://trade.padre.gg/trade/solana/${NEW_MINT}`;
+  // Padre mint-URL by default; tests can point this at a pair-URL site
+  // (Axiom) where the pending token's identity is the pair address.
+  const url = options.url || `https://trade.padre.gg/trade/solana/${NEW_MINT}`;
+  const parsed = new URL(url);
   const win = {
     addEventListener: () => {}, removeEventListener: () => {},
     postMessage: (msg) => { if (msg && msg.source === 'papertrench-content') messages.push(msg.type); },
-    location: { href: url, hostname: 'trade.padre.gg', pathname: `/trade/solana/${NEW_MINT}`, search: '' },
+    location: { href: url, hostname: parsed.hostname, pathname: parsed.pathname, search: parsed.search },
     getComputedStyle: () => ({ right: '18px', top: '84px' }),
     confirm: () => false,
   };
@@ -366,6 +376,12 @@ function runFreshLaunch(opts) {
     attempts: () => attempts,
     priceText: () => (nodesById['pt-price'] || {}).textContent,
     tokenName: () => (nodesById['pt-token-name'] || {}).textContent,
+    // Interaction hooks: drive the shipped UI the way a user would.
+    shadowNode: (id) => shadowRoot.getElementById(id),
+    clickShadow: (id) => shadowRoot.getElementById(id).click(),
+    setInput: (id, v) => { shadowRoot.getElementById(id).value = String(v); },
+    buyButtonText: () => (nodesById['pt-buy'] || {}).textContent,
+    storage: () => storage,
   };
 }
 
@@ -421,4 +437,85 @@ test('the coin becomes tradeable the moment any source indexes it', async () => 
   assert.equal(ov.tokenName(), 'BARK', 'the resolved identity must appear');
   assert.match(ov.priceText() || '', /^\$/,
     'a real tradeable level must appear once any source resolves the coin');
+});
+
+/* ---------------- armed buys on fresh launches ----------------
+ *
+ * The SHIPPED defect: on pair-URL sites (Axiom) the pending token's mint is
+ * the PAIR address. When the resolver turned that pair into its base mint,
+ * setToken() read the mint change as "navigated to another token" and
+ * silently dropped the armed buy — at exactly the moment the first quote
+ * landed. The button said ARMED forever and nothing executed.
+ */
+
+// The pair address dexPair() resolves from — valid base58, 44 chars.
+const PAIR_ADDR = 'PooLAddress1111111111111111111111111111111';
+
+test('an armed buy on a pair-URL site executes when the pair resolves', async () => {
+  let indexed = false;
+  const ov = runFreshLaunch({
+    url: `https://axiom.trade/meme/${PAIR_ADDR}`,
+    resolved: () => indexed,
+    // Dexscreener is the source that indexes the PAIR; Jupiter only knows
+    // mints, so it cannot resolve this address — the real Axiom case.
+    dexIndexes: true,
+  });
+
+  await ov.advance(2000);
+  assert.match(ov.priceText() || '', /waiting|fetching/i, 'the pair is still unindexed');
+
+  ov.setInput('pt-custom', '1');
+  ov.clickShadow('pt-buy');
+  assert.match(ov.buyButtonText() || '', /ARMED/,
+    'buying before any quote must arm the intent');
+
+  indexed = true;                 // Dexscreener indexes the pair
+  await ov.advance(4000);
+
+  const st = ov.storage().pt_state;
+  const pos = st && st.positions && st.positions[NEW_MINT];
+  assert.ok(pos && pos.qty > 0,
+    'the armed buy must fill once the pair resolves into its base mint');
+  assert.ok(pos.qty * pos.lastPriceNative <= 1 + 1e-9, 'the fill respects the armed SOL amount');
+  assert.doesNotMatch(ov.buyButtonText() || '', /ARMED/,
+    'the button must leave the armed state after the fill');
+});
+
+test('an armed buy on a mint-URL site also fills from the resolver path', async () => {
+  // Padre URLs carry the mint directly, so there is no identity upgrade —
+  // but the first price can still land via requote() when the resolver
+  // indexes the coin between detect retries. That path must flush too.
+  let indexed = false;
+  const ov = runFreshLaunch({ resolved: () => indexed });
+
+  await ov.advance(2000);
+  ov.setInput('pt-custom', '0.5');
+  ov.clickShadow('pt-buy');
+  assert.match(ov.buyButtonText() || '', /ARMED/);
+
+  indexed = true;
+  await ov.advance(4000);
+
+  const st = ov.storage().pt_state;
+  const pos = st && st.positions && st.positions[NEW_MINT];
+  assert.ok(pos && pos.qty > 0, 'a resolver-delivered first quote must flush the armed buy');
+});
+
+test('an armed buy expires visibly when no quote ever arrives', async () => {
+  const ov = runFreshLaunch({ resolved: () => false });
+
+  await ov.advance(1500);
+  ov.setInput('pt-custom', '1');
+  ov.clickShadow('pt-buy');
+  assert.match(ov.buyButtonText() || '', /ARMED/, 'the intent arms while unindexed');
+
+  // ARMED_BUY_TTL_MS is 60s. The heartbeat watchdog — not a flushing path
+  // that may never run — must expire it and restore the button.
+  await ov.advance(61_000);
+
+  assert.doesNotMatch(ov.buyButtonText() || '', /ARMED/,
+    'an armed buy must not sit armed forever when no quote lands');
+  const st = ov.storage().pt_state;
+  assert.ok(!st || !st.positions || Object.keys(st.positions).length === 0,
+    'an expired armed buy must never fill');
 });
