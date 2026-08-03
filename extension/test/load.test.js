@@ -331,3 +331,27 @@ test('the positions bar has a draggable grip and saves its position', () => {
   assert.match(contentSrc, /settings\.positionsBarTop\s*=/,
     'dragging must persist the top offset to settings');
 });
+
+test('live ticks are validated against a trusted anchor, not the last tick', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  assert.match(contentSrc, /function tokenAnchor/,
+    'a tokenAnchor helper must exist to return the trusted resolver price');
+  assert.match(contentSrc, /token\.anchor\s*=/,
+    'setToken or requote must save a resolver anchor on the token');
+  assert.match(contentSrc, /const anchor = tokenAnchor\(\)/,
+    'handlePageTick must use an anchor from tokenAnchor');
+  assert.match(contentSrc, /Q\.validateTick\(anchor,/,
+    'handlePageTick must validate against the anchor, not the live price');
+  assert.match(contentSrc, /payload\.mint.*token\.mint/,
+    'ticks with a mismatched mint must be rejected');
+});
+
+test('average mcap lines are drawn from the live bar close, not a stale resolver mcap', () => {
+  const bridgeSrc = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
+
+  assert.match(bridgeSrc, /function mcapLevelFromClose/,
+    'the bridge must compute mcap line levels from the live bar close');
+  assert.match(bridgeSrc, /currentPriceNative|currentPriceUsd/,
+    'paper-lines payload must include the current token price for scaling');
+});

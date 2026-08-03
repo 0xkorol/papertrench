@@ -46,7 +46,7 @@
   let settings = E.defaultSettings();
   let state = E.defaultState(settings);
   let site = null;
-  let token = null; // {kind, address, mint, pairAddress, symbol, priceNative, priceUsd, mcap}
+  let token = null; // {kind, address, mint, pairAddress, symbol, priceNative, priceUsd, mcap, anchor}
   let series = [];
   let marks = [];
   let lastHref = '';
@@ -74,6 +74,16 @@
   let lastCmTickPrice = 0; // avoids feeding chart markers the same price repeatedly
   const CM = window.PTChartMarkers; // chart bubble markers
   const TF = window.PTTitleFeed;    // zero-cost market-cap change signal
+
+  /**
+   * Return the trusted resolver anchor for the current token. Live chart ticks
+   * are validated against this anchor, not against the last accepted tick, so a
+   * single wrong page value cannot corrupt every following tick and P&L mark.
+   */
+  function tokenAnchor() {
+    if (token && token.anchor && Number(token.anchor.priceNative) > 0) return token.anchor;
+    return token;
+  }
   // Which unit band accepted the site's chart ticks ('usd' | 'native' |
   // 'mcap' | 'native-mcap'). This is the ground truth for the chart's Y
   // axis, so average lines are drawn in exactly that unit.
@@ -282,9 +292,17 @@
   function handlePageTick(payload) {
     if (!payload || !token) return;
 
+    // Reject cross-token page ticks as early as possible. The bridge is
+    // supposed to filter, but a preload chart or an unknown-symbol feed can
+    // still leak through.
+    if (payload.mint && payload.mint !== token.mint) return;
+    if (payload.symbol && token.symbol
+      && String(payload.symbol).toUpperCase() !== String(token.symbol).toUpperCase()) return;
+
     let verdict = null;
-    if (Number(token.priceNative) > 0) {
-      verdict = Q.validateTick(token, payload);
+    const anchor = tokenAnchor();
+    if (Number(anchor && anchor.priceNative) > 0) {
+      verdict = Q.validateTick(anchor, payload);
     } else {
       verdict = Q.bootstrapTick(token, payload, pendingSolUsd);
     }
@@ -300,6 +318,18 @@
     if (verdict.priceUsd) token.priceUsd = verdict.priceUsd;
     if (verdict.mcap) token.mcap = verdict.mcap;
     token.priceSource = payload.source || 'page-feed';
+
+    // For a brand-new coin, the first accepted on-screen tick becomes the
+    // anchor until the resolver catches up. For resolved coins the anchor is
+    // only refreshed by requote()/setToken() so live ticks cannot drift it.
+    if (!token.anchor && Number(token.priceNative) > 0) {
+      token.anchor = {
+        mint: token.mint,
+        priceNative: Number(token.priceNative),
+        priceUsd: Number(token.priceUsd) || null,
+        mcap: Number(token.mcap) || null,
+      };
+    }
 
     lastPriceAt = Date.now();
     pageQuoteSeq += 1;
@@ -422,6 +452,18 @@
     const prevMint = token?.mint;
     const hadPrice = Boolean(token && token.priceNative);
     token = data;
+    // Keep a separate resolver anchor for validation. This is the price we
+    // trust until a newer resolver quote or a first on-chain observation
+    // confirms the live level. Live chart ticks validate against this, so one
+    // bogus tick does not become the new ground truth.
+    if (token && Number(token.priceNative) > 0) {
+      token.anchor = {
+        mint: token.mint,
+        priceNative: Number(token.priceNative),
+        priceUsd: Number(token.priceUsd) || null,
+        mcap: Number(token.mcap) || null,
+      };
+    }
     // Navigating to a different token invalidates any armed intent.
     if (token && prevMint && token.mint !== prevMint) armedBuy = null;
     if (!token) armedBuy = null;
@@ -531,6 +573,15 @@
       if (!token || token.mint !== forMint) return;
       if (!fresh || !(fresh.priceNative > 0)) return;
       if (fresh.mint && fresh.mint !== token.mint) return;
+
+      // The resolver quote becomes the new anchor immediately. Live ticks
+      // validate against this, so the anchor never lags behind real moves.
+      token.anchor = {
+        mint: token.mint,
+        priceNative: Number(fresh.priceNative),
+        priceUsd: Number(fresh.priceUsd) || null,
+        mcap: Number(fresh.mcap) || null,
+      };
 
       // When the page's own feed is live, the CHART owns the price level —
       // the P&L must stay pegged to what the trader sees on screen, not to
@@ -1050,6 +1101,8 @@
         // Ground truth from the live chart ticks: draw in exactly the unit
         // the chart's Y axis is showing (price vs MC, USD vs SOL).
         axisBasis: chartAxisBasis,
+        currentPriceNative: token.priceNative,
+        currentPriceUsd: token.priceUsd,
         avgBuyUsd,
         avgSellUsd,
         avgBuyMcap: nativeSupply && avgBuyUsd ? avgBuyUsd * nativeSupply : null,
