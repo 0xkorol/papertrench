@@ -60,6 +60,14 @@ The details page shows the **Version** field from `manifest.json`. Do not click 
 ## Checking the extension ID
 Look at the `service_worker` target returned by `http://127.0.0.1:9222/json`. Its `url` is `chrome-extension://<id>/background.js`. Use `<id>` when opening `chrome://extensions/?id=<id>`.
 
+If the service worker target is not present yet, you can also obtain the ID from the `chrome://extensions/` page by inspecting the `extensions-item` inside the `extensions-manager` shadow DOM, e.g.:
+```js
+const root = document.querySelector('extensions-manager');
+const list = root && root.shadowRoot && root.shadowRoot.querySelector('extensions-item-list');
+const item = list && list.shadowRoot && list.shadowRoot.querySelector('extensions-item');
+const id = item && item.id;
+```
+
 ## Token page to test
 - Dexscreener: `https://dexscreener.com/solana/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263`
 - Birdeye: `https://birdeye.so/token/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263?chain=solana`
@@ -88,3 +96,4 @@ For UI gestures that do not respond well to real mouse drags (e.g. the v1.2.3 po
 - Dexscreener/Birdeye/GMGN may show Cloudflare or login walls; the service worker still resolves the token via Dexscreener API because the overlay uses background price resolution, not the page DOM.
 - The overlay is taller than the default 1024x768 capture area; drag the `#pt-drag` header up or maximize the browser to reveal buy/sell buttons.
 - Dashboard `Rounds` and `Leaderboard` are the most fragile sections; check for `replay.checkpoints` and attestation-chain fee mismatches.
+- To inspect globals that live in the extension's isolated content-script world (e.g. `window.PTChartMarkers`), enable `Runtime` and listen for `Runtime.executionContextCreated` events. The content-script context is usually named `PaperTrench`; pass its `contextId` to `Runtime.evaluate`.
