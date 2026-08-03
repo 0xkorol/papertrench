@@ -574,6 +574,32 @@ test('an explicit axis basis from the chart ticks wins over magnitude guessing',
   assert.equal(line.values.setPrice, 80, 'the SOL market-cap candidate must win when the chart is SOL-MC');
 });
 
+test('average market-cap lines are computed from the live bar close, not a stale resolver mcap', async () => {
+  // Axiom Final Stretch and freshly-migrated coins can have a resolver mcap
+  // that is very different from the chart's own mcap. The bridge must use the
+  // live bar close as the current mcap and scale it by avgBuy/currentPrice.
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 'sub', () => {});
+  // Chart is in USD market cap; the average buy USD price is 2.1x the current.
+  env.axiomRealtime()({ time: Date.now(), close: 100_000 });
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.00021,
+    avgBuyUsd: 0.000441,        // 2.1x the current USD price
+    avgBuyMcap: 999_999_999,    // stale/wrong resolver mcap, must be ignored
+  });
+  await microtasks();
+
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the line must be created');
+  assert.ok(Math.abs(line.values.setPrice - 210_000) < 0.01,
+    'the mcap average line must equal lastBarClose * (avgBuyUsd / currentPriceUsd)');
+});
+
 test('ticks and lines ignore a preload chart showing a DIFFERENT token', async () => {
   // On a busy Axiom session the second widget preloads the previously viewed
   // token. Its closes must never become our ticks, and lines must never land

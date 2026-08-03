@@ -46,7 +46,7 @@
   let settings = E.defaultSettings();
   let state = E.defaultState(settings);
   let site = null;
-  let token = null; // {kind, address, mint, pairAddress, symbol, priceNative, priceUsd, mcap}
+  let token = null; // {kind, address, mint, pairAddress, symbol, priceNative, priceUsd, mcap, anchor}
   let series = [];
   let marks = [];
   let lastHref = '';
@@ -71,9 +71,21 @@
   let pendingAttempts = 0;
   let pendingSolUsd = 0;      // warmed SOL/USD rate for bootstrapping USD ticks
   let fastDetectTimer = null;
+  let detectLoopTimer = null;
+  let barScanTimer = null;
   let lastCmTickPrice = 0; // avoids feeding chart markers the same price repeatedly
   const CM = window.PTChartMarkers; // chart bubble markers
   const TF = window.PTTitleFeed;    // zero-cost market-cap change signal
+
+  /**
+   * Return the trusted resolver anchor for the current token. Live chart ticks
+   * are validated against this anchor, not against the last accepted tick, so a
+   * single wrong page value cannot corrupt every following tick and P&L mark.
+   */
+  function tokenAnchor() {
+    if (token && token.anchor && Number(token.anchor.priceNative) > 0) return token.anchor;
+    return token;
+  }
   // Which unit band accepted the site's chart ticks ('usd' | 'native' |
   // 'mcap' | 'native-mcap'). This is the ground truth for the chart's Y
   // axis, so average lines are drawn in exactly that unit.
@@ -282,9 +294,17 @@
   function handlePageTick(payload) {
     if (!payload || !token) return;
 
+    // Reject cross-token page ticks as early as possible. The bridge is
+    // supposed to filter, but a preload chart or an unknown-symbol feed can
+    // still leak through.
+    if (payload.mint && payload.mint !== token.mint) return;
+    if (payload.symbol && token.symbol
+      && String(payload.symbol).toUpperCase() !== String(token.symbol).toUpperCase()) return;
+
     let verdict = null;
-    if (Number(token.priceNative) > 0) {
-      verdict = Q.validateTick(token, payload);
+    const anchor = tokenAnchor();
+    if (Number(anchor && anchor.priceNative) > 0) {
+      verdict = Q.validateTick(anchor, payload);
     } else {
       verdict = Q.bootstrapTick(token, payload, pendingSolUsd);
     }
@@ -300,6 +320,18 @@
     if (verdict.priceUsd) token.priceUsd = verdict.priceUsd;
     if (verdict.mcap) token.mcap = verdict.mcap;
     token.priceSource = payload.source || 'page-feed';
+
+    // For a brand-new coin, the first accepted on-screen tick becomes the
+    // anchor until the resolver catches up. For resolved coins the anchor is
+    // only refreshed by requote()/setToken() so live ticks cannot drift it.
+    if (!token.anchor && Number(token.priceNative) > 0) {
+      token.anchor = {
+        mint: token.mint,
+        priceNative: Number(token.priceNative),
+        priceUsd: Number(token.priceUsd) || null,
+        mcap: Number(token.mcap) || null,
+      };
+    }
 
     lastPriceAt = Date.now();
     pageQuoteSeq += 1;
@@ -422,6 +454,18 @@
     const prevMint = token?.mint;
     const hadPrice = Boolean(token && token.priceNative);
     token = data;
+    // Keep a separate resolver anchor for validation. This is the price we
+    // trust until a newer resolver quote or a first on-chain observation
+    // confirms the live level. Live chart ticks validate against this, so one
+    // bogus tick does not become the new ground truth.
+    if (token && Number(token.priceNative) > 0) {
+      token.anchor = {
+        mint: token.mint,
+        priceNative: Number(token.priceNative),
+        priceUsd: Number(token.priceUsd) || null,
+        mcap: Number(token.mcap) || null,
+      };
+    }
     // Navigating to a different token invalidates any armed intent.
     if (token && prevMint && token.mint !== prevMint) armedBuy = null;
     if (!token) armedBuy = null;
@@ -531,6 +575,15 @@
       if (!token || token.mint !== forMint) return;
       if (!fresh || !(fresh.priceNative > 0)) return;
       if (fresh.mint && fresh.mint !== token.mint) return;
+
+      // The resolver quote becomes the new anchor immediately. Live ticks
+      // validate against this, so the anchor never lags behind real moves.
+      token.anchor = {
+        mint: token.mint,
+        priceNative: Number(fresh.priceNative),
+        priceUsd: Number(fresh.priceUsd) || null,
+        mcap: Number(fresh.mcap) || null,
+      };
 
       // When the page's own feed is live, the CHART owns the price level —
       // the P&L must stay pegged to what the trader sees on screen, not to
@@ -959,8 +1012,12 @@
       const settingsChange = changes[E.STORAGE_KEYS.settings];
       if (settingsChange && settingsChange.newValue) {
         settings = E.mergeSettings(settingsChange.newValue);
+        if (settings.overlayEnabled) enableOverlay().catch(() => {});
+        else disableOverlay();
         if (els.buyPresets) renderPresets();
         syncAveragePriceLines();
+        updateOverlayVisibility();
+        renderVisibilityIcon();
       }
 
       const stateChange = changes[E.STORAGE_KEYS.state];
@@ -1050,6 +1107,8 @@
         // Ground truth from the live chart ticks: draw in exactly the unit
         // the chart's Y axis is showing (price vs MC, USD vs SOL).
         axisBasis: chartAxisBasis,
+        currentPriceNative: token.priceNative,
+        currentPriceUsd: token.priceUsd,
         avgBuyUsd,
         avgSellUsd,
         avgBuyMcap: nativeSupply && avgBuyUsd ? avgBuyUsd * nativeSupply : null,
@@ -1311,6 +1370,8 @@
     chart: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8 13 13.7l-3-3L6.3 14.4"/></svg>',
     minimize: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg>',
     grip: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.2"/><circle cx="7.5" cy="2.5" r="1.2"/><circle cx="2.5" cy="6" r="1.2"/><circle cx="7.5" cy="6" r="1.2"/><circle cx="2.5" cy="9.5" r="1.2"/><circle cx="7.5" cy="9.5" r="1.2"/></svg>',
+    eye: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+    'eye-off': '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.7 0 0 1 12 19c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94m2.8-2.8A16.46 16.46 0 0 1 21.94 4.06 18.45 18.45 0 0 1 23 12s-4 8-11 8a12.92 12.92 0 0 1-6.06-1.06M1 1l22 22"/></svg>',
   };
 
   const CSS = `
@@ -2016,6 +2077,7 @@
             <div class="pt-icon">P</div>
             <div class="pt-title">PaperTrench<span class="sub" id="pt-subtitle">Quick paper buy box</span></div>
             <span class="pt-grow"></span>
+            <button class="pt-hbtn" id="pt-visibility" title="Toggle auto-hide when no token" aria-label="Toggle visibility">${ICONS.eye}</button>
             <button class="pt-hbtn" id="pt-dash" title="Open dashboard">${ICONS.chart}</button>
             <button class="pt-hbtn" id="pt-min" title="Minimize">${ICONS.minimize}</button>
           </div>
@@ -2074,6 +2136,7 @@
     els.barRail = shadow.getElementById('pt-bar-rail');
     els.barTab = shadow.getElementById('pt-bar-tab');
     els.liveDot = shadow.getElementById('pt-live-dot');
+    els.visibility = shadow.getElementById('pt-visibility');
     els.delta = shadow.getElementById('pt-delta');
     els.pillText = shadow.getElementById('pt-pill-text');
 
@@ -2087,6 +2150,7 @@
     // allowed to play. Creating/resuming here is silent.
     els.box.addEventListener('pointerdown', primeAudio);
 
+    if (els.visibility) els.visibility.addEventListener('click', toggleOverlayAutoHide);
     shadow.getElementById('pt-min').addEventListener('click', () => {
       els.box.classList.add('pt-hidden');
       els.pill.style.display = 'block';
@@ -2211,6 +2275,37 @@
     });
   }
 
+  /**
+   * Update the overlay host visibility based on the auto-hide setting and the
+   * presence of a token. The overlay is hidden entirely when the user is on a
+   * non-coin page and auto-hide is enabled, and reappears when a token is
+   * detected or auto-hide is turned off.
+   */
+  function updateOverlayVisibility() {
+    if (!host) return;
+    const hide = settings.overlayHideWhenNoToken && !token;
+    host.style.display = hide ? 'none' : 'block';
+    if (host.style.display === 'block') renderVisibilityIcon();
+  }
+
+  function renderVisibilityIcon() {
+    if (!els.visibility) return;
+    const hidden = settings.overlayHideWhenNoToken;
+    els.visibility.innerHTML = hidden ? ICONS.eye : ICONS['eye-off'];
+    els.visibility.title = hidden
+      ? 'Overlay auto-hides when no token is detected'
+      : 'Overlay is always visible';
+  }
+
+  async function toggleOverlayAutoHide() {
+    settings = { ...settings, overlayHideWhenNoToken: !settings.overlayHideWhenNoToken };
+    await store.set({ [E.STORAGE_KEYS.settings]: settings });
+    // The storage listener will also refresh settings, but we update the UI
+    // immediately so the icon and host display feel instant.
+    updateOverlayVisibility();
+    renderVisibilityIcon();
+  }
+
   function renderAll() {
     if (contextDead || !shadow) return;
     renderHeader();
@@ -2222,6 +2317,7 @@
     renderSiteStatus();
     renderLiveDot();
     renderSparkline();
+    updateOverlayVisibility();
     renderPositionsBar();
   }
 
@@ -3109,19 +3205,24 @@
   if (contextAlive()) chrome.runtime.onMessage.addListener((msg) => {
     if (contextDead) return;
     if (msg?.type === 'pt_toggle_overlay') {
-      if (els.box.classList.contains('pt-hidden')) { els.box.classList.remove('pt-hidden'); els.pill.style.display = 'none'; }
-      else { els.box.classList.add('pt-hidden'); els.pill.style.display = 'block'; }
+      // The popup / toolbar toggle flips the auto-hide setting, so the overlay
+      // stays hidden on non-coin pages and reappears when a token is loaded.
+      toggleOverlayAutoHide().catch(() => {});
     }
   });
 
-  async function init() {
-    // price-bridge.js is declared by the manifest in MAIN world at
-    // document_start, before Padre creates its WebSocket and TradingView feed.
-    await reloadState();
-    if (!settings.overlayEnabled) return;
+  function stopOverlays() {
+    stopPriceLoop();
+    if (fastDetectTimer) { clearInterval(fastDetectTimer); fastDetectTimer = null; }
+    if (detectLoopTimer) { clearInterval(detectLoopTimer); detectLoopTimer = null; }
+    if (barScanTimer) { clearInterval(barScanTimer); barScanTimer = null; }
+    if (rowBuyObserver) { try { rowBuyObserver.disconnect(); } catch (_) {} rowBuyObserver = null; }
+  }
+
+  async function enableOverlay() {
+    if (host) return;
     createUI();
-    watchStorage();
-    managedInterval(detectLoop, DETECT_MS);
+    detectLoopTimer = managedInterval(detectLoop, DETECT_MS);
 
     // Sniping cadence: while an address is detected but not yet indexed by any
     // source, retry rapidly. This is the difference between being able to
@@ -3143,7 +3244,7 @@
     // The positions bar runs on its own cadence, independent of the price
     // heartbeat: it must keep working on pages where no token is detected at
     // all, which is exactly when the user is browsing for the next trade.
-    managedInterval(() => {
+    barScanTimer = managedInterval(() => {
       pollPositionPrices();
       // Cheap no-op when nothing changed, so an idle bar does not churn the
       // DOM (and cannot fight the user's horizontal scroll or a live click).
@@ -3155,6 +3256,24 @@
     startRowBuyObserver();
 
     await detectLoop();
+  }
+
+  function disableOverlay() {
+    if (!host) return;
+    stopOverlays();
+    try { host.remove(); } catch (_) {}
+    host = null; shadow = null; els = {};
+  }
+
+  async function init() {
+    // price-bridge.js is declared by the manifest in MAIN world at
+    // document_start, before Padre creates its WebSocket and TradingView feed.
+    await reloadState();
+    // Storage must be watched even when the overlay is disabled, so toggling
+    // settings from the dashboard or popup reaches this tab immediately.
+    watchStorage();
+    if (!settings.overlayEnabled) return;
+    await enableOverlay();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => init().catch(() => {}));

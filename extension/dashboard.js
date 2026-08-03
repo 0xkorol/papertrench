@@ -1888,6 +1888,11 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-avg-lines" ${settings.averagePriceLinesEnabled ? 'checked' : ''}> Padre-style average price lines</label><small>Native “Avg. Fill Price” and “Avg. Exit Price” lines from your paper fills.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-positions-bar" ${settings.positionsBarEnabled !== false ? 'checked' : ''}> Positions bar</label><small>A top rail on every trading page showing all open paper positions and their live P&amp;L. Click a position to jump to its chart.</small></div>
       </div>
+      <div class="card">
+        <h3>Overlay</h3>
+        <div class="field field-check"><label><input type="checkbox" id="set-overlay" ${settings.overlayEnabled !== false ? 'checked' : ''}> Enable overlay</label><small>Master switch for the PaperTrench panel. Off hides it on all pages.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-overlay-auto-hide" ${settings.overlayHideWhenNoToken !== false ? 'checked' : ''}> Hide overlay when no token is detected</label><small>The panel disappears on home pages and screeners, then pops back when you open a coin.</small></div>
+      </div>
     </div>
     <div class="card" style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn" id="save-settings">Save settings</button>
@@ -1956,6 +1961,8 @@ function gatherSettingsFromForm() {
     profitAlertPct: Math.max(1, Number(document.getElementById('set-profit-alert-pct').value) || 10),
     averagePriceLinesEnabled: document.getElementById('set-avg-lines').checked,
     positionsBarEnabled: document.getElementById('set-positions-bar').checked,
+    overlayEnabled: document.getElementById('set-overlay').checked,
+    overlayHideWhenNoToken: document.getElementById('set-overlay-auto-hide').checked,
   };
 }
 

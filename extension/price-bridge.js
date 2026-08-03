@@ -49,6 +49,7 @@
   // chart symbols carry the token symbol or mint rather than the pair address,
   // so we match against every identifier we know.
   const currentSymbolNeedles = [];
+  const currentSymbolInfo = { mint: null, pairAddress: null, symbol: null };
 
   function chartSymbolMatches(chart) {
     if (!currentSymbolNeedles.length) return true; // nothing resolved yet: permissive
@@ -78,6 +79,7 @@
       if (typeof v === 'string' && v.length >= 2) {
         next.push(String(v).toUpperCase());
       }
+      if (key in currentSymbolInfo) currentSymbolInfo[key] = v || null;
     }
     const changed = next.length !== currentSymbolNeedles.length
       || !next.every((n) => currentSymbolNeedles.indexOf(n) >= 0);
@@ -181,7 +183,7 @@
         candidates: [{ value: priceUsd, unit: 'usd', key: 'tokenActivityPriceUsd' }],
         mcap: null,
         mint,
-        symbol: null,
+        symbol: currentSymbolInfo.mint === mint ? currentSymbolInfo.symbol : null,
         name: null,
         source: 'gmgn-ws-trade',
       });
@@ -210,7 +212,13 @@
       const last = candles[candles.length - 1];
       const mcap = last && numberValue(last.close);
       if (mcap > 0) {
-        emit('tick', { candidates: [], mcap, source: 'gmgn-mcap-candle' });
+        emit('tick', {
+          candidates: [],
+          mcap,
+          mint: currentSymbolInfo.mint,
+          symbol: currentSymbolInfo.symbol,
+          source: 'gmgn-mcap-candle',
+        });
         return;
       }
     }
@@ -481,8 +489,8 @@
     emit('tick', {
       candidates: [{ value: close, unit: 'unknown', key: 'padreChartClose' }],
       mcap: close,
-      mint: null,
-      symbol: null,
+      mint: currentSymbolInfo.mint,
+      symbol: currentSymbolInfo.symbol,
       name: null,
       source: 'padre-chart-bar',
       barTime: bar.time || null,
@@ -906,6 +914,17 @@
   /* ---------------- Padre/Axiom average lines ---------------- */
 
   /**
+   * Compute the market-cap level that corresponds to an average token price,
+   * using the live bar close as the current mcap and the current token price.
+   * This is the only way to draw an accurate mcap average line when the
+   * resolver has a different mcap (e.g., Axiom Final Stretch vs Dexscreener).
+   */
+  function mcapLevelFromClose(avgPrice, currentPrice) {
+    if (!(lastBarClose > 0) || !(Number(avgPrice) > 0) || !(Number(currentPrice) > 0)) return null;
+    return lastBarClose * (Number(avgPrice) / Number(currentPrice));
+  }
+
+  /**
    * The level for one average line. When the content script knows the chart's
    * axis unit (learned from which band accepted the live chart ticks), the
    * matching candidate is used directly — no magnitude guessing. Otherwise
@@ -913,19 +932,40 @@
    */
   function lineLevelFor(spec, side) {
     const basis = spec.axisBasis;
+    const currentNative = Number(spec.currentPriceNative);
+    const currentUsd = Number(spec.currentPriceUsd);
+
     if (basis) {
-      const explicit = basis === 'usd' ? spec['avg' + side + 'Usd']
-        : basis === 'mcap' ? spec['avg' + side + 'Mcap']
-        : basis === 'native' ? spec['avg' + side + 'Native']
-        : spec['avg' + side + 'McapNative'];
-      if (Number(explicit) > 0) return Number(explicit);
+      if (basis === 'usd') return Number(spec['avg' + side + 'Usd']) || null;
+      if (basis === 'native') return Number(spec['avg' + side + 'Native']) || null;
+      if (basis === 'mcap') {
+        const avg = Number(spec['avg' + side + 'Usd']);
+        const computed = mcapLevelFromClose(avg, currentUsd);
+        if (computed > 0) return computed;
+        const explicit = Number(spec['avg' + side + 'Mcap']);
+        return explicit > 0 ? explicit : null;
+      }
+      if (basis === 'native-mcap') {
+        const avg = Number(spec['avg' + side + 'Native']);
+        const computed = mcapLevelFromClose(avg, currentNative);
+        if (computed > 0) return computed;
+        const explicit = Number(spec['avg' + side + 'McapNative']);
+        return explicit > 0 ? explicit : null;
+      }
     }
-    return pickAxisLevel(
-      spec['avg' + side + 'Usd'],
-      spec['avg' + side + 'Mcap'],
-      spec['avg' + side + 'Native'],
-      spec['avg' + side + 'McapNative']
-    );
+
+    // Fallback: compute mcap candidates from the live bar close when possible,
+    // so the bridge can still land the line on an Axiom/Padre mcap chart even
+    // if the content script has not determined the axis basis yet.
+    const usd = Number(spec['avg' + side + 'Usd']);
+    const native = Number(spec['avg' + side + 'Native']);
+    const mcap = mcapLevelFromClose(usd, currentUsd)
+      || Number(spec['avg' + side + 'Mcap'])
+      || null;
+    const nativeMcap = mcapLevelFromClose(native, currentNative)
+      || Number(spec['avg' + side + 'McapNative'])
+      || null;
+    return pickAxisLevel(usd, mcap, native, nativeMcap);
   }
 
   const averageFillSlot = makeLineSlot();
@@ -1282,6 +1322,8 @@
       paperLineSpec = {
         enabled: Boolean(payload && payload.enabled),
         axisBasis: typeof (payload && payload.axisBasis) === 'string' ? payload.axisBasis : null,
+        currentPriceNative: numberValue(payload && payload.currentPriceNative),
+        currentPriceUsd: numberValue(payload && payload.currentPriceUsd),
         avgBuyUsd: numberValue(payload && payload.avgBuyUsd),
         avgSellUsd: numberValue(payload && payload.avgSellUsd),
         avgBuyMcap: numberValue(payload && payload.avgBuyMcap),
@@ -1766,8 +1808,8 @@
       emit('tick', {
         candidates: [{ value: close, unit: 'unknown', key: 'chartExportClose' }],
         mcap: close,
-        mint: null,
-        symbol: null,
+        mint: currentSymbolInfo.mint,
+        symbol: currentSymbolInfo.symbol,
         name: null,
         source: 'chart-export',
       });

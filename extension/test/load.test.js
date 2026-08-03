@@ -331,3 +331,47 @@ test('the positions bar has a draggable grip and saves its position', () => {
   assert.match(contentSrc, /settings\.positionsBarTop\s*=/,
     'dragging must persist the top offset to settings');
 });
+
+test('live ticks are validated against a trusted anchor, not the last tick', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  assert.match(contentSrc, /function tokenAnchor/,
+    'a tokenAnchor helper must exist to return the trusted resolver price');
+  assert.match(contentSrc, /token\.anchor\s*=/,
+    'setToken or requote must save a resolver anchor on the token');
+  assert.match(contentSrc, /const anchor = tokenAnchor\(\)/,
+    'handlePageTick must use an anchor from tokenAnchor');
+  assert.match(contentSrc, /Q\.validateTick\(anchor,/,
+    'handlePageTick must validate against the anchor, not the live price');
+  assert.match(contentSrc, /payload\.mint.*token\.mint/,
+    'ticks with a mismatched mint must be rejected');
+});
+
+test('the overlay can be auto-hidden when no token is detected', () => {
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'engine.js'), 'utf8');
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const dashboardSrc = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  const popupSrc = fs.readFileSync(path.join(ROOT, 'popup.js'), 'utf8');
+
+  assert.match(engineSrc, /overlayHideWhenNoToken:\s*true/,
+    'the default must hide the overlay when no token is detected');
+  assert.match(engineSrc, /SETTINGS_REVISION = 3/,
+    'settings revision must be bumped for the new overlay default');
+  assert.match(contentSrc, /function updateOverlayVisibility/,
+    'content.js must hide the overlay host when no token is present');
+  assert.match(contentSrc, /function toggleOverlayAutoHide/,
+    'content.js must have a quick visibility toggle in the panel header');
+  assert.match(dashboardSrc, /set-overlay-auto-hide/,
+    'dashboard settings must expose the auto-hide toggle');
+  assert.match(popupSrc, /overlayHideWhenNoToken/,
+    'popup.js must read and toggle the auto-hide setting');
+});
+
+test('average mcap lines are drawn from the live bar close, not a stale resolver mcap', () => {
+  const bridgeSrc = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
+
+  assert.match(bridgeSrc, /function mcapLevelFromClose/,
+    'the bridge must compute mcap line levels from the live bar close');
+  assert.match(bridgeSrc, /currentPriceNative|currentPriceUsd/,
+    'paper-lines payload must include the current token price for scaling');
+});
