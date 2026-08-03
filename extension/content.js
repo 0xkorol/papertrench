@@ -557,7 +557,7 @@
       token.priceNative = fresh.priceNative;
       if (fresh.priceUsd) token.priceUsd = fresh.priceUsd;
       if (fresh.mcap) token.mcap = fresh.mcap;
-      token.priceSource = 'resolver';
+      token.priceSource = fresh.priceSource || 'resolver';
 
       lastPriceAt = Date.now();
       series.push({ t: lastPriceAt, p: token.priceNative, usd: token.priceUsd });
@@ -805,6 +805,10 @@
   // A fresh-launch coin has no Dexscreener/Jupiter quote yet, so the on-screen
   // price is the only price. Keep it tradeable a little longer while pending.
   const PENDING_ACTION_MAX_AGE_MS = 2000;
+  // When the resolver is momentarily unavailable (new launch, just migrated,
+  // network hiccup), the on-screen price is still better than refusing the
+  // trade entirely, as long as it is not ancient.
+  const ACTION_FALLBACK_MAX_AGE_MS = 10000;
 
   function quoteSnapshot() {
     if (!token || !(Number(token.priceNative) > 0)) return null;
@@ -889,16 +893,18 @@
     const fresh = await R.refresh(token);
     if (!token || token.mint !== startMint) return null;
 
-    // A new coin may not be indexed by any aggregator yet. The on-screen price
-    // is the only truthful quote we have, so use it for a little longer rather
-    // than refusing the buy entirely.
-    if (token.pending) {
+    // A new coin or a freshly-migrated coin may not be re-indexed by the
+    // aggregator yet. The on-screen price is the only truthful quote we have,
+    // so use it for a little longer rather than refusing the buy entirely.
+    // This also covers a transient resolver outage for page-driven feeds.
+    const displayPriceOnly = token.pending || token.priceSource !== 'resolver';
+    if (displayPriceOnly) {
       if (pageQuoteSeq > seqAtClick) {
         const newerPageQuote = quoteSnapshot();
-        if (newerPageQuote && Date.now() - newerPageQuote.receivedAt <= PENDING_ACTION_MAX_AGE_MS) return newerPageQuote;
+        if (newerPageQuote && Date.now() - newerPageQuote.receivedAt <= ACTION_FALLBACK_MAX_AGE_MS) return newerPageQuote;
       }
       const stalePageQuote = quoteSnapshot();
-      if (stalePageQuote && Date.now() - stalePageQuote.receivedAt <= PENDING_ACTION_MAX_AGE_MS) return stalePageQuote;
+      if (stalePageQuote && Date.now() - stalePageQuote.receivedAt <= ACTION_FALLBACK_MAX_AGE_MS) return stalePageQuote;
     }
 
     if (!fresh || !(Number(fresh.priceNative) > 0)) return null;

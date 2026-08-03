@@ -187,14 +187,14 @@ test('markPosition keeps the engine peak/trough in step with live ticks', () => 
  * and a stub network, then advance time and observe the rendered P&L text.
  * This exercises the shipped loop rather than a re-implementation of it.
  */
-function runOverlay(priceSeries) {
+function runOverlay(priceSeries, opts = {}) {
   const timers = [];
   let now = 1_000_000;
 
   const textOf = {};
   function makeNode(tag) {
     const node = {
-      tag, style: {}, dataset: {}, childNodes: [], _fields: {},
+      tag, style: {}, dataset: {}, childNodes: [], _fields: {}, value: '',
       classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
         toggle(c, on) { if (on === undefined) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); } else if (on) this._s.add(c); else this._s.delete(c); },
         contains(c) { return this._s.has(c); } },
@@ -214,7 +214,13 @@ function runOverlay(priceSeries) {
       },
       get innerHTML() { return this._h || ''; },
       appendChild(c) { this.children.push(c); this.childNodes.push(c); },
-      removeChild() {}, remove() {}, setAttribute() {}, addEventListener() {},
+      removeChild() {}, remove() {}, setAttribute() {},
+      addEventListener(type, fn) {
+        if (!this._listeners) this._listeners = {};
+        if (!this._listeners[type]) this._listeners[type] = [];
+        this._listeners[type].push(fn);
+      },
+      click() { (this._listeners && this._listeners.click || []).forEach((fn) => fn()); },
       querySelector(sel) {
         const m = /data-f="([a-z]+)"/.exec(sel);
         if (m && this._fields && this._fields[m[1]]) return this._fields[m[1]];
@@ -278,9 +284,35 @@ function runOverlay(priceSeries) {
     setTimeout: (fn, ms) => { timers.push({ fn, at: now + (ms || 0), every: null }); return timers.length; },
     clearTimeout: () => {}, clearInterval: (id) => { if (timers[id - 1]) timers[id - 1].dead = true; },
     setInterval: (fn, ms) => { timers.push({ fn, at: now + ms, every: ms }); return timers.length; },
-    // Every network quote returns the next price in the series.
+    // Every network quote returns the next price in the series, or is driven
+    // by test options (Jupiter-only resolve, failing refresh, etc.).
     fetch: (u) => {
       fetchCount++;
+      const url = String(u);
+      // Resolver refresh path asks for a re-resolve and can be forced to fail
+      // to simulate a freshly migrated coin that has not been re-indexed yet.
+      if (opts.refreshFails && url.includes(opts.refreshFails)) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}), text: async () => '' });
+      }
+      // Dexscreener lookups miss for fresh launches / migrations.
+      if (opts.jupiterFirst && (url.includes('dexscreener.com') || url.includes('/tokens/'))) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}), text: async () => '' });
+      }
+      // Jupiter price payload for the same mint.
+      if (url.includes('jup.ag')) {
+        const p = priceSeries[Math.min(priceIdx, priceSeries.length - 1)];
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => ({
+            data: {
+              'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263': {
+                id: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+                mintSymbol: 'BONK', price: String(p * 200),
+              },
+            },
+          }),
+        });
+      }
       const p = priceSeries[Math.min(priceIdx, priceSeries.length - 1)];
       const body = {
         pair: {
@@ -400,8 +432,26 @@ function runOverlay(priceSeries) {
     return pos ? pos.lastPriceNative : 0;
   }
 
+  /** Programmatically click an element in the shadow root by id. */
+  function clickById(id) {
+    const node = shadowNodes[id];
+    if (node && typeof node.click === 'function') node.click();
+  }
+
+  /** Set the value of a shadow input. */
+  function setValue(id, v) {
+    const node = shadowNodes[id];
+    if (node) node.value = String(v);
+  }
+
+  /** Read the persisted state object. */
+  function currentState() {
+    return storage.pt_state;
+  }
+
   return {
     advance, shadowNodes, openPaperPosition, fieldText, fieldClasses, markedPrice,
+    clickById, setValue, currentState,
     nextPrice: () => { priceIdx++; },
     fetchCount: () => fetchCount,
   };

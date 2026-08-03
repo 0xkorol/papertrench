@@ -304,3 +304,17 @@ test('the resolver global the content script reads is the one the resolver insta
   assert.ok(contentSrc.includes('window.' + installed[1]),
     `content.js must read window.${installed[1]}`);
 });
+
+test('quoteForTrade falls back to the on-screen price when the resolver cannot refresh', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  // The fallback must exist and must not be gated only by token.pending,
+  // or Jupiter-sourced new/migrated coins stay unbuyable while their price is
+  // clearly on screen.
+  assert.match(contentSrc, /const ACTION_FALLBACK_MAX_AGE_MS = 10000/,
+    'a long enough displayed-price fallback window must be declared');
+  assert.match(contentSrc, /token\.priceSource !== 'resolver'/,
+    'the fallback must apply to non-resolver price sources (Jupiter / page feed)');
+  assert.match(contentSrc, /token\.pending \|\| token\.priceSource !== 'resolver'/,
+    'pending or non-resolver prices must both be eligible for the fallback');
+});
