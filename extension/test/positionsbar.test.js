@@ -290,7 +290,10 @@ function runOverlayBar(positions, opts) {
   };
   win.window = win;
 
-  const storage = { pt_settings: E.defaultSettings(), pt_state: options.state };
+  const storage = {
+    pt_settings: Object.assign(E.defaultSettings(), options.initialSettings),
+    pt_state: options.state,
+  };
   const storageListeners = [];
   let batchCalls = 0;
   const sandbox = {
@@ -382,6 +385,10 @@ function runOverlayBar(positions, opts) {
     // structured clone here reproduces that rather than handing back the same
     // reference the content script already holds.
     writeState: (next) => sandbox.chrome.storage.local.set({ pt_state: JSON.parse(JSON.stringify(next)) }),
+    // Settings the content script has saved right now (its own writes land here).
+    settings: () => storage.pt_settings,
+    // Publish settings the way another tab or the dashboard would.
+    writeSettings: (next) => sandbox.chrome.storage.local.set({ pt_settings: JSON.parse(JSON.stringify(next)) }),
     bar: () => nodesById['pt-bar'],
     rail: () => nodesById['pt-bar-rail'],
     total: () => nodesById['pt-bar-total'],
@@ -461,6 +468,76 @@ test('hiding the bar collapses it to a restore tab and releases the page offset'
 
   ov.tab().fire('click');
   assert.equal(ov.bar().classList.contains('pt-hidden'), false, 'the tab must bring the bar back');
+});
+
+/* ---------------- "it follows me everywhere" — hide state persists ----------------
+ *
+ * The complaint: hide the bar once, and it pops back on the next page, the
+ * next tab, the next session. The fix makes the collapsed state a saved
+ * setting, so every new context starts from the user's choice.
+ */
+
+test('hiding the bar saves the collapse as a setting, and restoring saves that too', async () => {
+  const ov = runOverlayBar(null, {
+    state: seededState(),
+    livePrices: { [BONK]: 0.000002, [WIF]: 0.001 },
+  });
+  await ov.advance(3000);
+  assert.equal(ov.settings().positionsBarHidden, false, 'the bar starts expanded');
+
+  ov.hideBtn().fire('click');
+  assert.equal(ov.settings().positionsBarHidden, true,
+    'hiding must persist to settings, not just to this page\'s memory');
+  assert.equal(ov.settings().settingsRevision, E.SETTINGS_REVISION,
+    'the save must carry the current revision so the migration never re-adopts the default');
+
+  ov.tab().fire('click');
+  assert.equal(ov.settings().positionsBarHidden, false,
+    'restoring must persist too — the choice is sticky in BOTH directions');
+});
+
+test('a saved hidden state keeps the bar collapsed on a fresh page', async () => {
+  const ov = runOverlayBar(null, {
+    state: seededState(),
+    livePrices: { [BONK]: 0.000002, [WIF]: 0.001 },
+    initialSettings: { positionsBarHidden: true, settingsRevision: E.SETTINGS_REVISION },
+  });
+
+  await ov.advance(3000);
+
+  assert.equal(ov.bar().classList.contains('pt-hidden'), true,
+    'the bar must not "follow" a user who already hid it');
+  assert.equal(ov.tab().style.display, 'flex', 'the restore tab is the only visible trace');
+
+  ov.tab().fire('click');
+  assert.equal(ov.bar().classList.contains('pt-hidden'), false,
+    'one click brings it back');
+  assert.equal(ov.settings().positionsBarHidden, false);
+});
+
+test('a hide toggled from another tab or the dashboard applies live, without a reload', async () => {
+  const ov = runOverlayBar(null, {
+    state: seededState(),
+    livePrices: { [BONK]: 0.000002, [WIF]: 0.001 },
+  });
+  await ov.advance(3000);
+  assert.equal(ov.bar().classList.contains('pt-hidden'), false);
+
+  // Another context saves the setting the normal way (at the current revision).
+  ov.writeSettings(Object.assign(E.defaultSettings(), {
+    settingsRevision: E.SETTINGS_REVISION, positionsBarHidden: true,
+  }));
+  await ov.advance(400);
+  assert.equal(ov.bar().classList.contains('pt-hidden'), true,
+    'the storage watcher must collapse the bar when the setting changes elsewhere');
+  assert.equal(ov.tab().style.display, 'flex');
+
+  ov.writeSettings(Object.assign(E.defaultSettings(), {
+    settingsRevision: E.SETTINGS_REVISION, positionsBarHidden: false,
+  }));
+  await ov.advance(400);
+  assert.equal(ov.bar().classList.contains('pt-hidden'), false,
+    'and expand it again when the setting flips back');
 });
 
 test('a hidden tab backs off from polling instead of hammering the API', async () => {

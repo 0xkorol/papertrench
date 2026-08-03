@@ -267,6 +267,20 @@
       background: var(--raised); border: 1px solid var(--line);
       border-radius: 999px; font-size: 10.5px; color: var(--dim);
     }
+    .round-note {
+      display: inline-block; max-width: 190px; vertical-align: middle;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 11.5px; color: var(--text);
+    }
+    .note-input {
+      width: 100%; min-width: 170px; resize: vertical;
+      background: var(--raised); color: var(--text);
+      border: 1px solid var(--line2); border-radius: var(--r-md);
+      padding: 7px 9px; font: inherit; font-size: 12px; line-height: 1.5;
+    }
+    .note-input:focus { outline: none; border-color: var(--amber); }
+    .note-actions { display: flex; gap: 6px; margin-top: 6px; }
+    .note-actions .btn, .note-actions .btn-sec { padding: 5px 10px; font-size: 11.5px; }
     .stat, .replay-kv {
       display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
       padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.045);

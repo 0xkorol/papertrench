@@ -1097,12 +1097,14 @@
       const settingsChange = changes[E.STORAGE_KEYS.settings];
       if (settingsChange && settingsChange.newValue) {
         settings = E.mergeSettings(settingsChange.newValue);
+        positionsBarHidden = settings.positionsBarHidden === true;
         if (settings.overlayEnabled) enableOverlay().catch(() => {});
         else disableOverlay();
         if (els.buyPresets) renderPresets();
         syncAveragePriceLines();
         updateOverlayVisibility();
         applyOverlaySize();
+        renderPositionsBar();
       }
 
       const stateChange = changes[E.STORAGE_KEYS.state];
@@ -2275,12 +2277,10 @@
     if (barBrand) barBrand.addEventListener('click', openDashboard);
     const barHide = shadow.getElementById('pt-bar-hide');
     if (barHide) barHide.addEventListener('click', () => {
-      positionsBarHidden = true;
-      renderPositionsBar();
+      setBarHidden(true);
     });
     if (els.barTab) els.barTab.addEventListener('click', () => {
-      positionsBarHidden = false;
-      renderPositionsBar();
+      setBarHidden(false);
     });
     setupBarDrag();
 
@@ -2366,6 +2366,18 @@
   }
 
   function openDashboard() { sendMessage({ type: 'pt_open_dashboard' }); }
+
+  /**
+   * Collapse or expand the positions bar and REMEMBER it. Persisting the
+   * choice is what stops the bar from "following" a user who already hid it:
+   * every new page and tab starts from the saved state.
+   */
+  function setBarHidden(hidden) {
+    positionsBarHidden = hidden;
+    settings = { ...settings, positionsBarHidden: hidden };
+    store.set({ [E.STORAGE_KEYS.settings]: settings });
+    renderPositionsBar();
+  }
 
   function renderPresets() {
     // Two user toggles strip the buy controls back: the preset row can be
@@ -3474,6 +3486,9 @@
     // price-bridge.js is declared by the manifest in MAIN world at
     // document_start, before Padre creates its WebSocket and TradingView feed.
     await reloadState();
+    // "Hide it once" must stick: the collapsed bar state is a saved setting,
+    // not a per-page variable.
+    positionsBarHidden = settings.positionsBarHidden === true;
     // Storage must be watched even when the overlay is disabled, so toggling
     // settings from the dashboard or popup reaches this tab immediately.
     watchStorage();

@@ -283,3 +283,19 @@ test('ai proxy blocks disallowed endpoints and fetches allowed ones', async () =
   assert.ok(migrated.error, 'legacy default endpoint is migrated away');
 });
 
+test('a blank endpoint keeps the coach off: chat errors, models return empty, no fetch', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_settings = { aiEndpoint: '', aiAllowLocalEndpoint: true };
+
+  const chat = await send(worker.listener, {
+    type: 'pt_ai_chat', messages: [{ role: 'user', content: 'hi' }], maxTokens: 50,
+  });
+  assert.ok(chat.error, 'chat with no endpoint must error instead of guessing one');
+  assert.match(chat.error, /No AI endpoint configured/i);
+
+  const models = await send(worker.listener, { type: 'pt_ai_models' });
+  assert.equal(models.models.length, 0, 'no endpoint means no models, silently');
+  assert.equal(worker.fetchCalls.length, 0,
+    'an empty endpoint must never reach the network — it is the coach being off');
+});
+

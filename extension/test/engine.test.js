@@ -457,7 +457,7 @@ test('revision 5 adds the trade-tab buy toggles, on by default', () => {
   const migrated = E.mergeSettings(rev4);
   assert.equal(migrated.panelBuyEnabled, true);
   assert.equal(migrated.panelPresetsEnabled, true);
-  assert.equal(migrated.settingsRevision, 5);
+  assert.equal(migrated.settingsRevision, E.SETTINGS_REVISION);
   assert.equal(migrated.balanceStartSol, 7, 'unrelated settings must survive');
 
   // And a deliberate opt-out recorded at revision 5 is never overridden.
@@ -465,4 +465,21 @@ test('revision 5 adds the trade-tab buy toggles, on by default', () => {
   const merged = E.mergeSettings(optedOut);
   assert.equal(merged.panelBuyEnabled, false);
   assert.equal(merged.panelPresetsEnabled, false);
+});
+
+test('revision 6 persists the positions bar collapse state', () => {
+  // An install saved under revision 5 has never seen the key; the migration
+  // adopts the expanded default ONCE so nobody's bar collapses uninvited.
+  const rev5 = { settingsRevision: 5, balanceStartSol: 7 };
+
+  const migrated = E.mergeSettings(rev5);
+  assert.equal(migrated.positionsBarHidden, false, 'the bar starts expanded after migration');
+  assert.equal(migrated.settingsRevision, E.SETTINGS_REVISION);
+  assert.equal(migrated.balanceStartSol, 7, 'unrelated settings must survive');
+
+  // And a deliberate collapse recorded at revision 6 is never overridden by
+  // a later migration.
+  const collapsed = { settingsRevision: E.SETTINGS_REVISION, positionsBarHidden: true };
+  const merged = E.mergeSettings(collapsed);
+  assert.equal(merged.positionsBarHidden, true);
 });

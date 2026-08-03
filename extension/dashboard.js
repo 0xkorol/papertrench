@@ -233,6 +233,8 @@ function rebindSection(id, el) {
       button.addEventListener('click', () => openReplay(button.dataset.session)));
     el.querySelectorAll('.share-btn').forEach((button) =>
       button.addEventListener('click', () => openShareCard(button.dataset.id)));
+    el.querySelectorAll('.note-btn').forEach((button) =>
+      button.addEventListener('click', () => editRoundNote(button)));
     return;
   }
   if (id === 'coach') {
@@ -658,6 +660,7 @@ function renderRounds(el) {
         <td class="num" style="font-size:11.5px"><span class="green">+${fmt(r.peakPnlSol)}</span> <span class="dim">/</span> <span class="red">${fmt(r.troughPnlSol)}</span></td>
         <td>${renderExitCell(r)}</td>
         <td>${renderThesisCell(r)}</td>
+        <td>${renderNoteCell(r)}</td>
         <td>${r.aiReview ? '<span class="tag" style="color:var(--green);border-color:rgba(52,211,153,.3)">reviewed</span>' : '<button class="btn-sec review-btn" data-id="' + esc(r.id) + '">AI review</button>'}</td>
         <td>${replay ? `<button class="btn-sec replay-btn" data-session="${esc(replay.sessionId)}">▶ ${Array.isArray(replay.checkpoints) ? replay.checkpoints.length : 0} moments</button>` : '<span class="dim">—</span>'}</td>
         <td><button class="btn-sec share-btn" data-id="${esc(r.id)}">Share</button></td>
@@ -667,8 +670,8 @@ function renderRounds(el) {
   el.innerHTML = `
     <div class="card"><h3>Closed round trips <span class="tag">${(state.rounds || []).length}</span></h3>
       <div class="log"><table>
-        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>Exit</th><th>Thesis</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="14">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
+        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="15">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
       </table></div>
     </div>`;
   // Handlers are attached in rebindSection() after the element is live.
@@ -714,6 +717,58 @@ function renderThesisCell(round) {
     return `<span class="tag" style="color:var(--red);border-color:rgba(255,95,86,.3)" title="${esc(grade.notes.join(' '))}">off plan</span>`;
   }
   return `<span class="tag" title="${esc(grade.notes.join(' '))}">logged</span>`;
+}
+
+/**
+ * Post-close notes: the thesis is written BEFORE the outcome, but plenty of
+ * lessons only exist AFTER it. Every closed round can carry a retrospective
+ * note, editable any time, and the AI coach reads it too.
+ */
+function renderNoteCell(round) {
+  const editBtn = `<button class="btn-sec note-btn" data-id="${esc(round.id)}">${round.note && round.note.text ? 'Edit' : 'Add note'}</button>`;
+  if (round.note && round.note.text) {
+    return `<span class="round-note" title="${esc(round.note.text)}">${esc(round.note.text)}</span> ${editBtn}`;
+  }
+  return editBtn;
+}
+
+function editRoundNote(button) {
+  const roundId = button.dataset.id;
+  const cell = button.closest('td');
+  const round = (state.rounds || []).find((r) => r.id === roundId);
+  if (!cell || !round) return;
+
+  cell.textContent = '';
+  const input = document.createElement('textarea');
+  input.className = 'note-input';
+  input.rows = 3;
+  input.placeholder = 'What did this trade teach you?';
+  input.value = (round.note && round.note.text) || '';
+
+  const actions = document.createElement('div');
+  actions.className = 'note-actions';
+  const save = document.createElement('button');
+  save.className = 'btn';
+  save.textContent = 'Save note';
+  const cancel = document.createElement('button');
+  cancel.className = 'btn-sec';
+  cancel.textContent = 'Cancel';
+  actions.append(save, cancel);
+  cell.append(input, actions);
+  input.focus();
+
+  cancel.addEventListener('click', () => renderSection('rounds'));
+  save.addEventListener('click', async () => {
+    const text = input.value.trim();
+    // A fill can land while the note is being written: annotate the freshest
+    // state so saving a note can never clobber a trade.
+    await loadAll();
+    const target = (state.rounds || []).find((r) => r.id === roundId) || round;
+    if (text) target.note = { text, t: Date.now() };
+    else delete target.note;
+    await saveState();
+    renderSection('rounds');
+  });
 }
 
 async function runReview(roundId) {
@@ -765,7 +820,7 @@ function buildCoachMessages(round, trades, roundFrames) {
   return [
     {
       role: 'system',
-      content: 'You are a no-BS Solana memecoin trading coach reviewing one paper-trade round trip. Be concrete, cite numbers, and name exactly one bad habit and one fix. If a pre-trade thesis is supplied, judge PROCESS against it: a profitable trade that broke its own plan is a process failure, and a losing trade that followed the plan is not. Keep it under 350 words.',
+      content: 'You are a no-BS Solana memecoin trading coach reviewing one paper-trade round trip. Be concrete, cite numbers, and name exactly one bad habit and one fix. If a pre-trade thesis is supplied, judge PROCESS against it: a profitable trade that broke its own plan is a process failure, and a losing trade that followed the plan is not. If a post-trade note is supplied, engage with it directly — confirm it, correct it, or sharpen it. Keep it under 350 words.',
     },
     {
       role: 'user',
@@ -778,6 +833,7 @@ function buildCoachMessages(round, trades, roundFrames) {
         `Peak unrealized P&L: +${round.peakPnlSol.toFixed(4)} SOL, worst: ${round.troughPnlSol.toFixed(4)} SOL\n\n` +
         `Fills:\n${fillText}${frameText}\n\n` +
         (thesisText ? `${thesisText}\n\n` : '') +
+        (round.note && round.note.text ? `Post-trade note (written after the outcome): ${round.note.text}\n\n` : '') +
         `Output: Verdict, what was done right, what was done wrong, one bad habit, and one actionable fix for next time.`,
     },
   ];
@@ -1539,6 +1595,11 @@ function renderLeaderboard(el) {
   const chain = Array.isArray(state.attestChain) ? state.attestChain : [];
   const stats = E.sessionStats(state, settings);
   const identity = settings.leaderboardIdentity || null;
+  // Absolute P&L flatters big bankrolls, so every figure is shown alongside
+  // the return ON the declared starting balance — the comparable number.
+  const roiPct = settings.balanceStartSol > 0
+    ? (stats.realizedPnlSol / settings.balanceStartSol) * 100
+    : 0;
 
   el.innerHTML = `
     <div class="grid2">
@@ -1549,7 +1610,8 @@ function renderLeaderboard(el) {
           <div><div class="t">Checking your trade chain…</div><div class="s">Re-deriving your result from committed fills.</div></div>
         </div>
         <div class="stat" style="margin-top:14px"><span>Committed fills</span><span style="font-weight:750">${chain.length}</span></div>
-        <div class="stat"><span>Claimed realized P&amp;L</span><span class="${stats.realizedPnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">${stats.realizedPnlSol >= 0 ? '+' : ''}${fmt(stats.realizedPnlSol, 3)} SOL</span></div>
+        <div class="stat"><span>Claimed realized P&amp;L</span><span class="${stats.realizedPnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">${stats.realizedPnlSol >= 0 ? '+' : ''}${fmt(stats.realizedPnlSol, 3)} SOL · ${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(1)}% ROI</span></div>
+        <div class="stat"><span>Declared starting bankroll</span><span style="font-weight:750">${fmt(settings.balanceStartSol, 2)} SOL</span></div>
         <div class="stat" id="lb-derived"><span>Derived from chain</span><span class="dim">…</span></div>
         <h4>Chain head</h4>
         <div class="lb-proof" id="lb-head">${chain.length
@@ -1597,6 +1659,7 @@ function renderLeaderboard(el) {
         <li><strong>Entries are pre-committed.</strong> A fill is hashed when it is made, before the outcome is known, so a winning entry cannot be backdated.</li>
         <li><strong>Prices are re-checkable.</strong> Every fill records mint, price and timestamp, so a verifier can re-fetch real price history and reject fills at prices that never existed.</li>
         <li><strong>Identity costs something.</strong> One ranked record per verified X account.</li>
+        <li><strong>Bankroll travels with the record.</strong> Your declared starting balance is part of the committed data, so results are compared by return on bankroll — not by absolute SOL, which a bigger deposit would inflate for free.</li>
         <li><strong>Stated plainly:</strong> this is evidence, not proof. Anyone can run modified code locally, so final standings must be recomputed server-side from the chain — never from the number this app displays.</li>
       </ul>
     </div>`;
@@ -1604,20 +1667,26 @@ function renderLeaderboard(el) {
 
 function renderStandingsPlaceholder(identity, stats) {
   // No leaderboard service is configured, so no remote standings are invented.
+  const roiPct = settings.balanceStartSol > 0
+    ? (stats.realizedPnlSol / settings.balanceStartSol) * 100
+    : 0;
   return `
     <div class="lb-rank me">
       <span class="pos">—</span>
       <span class="lb-handle">${identity ? '@' + esc(identity.handle) : 'You (unlinked)'}
-        <small>${stats.rounds} round trips · ${stats.winRate === null ? '—' : stats.winRate.toFixed(0) + '% win rate'}</small></span>
+        <small>${stats.rounds} round trips · ${stats.winRate === null ? '—' : stats.winRate.toFixed(0) + '% win rate'} · ${fmt(settings.balanceStartSol, 2)} SOL bankroll</small></span>
       <span class="${stats.realizedPnlSol >= 0 ? 'green' : 'red'}" style="font-weight:800">
         ${stats.realizedPnlSol >= 0 ? '+' : ''}${fmt(stats.realizedPnlSol, 3)} SOL
+        <small style="font-weight:700;opacity:.8">(${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(1)}% ROI)</small>
       </span>
     </div>
     <p class="dim" style="font-size:12px;line-height:1.6;margin:14px 0 0">
       No leaderboard server is configured yet, so no global standings are shown.
       Your chain is being committed locally in the meantime, so your record is
       already verifiable the moment ranking goes live — nothing needs to be
-      reconstructed retroactively.
+      reconstructed retroactively. ROI is shown next to absolute P&amp;L because
+      the starting bankroll is a free choice: +10 SOL on a 10 SOL bankroll is a
+      different result than +10 SOL on 1,000, and rankings must compare like with like.
     </p>`;
 }
 
@@ -1880,7 +1949,7 @@ function renderSettings(el) {
       </div>
       <div class="card">
         <h3>AI &amp; Recording</h3>
-        <div class="field"><label for="set-endpoint">AI endpoint (OpenAI-compatible)</label><input id="set-endpoint" type="text" value="${esc(settings.aiEndpoint)}" placeholder="https://api.openai.com/v1 or http://127.0.0.1:8765/v1"></div>
+        <div class="field"><label for="set-endpoint">AI endpoint (OpenAI-compatible)</label><input id="set-endpoint" type="text" value="${esc(settings.aiEndpoint)}" placeholder="https://api.openai.com/v1 or http://127.0.0.1:8765/v1"><small>Blank turns the AI coach off. Paste any OpenAI-compatible endpoint; if it runs on localhost or your LAN, also tick the local toggle below, then Save.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-ai-allow-local" ${settings.aiAllowLocalEndpoint ? 'checked' : ''}> Allow local/private AI endpoints</label><small>Enable only if you run a self-hosted (localhost, 127.0.0.1, or LAN) OpenAI-compatible shim. Off blocks SSRF to internal addresses.</small></div>
         <div class="field"><label for="set-model">AI model</label><input id="set-model" type="text" value="${esc(settings.aiModel || '')}" placeholder="endpoint default"><small>Optional override. Blank uses the endpoint's own default.</small></div>
         <div class="field"><label for="set-key">API key</label><input id="set-key" type="password" value="${esc(settings.aiApiKey || '')}" autocomplete="off" placeholder="optional"><small>Only needed if your BYOK setup requires a bearer token.</small></div>
@@ -1935,14 +2004,18 @@ function bindSettings() {
   });
   document.getElementById('test-ai').addEventListener('click', async () => {
     const out = document.getElementById('ai-test-result');
-    out.textContent = 'Testing…';
     const settingsNow = gatherSettingsFromForm();
+    if (!settingsNow.aiEndpoint) {
+      out.textContent = 'AI coach is off — no endpoint set. Paste one above (and enable the local toggle for localhost/LAN), then Save.';
+      return;
+    }
+    out.textContent = 'Testing…';
     await store.set({ pt_settings: settingsNow });
     settings = settingsNow;
     const models = await chrome.runtime.sendMessage({ type: 'pt_ai_models' });
     if (models?.error) out.textContent = `Error: ${models.error}`;
     else if (models?.models?.length) out.textContent = `OK — ${models.models.length} model(s) found: ${models.models.slice(0, 3).join(', ')}`;
-    else out.textContent = 'No models reachable. Check endpoint and that your BYOK shim is running.';
+    else out.textContent = 'No models reachable. Check the endpoint URL, that the service is running, and that the local toggle is on for localhost/LAN endpoints.';
   });
 }
 

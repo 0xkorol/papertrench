@@ -355,8 +355,8 @@ test('the overlay visibility can be toggled between master and auto-hide control
 
   assert.match(engineSrc, /overlayHideWhenNoToken:\s*true/,
     'the default must hide the overlay when no token is detected');
-  assert.match(engineSrc, /SETTINGS_REVISION = 5/,
-    'settings revision must be bumped for the trade-tab buy toggles');
+  assert.match(engineSrc, /SETTINGS_REVISION = 6/,
+    'settings revision must be bumped for the positions bar collapse persistence');
   assert.match(contentSrc, /function updateOverlayVisibility/,
     'content.js must hide the main panel when no token is present');
   assert.match(contentSrc, /function toggleOverlayAutoHide/,
@@ -455,4 +455,86 @@ test('state writes are seq-stamped and a failed read never fabricates a wallet',
     'the debounced writer must detect a newer state in storage and adopt it');
   assert.match(engineSrc, /seq: 0/,
     'a fresh wallet starts at seq 0');
+});
+
+test('post-close notes let the lesson be written after the outcome', () => {
+  const dashboardSrc = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  const dashboardHtml = fs.readFileSync(path.join(ROOT, 'dashboard.html'), 'utf8');
+
+  assert.match(dashboardSrc, /function renderNoteCell/,
+    'every closed round must render a note cell');
+  assert.match(dashboardSrc, /function editRoundNote/,
+    'notes must be editable at any time, not just at close');
+  assert.match(dashboardSrc, /<th>Notes<\/th>/,
+    'the rounds table must have a dedicated Notes column');
+  assert.match(dashboardHtml, /\.round-note \{/,
+    'the note cell must be styled');
+
+  // The seq-durability rule applies to notes too: a fill can land while the
+  // note is being written, so the save annotates the FRESHEST state.
+  const saveBody = dashboardSrc.slice(dashboardSrc.indexOf('function editRoundNote'));
+  assert.match(saveBody, /await loadAll\(\)[\s\S]*?if \(text\) target\.note = \{ text, t: Date\.now\(\) \};/,
+    'saving a note must reload state first so it can never clobber a fill');
+  assert.match(saveBody, /else delete target\.note;/,
+    'clearing the text must remove the note entirely');
+
+  // And the AI coach must actually read what the trader wrote.
+  assert.match(dashboardSrc, /engage with it directly/,
+    'the coach system prompt must tell the model to engage with the note');
+  assert.match(dashboardSrc, /Post-trade note \(written after the outcome\)/,
+    'the note must be included in the coach prompt');
+});
+
+test('the leaderboard compares by return on bankroll, not absolute SOL', () => {
+  const dashboardSrc = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+
+  // ROI is derived from the DECLARED starting balance in both places a
+  // result is shown (the evidence card and the standings placeholder).
+  const roiHits = dashboardSrc.match(/\(stats\.realizedPnlSol \/ settings\.balanceStartSol\) \* 100/g) || [];
+  assert.ok(roiHits.length >= 2,
+    'both the evidence card and the standings row must compute ROI on the bankroll');
+  assert.match(dashboardSrc, /% ROI/, 'the ROI figure must be shown next to absolute P&L');
+  assert.match(dashboardSrc, /Declared starting bankroll/,
+    'the bankroll itself must be displayed so the percentage is checkable');
+  assert.match(dashboardSrc, /Bankroll travels with the record/,
+    'the rationale must be stated where the leaderboard explains itself');
+});
+
+test('the AI coach explains itself when no endpoint is configured', () => {
+  const dashboardSrc = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+
+  // Since the SSRF revision the endpoint defaults to BLANK, so "AI not
+  // working" usually means "not configured yet" — the test button must say
+  // exactly that instead of pretending it tried something.
+  const testHandler = dashboardSrc.slice(dashboardSrc.indexOf("'test-ai'"));
+  assert.match(testHandler, /if \(!settingsNow\.aiEndpoint\)/,
+    'the test button must short-circuit before any network attempt');
+  assert.match(testHandler, /AI coach is off/,
+    'an empty endpoint must be reported as the coach being off, with setup steps');
+
+  assert.match(dashboardSrc, /Blank turns the AI coach off\./,
+    'the settings form must explain what an empty endpoint means');
+  assert.match(dashboardSrc, /No models reachable\. Check the endpoint URL/,
+    'the failure message must name the usual causes (URL, service, local toggle)');
+});
+
+test('hiding the positions bar is a saved setting, not a per-page flag', () => {
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'engine.js'), 'utf8');
+  const backgroundSrc = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  assert.match(engineSrc, /positionsBarHidden: false/,
+    'the engine default must carry the collapse state');
+  assert.match(backgroundSrc, /positionsBarHidden: false/,
+    'the background defaults must carry it too — the two defaults must stay in sync');
+  assert.match(engineSrc, /if \(revision < 6\) \{\s*merged\.positionsBarHidden/,
+    'revision 6 must migrate existing installs to the new key');
+
+  assert.match(contentSrc, /function setBarHidden\(hidden\) \{[\s\S]*?store\.set\(\{ \[E\.STORAGE_KEYS\.settings\]: settings \}\)/,
+    'collapsing or expanding must persist the choice to settings');
+  // One read at boot, one in the settings watcher: both must derive the flag
+  // from storage, never from page-local memory.
+  const reads = contentSrc.match(/positionsBarHidden = settings\.positionsBarHidden === true;/g) || [];
+  assert.equal(reads.length, 2,
+    'both the boot path and the storage watcher must restore the saved state');
 });

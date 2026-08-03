@@ -69,6 +69,11 @@
     // bar should auto-measure against the host site header on first paint.
     positionsBarLeft: null,
     positionsBarTop: null,
+    // Whether the positions bar is collapsed into its small POSITIONS tab.
+    // Saved so "hide it once" sticks across pages, tabs and sessions instead
+    // of the bar reappearing on every new page — the "it follows me
+    // everywhere" complaint.
+    positionsBarHidden: false,
     // AI backend (OpenAI-compatible). Empty by default; the user must set a
     // public endpoint or opt-in to local/private endpoints below.
     aiEndpoint: '',
@@ -89,7 +94,7 @@
   // Bumped when a default changes in a way existing users should receive.
   // Stored settings normally win over defaults, so without this a user who
   // installed before the change would keep the old value forever.
-  const SETTINGS_REVISION = 5;
+  const SETTINGS_REVISION = 6;
 
   /**
    * Merge stored settings over defaults, applying one-time migrations.
@@ -108,6 +113,9 @@
    *
    * Revision 5 adds the trade-tab buy toggles (whole buy section, and the
    * preset row on its own), both on by default.
+   *
+   * Revision 6 persists the positions bar's collapsed/expanded state, so
+   * hiding it once keeps it hidden everywhere.
    */
   const OLD_LOCAL_AI_ENDPOINT = 'http://127.0.0.1:8765/v1';
   function mergeSettings(stored) {
@@ -132,6 +140,9 @@
     if (revision < 5) {
       merged.panelBuyEnabled = DEFAULT_SETTINGS.panelBuyEnabled;
       merged.panelPresetsEnabled = DEFAULT_SETTINGS.panelPresetsEnabled;
+    }
+    if (revision < 6) {
+      merged.positionsBarHidden = DEFAULT_SETTINGS.positionsBarHidden;
     }
     merged.settingsRevision = SETTINGS_REVISION;
     return merged;
