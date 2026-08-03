@@ -57,6 +57,12 @@ test('trade feedback is on by default; interrupting alerts stay opt-in', () => {
   // Hidden-tab bells interrupt the user elsewhere, so they remain opt-in.
   assert.equal(settings.profitAlertsEnabled, false);
   assert.equal(settings.profitAlertPct, 10);
+  // The positions bar can be dragged; its saved offsets default to "not yet set"
+  // so the first paint auto-measures against the host header.
+  assert.equal(Object.hasOwn(settings, 'positionsBarLeft'), true);
+  assert.equal(Object.hasOwn(settings, 'positionsBarTop'), true);
+  assert.equal(settings.positionsBarLeft, null);
+  assert.equal(settings.positionsBarTop, null);
   assert.equal(settings.positionsBarEnabled, true);
 });
 

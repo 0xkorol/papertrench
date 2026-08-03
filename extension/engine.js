@@ -49,6 +49,10 @@
     settingsRevision: 2,
     // Padre-style top rail listing every open paper position.
     positionsBarEnabled: true,
+    // Saved left/top offsets for the draggable positions bar. null means the
+    // bar should auto-measure against the host site header on first paint.
+    positionsBarLeft: null,
+    positionsBarTop: null,
     // AI backend (OpenAI-compatible). Defaults to the local BYOK shim.
     aiEndpoint: 'http://127.0.0.1:8765/v1',
     aiModel: '',

@@ -318,3 +318,16 @@ test('quoteForTrade falls back to the on-screen price when the resolver cannot r
   assert.match(contentSrc, /token\.pending \|\| token\.priceSource !== 'resolver'/,
     'pending or non-resolver prices must both be eligible for the fallback');
 });
+
+test('the positions bar has a draggable grip and saves its position', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  assert.match(contentSrc, /id="pt-bar-grip"/,
+    'the positions bar markup must include a drag grip');
+  assert.match(contentSrc, /function setupBarDrag/,
+    'a drag setup function must wire the grip to mouse events');
+  assert.match(contentSrc, /settings\.positionsBarLeft\s*=/,
+    'dragging must persist the left offset to settings');
+  assert.match(contentSrc, /settings\.positionsBarTop\s*=/,
+    'dragging must persist the top offset to settings');
+});

@@ -1310,6 +1310,7 @@
   const ICONS = {
     chart: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8 13 13.7l-3-3L6.3 14.4"/></svg>',
     minimize: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg>',
+    grip: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.2"/><circle cx="7.5" cy="2.5" r="1.2"/><circle cx="2.5" cy="6" r="1.2"/><circle cx="7.5" cy="6" r="1.2"/><circle cx="2.5" cy="9.5" r="1.2"/><circle cx="7.5" cy="9.5" r="1.2"/></svg>',
   };
 
   const CSS = `
@@ -1833,7 +1834,7 @@
        logo, instead of the top-right where trading UIs put their own buttons
        (wallet, settings, connect) and an overlay would sit on top of them. */
     .pt-bar {
-      position: fixed; top: 7px; left: var(--pt-bar-left, 210px); right: auto; z-index: 2147483645;
+      position: fixed; top: var(--pt-bar-top, 7px); left: var(--pt-bar-left, 210px); right: auto; z-index: 2147483645;
       max-width: min(62vw, 760px);
       display: flex; align-items: stretch; gap: 0;
       min-height: 36px; padding: 0;
@@ -1854,6 +1855,14 @@
     }
     .pt-bar.pt-hidden { display: none !important; }
 
+    .pt-bar-grip {
+      display: flex; align-items: center; justify-content: center;
+      flex: none; width: 18px; padding: 0 2px;
+      color: var(--pt-faint); cursor: grab; user-select: none;
+      border-right: 1px solid var(--pt-line);
+    }
+    .pt-bar-grip:hover { color: var(--pt-amber); }
+    .pt-bar-grip:active { cursor: grabbing; }
     .pt-bar-brand {
       display: flex; align-items: center; gap: 7px; flex: none;
       padding: 0 12px;
@@ -1953,7 +1962,7 @@
 
     /* Restore tab shown when the bar is collapsed. */
     .pt-bar-tab {
-      position: fixed; top: 7px; left: var(--pt-bar-left, 210px); right: auto;
+      position: fixed; top: var(--pt-bar-top, 7px); left: var(--pt-bar-left, 210px); right: auto;
       z-index: 2147483645; display: none; align-items: center; gap: 6px;
       padding: 6px 12px;
       background: linear-gradient(180deg, rgba(13, 16, 23, 0.94), rgba(9, 11, 16, 0.92));
@@ -1988,6 +1997,7 @@
       <style>${CSS}</style>
       <div class="pt-wrap">
         <div class="pt-bar pt-hidden" id="pt-bar">
+          <div class="pt-bar-grip" id="pt-bar-grip" title="Drag to move">${ICONS.grip}</div>
           <div class="pt-bar-brand" id="pt-bar-brand" title="Open PaperTrench dashboard">
             <span class="pt-bar-mark">P</span>
             <span class="pt-bar-label">Paper</span>
@@ -2059,6 +2069,7 @@
     els.spark = shadow.getElementById('pt-spark');
     els.subtitle = shadow.getElementById('pt-subtitle');
     els.bar = shadow.getElementById('pt-bar');
+    els.barGrip = shadow.getElementById('pt-bar-grip');
     els.barTotal = shadow.getElementById('pt-bar-total');
     els.barRail = shadow.getElementById('pt-bar-rail');
     els.barTab = shadow.getElementById('pt-bar-tab');
@@ -2096,6 +2107,7 @@
       positionsBarHidden = false;
       renderPositionsBar();
     });
+    setupBarDrag();
 
     shadow.getElementById('pt-dash').addEventListener('click', openDashboard);
     shadow.getElementById('pt-settings').addEventListener('click', openDashboard);
@@ -2128,6 +2140,54 @@
       els.box.style.left = 'auto';
     });
     window.addEventListener('mouseup', () => (dragging = false));
+  }
+
+  /** Let the user drag the top positions bar out of the way of host nav. */
+  function setupBarDrag() {
+    if (!els.barGrip) return;
+    let dragging = false, sx = 0, sy = 0, sl = 0, st = 0;
+    const start = (e) => {
+      // Left click or touch only.
+      if (e.type === 'mousedown' && e.button !== 0) return;
+      dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      const style = window.getComputedStyle(els.bar);
+      sl = parseInt(style.left) || 210;
+      st = parseInt(style.top) || 7;
+      e.preventDefault();
+    };
+    const move = (e) => {
+      if (!dragging) return;
+      const viewportW = window.innerWidth || 800;
+      const viewportH = window.innerHeight || 600;
+      const rect = els.bar.getBoundingClientRect();
+      let left = sl + (e.clientX - sx);
+      let top = st + (e.clientY - sy);
+      // Keep a strip of the bar visible so the user can drag it back.
+      left = Math.max(4 - rect.width, Math.min(left, viewportW - 4));
+      top = Math.max(0, Math.min(top, viewportH - 20));
+      els.bar.style.setProperty('--pt-bar-left', left + 'px');
+      els.bar.style.setProperty('--pt-bar-top', top + 'px');
+      if (els.barTab) {
+        els.barTab.style.setProperty('--pt-bar-left', left + 'px');
+        els.barTab.style.setProperty('--pt-bar-top', top + 'px');
+      }
+    };
+    const stop = () => {
+      if (!dragging) return;
+      dragging = false;
+      const style = window.getComputedStyle(els.bar);
+      const left = parseInt(style.left) || 210;
+      const top = parseInt(style.top) || 7;
+      settings.positionsBarLeft = left;
+      settings.positionsBarTop = top;
+      try {
+        store.set({ [E.STORAGE_KEYS.settings]: settings });
+      } catch (_) {}
+    };
+    els.barGrip.addEventListener('mousedown', start);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', stop);
   }
 
   function openDashboard() { sendMessage({ type: 'pt_open_dashboard' }); }
@@ -2795,9 +2855,14 @@
   /** Position the bar once the page has painted its own header. */
   function positionBar() {
     if (!els.bar) return;
-    const left = measureBarLeft();
+    const left = typeof settings.positionsBarLeft === 'number' ? settings.positionsBarLeft : measureBarLeft();
+    const top = typeof settings.positionsBarTop === 'number' ? settings.positionsBarTop : 7;
     els.bar.style.setProperty('--pt-bar-left', left + 'px');
-    if (els.barTab) els.barTab.style.setProperty('--pt-bar-left', left + 'px');
+    els.bar.style.setProperty('--pt-bar-top', top + 'px');
+    if (els.barTab) {
+      els.barTab.style.setProperty('--pt-bar-left', left + 'px');
+      els.barTab.style.setProperty('--pt-bar-top', top + 'px');
+    }
   }
 
   /**
