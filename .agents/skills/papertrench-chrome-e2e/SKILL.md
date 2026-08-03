@@ -13,15 +13,12 @@ description: How to load and end-to-end test the PaperTrench Manifest V3 Chrome 
 $chrome = 'C:\devin\chrome\chrome-win64\chrome.exe'
 $ext = 'C:\Users\Administrator\repos\papertrench\extension'
 $profile = 'C:\Users\Administrator\AppData\Local\Temp\ptchrome-profiles\test'
-$args = @(
-  '--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu',
-  '--hide-crash-restore-bubble','--no-first-run','--disable-sync',
-  '--remote-allow-origins=*','--remote-debugging-port=9222',
-  '--load-extension='+"$ext",
-  '--user-data-dir='+$profile,
-  '--window-size=1400,1050','--start-maximized'
-)
-Start-Process -FilePath $chrome -ArgumentList $args -WindowStyle Normal
+
+# On Windows, pass the flags as a single quoted string so `--load-extension` and
+# `--user-data-dir` keep their values. Using an array can split the flag from
+# the path and cause Chrome to open the extension directory as a file URL.
+$argStr='--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --hide-crash-restore-bubble --no-first-run --disable-sync --remote-allow-origins=* --remote-debugging-port=9222 --load-extension="'+$ext+'" --user-data-dir="'+$profile+'" --window-size=1400,1050 --start-maximized'
+Start-Process -FilePath $chrome -ArgumentList $argStr -WindowStyle Normal
 ```
 
 ## Avoid the "Restore pages?" bubble
@@ -84,6 +81,8 @@ Create a `node` script using `ws` (`npm install ws` in a temp dir) and connect t
 ```js
 document.getElementById('papertrench-host').shadowRoot.getElementById('pt-buy').click()
 ```
+
+For UI gestures that do not respond well to real mouse drags (e.g. the v1.2.3 positions-bar drag grip), use CDP `Input.dispatchMouseEvent`. The `x`/`y` coordinates are relative to the main frame's viewport, so derive them from `element.getBoundingClientRect()`.
 
 ## Common gotchas
 - Dexscreener/Birdeye/GMGN may show Cloudflare or login walls; the service worker still resolves the token via Dexscreener API because the overlay uses background price resolution, not the page DOM.
