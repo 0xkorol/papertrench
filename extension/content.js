@@ -73,7 +73,9 @@
   let fastDetectTimer = null;
   let detectLoopTimer = null;
   let barScanTimer = null;
-  let lastCmTickPrice = 0; // avoids feeding chart markers the same price repeatedly
+  let lastCmTickPrice = 0;
+  // Track whether the main panel is collapsed to the mini pill.
+  let panelMinimized = false;
   const CM = window.PTChartMarkers; // chart bubble markers
   const TF = window.PTTitleFeed;    // zero-cost market-cap change signal
 
@@ -1017,7 +1019,6 @@
         if (els.buyPresets) renderPresets();
         syncAveragePriceLines();
         updateOverlayVisibility();
-        renderVisibilityIcon();
       }
 
       const stateChange = changes[E.STORAGE_KEYS.state];
@@ -2152,12 +2153,12 @@
 
     if (els.visibility) els.visibility.addEventListener('click', toggleOverlayAutoHide);
     shadow.getElementById('pt-min').addEventListener('click', () => {
-      els.box.classList.add('pt-hidden');
-      els.pill.style.display = 'block';
+      panelMinimized = true;
+      setPanelVisible(true);
     });
     els.pill.addEventListener('click', () => {
-      els.box.classList.remove('pt-hidden');
-      els.pill.style.display = 'none';
+      panelMinimized = false;
+      setPanelVisible(true);
     });
     // Positions bar controls.
     const barBrand = shadow.getElementById('pt-bar-brand');
@@ -2276,23 +2277,45 @@
   }
 
   /**
-   * Update the overlay host visibility based on the auto-hide setting and the
-   * presence of a token. The overlay is hidden entirely when the user is on a
-   * non-coin page and auto-hide is enabled, and reappears when a token is
-   * detected or auto-hide is turned off.
+   * Show or hide only the main panel and its minimized pill. The positions bar
+   * is intentionally left alone: it must remain visible on non-coin pages when
+   * the user has open positions.
+   */
+  function setPanelVisible(visible) {
+    if (!els.box || !els.pill) return;
+    if (!visible) {
+      els.box.classList.add('pt-hidden');
+      els.pill.style.display = 'none';
+      return;
+    }
+    if (panelMinimized) {
+      els.box.classList.add('pt-hidden');
+      els.pill.style.display = 'block';
+    } else {
+      els.box.classList.remove('pt-hidden');
+      els.pill.style.display = 'none';
+    }
+  }
+
+  /**
+   * Update the main panel visibility based on the auto-hide setting and the
+   * presence of a token. The overlay is hidden when the user is on a non-coin
+   * page and auto-hide is enabled, and reappears when a token is detected or
+   * auto-hide is turned off.
    */
   function updateOverlayVisibility() {
     if (!host) return;
     const hide = settings.overlayHideWhenNoToken && !token;
-    host.style.display = hide ? 'none' : 'block';
-    if (host.style.display === 'block') renderVisibilityIcon();
+    setPanelVisible(!hide);
+    renderVisibilityIcon();
   }
 
   function renderVisibilityIcon() {
     if (!els.visibility) return;
-    const hidden = settings.overlayHideWhenNoToken;
-    els.visibility.innerHTML = hidden ? ICONS.eye : ICONS['eye-off'];
-    els.visibility.title = hidden
+    // eye = always visible / auto-hide off. eye-off = hides on non-coin pages.
+    const autoHide = settings.overlayHideWhenNoToken !== false;
+    els.visibility.innerHTML = autoHide ? ICONS['eye-off'] : ICONS.eye;
+    els.visibility.title = autoHide
       ? 'Overlay auto-hides when no token is detected'
       : 'Overlay is always visible';
   }
@@ -2303,7 +2326,11 @@
     // The storage listener will also refresh settings, but we update the UI
     // immediately so the icon and host display feel instant.
     updateOverlayVisibility();
-    renderVisibilityIcon();
+  }
+
+  async function toggleOverlayEnabled() {
+    settings = { ...settings, overlayEnabled: !settings.overlayEnabled };
+    await store.set({ [E.STORAGE_KEYS.settings]: settings });
   }
 
   function renderAll() {
@@ -3205,9 +3232,9 @@
   if (contextAlive()) chrome.runtime.onMessage.addListener((msg) => {
     if (contextDead) return;
     if (msg?.type === 'pt_toggle_overlay') {
-      // The popup / toolbar toggle flips the auto-hide setting, so the overlay
-      // stays hidden on non-coin pages and reappears when a token is loaded.
-      toggleOverlayAutoHide().catch(() => {});
+      // The popup / toolbar toggle flips the master overlay switch, so the
+      // user can turn the whole thing on or off from the browser action.
+      toggleOverlayEnabled().catch(() => {});
     }
   });
 

@@ -7,7 +7,7 @@
 
 'use strict';
 
-const DEFAULTS = { balanceStartSol: 10, overlayHideWhenNoToken: true };
+const DEFAULTS = { balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true };
 
 function $(id) { return document.getElementById(id); }
 
@@ -64,10 +64,9 @@ async function load() {
     deltaEl.textContent = `${up ? '▲' : '▼'} ${up ? '+' : ''}${fmt(stats.equityVsStart, 3)} SOL (${up ? '+' : ''}${pct.toFixed(1)}%)`;
     deltaEl.className = 'delta ' + (up ? 'green' : 'red');
 
-    const autoHide = settings.overlayHideWhenNoToken !== false;
-    $('toggle').textContent = autoHide
-      ? 'Show overlay everywhere'
-      : 'Hide overlay on non-coin pages';
+    $('toggle').textContent = settings.overlayEnabled !== false
+      ? 'Disable overlay'
+      : 'Enable overlay';
 
     $('cash').textContent = fmt(state.cashSol, 2);
     $('open').textContent = stats.openPositions;
@@ -93,8 +92,8 @@ async function load() {
 
 async function toggleOverlay() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  // Try to flip the active tab's overlay first. If the content script is not
-  // running, update storage directly so the next page load respects the choice.
+  // Try to flip the active tab's master overlay switch. If the content script
+  // is not running, update storage directly so the next page load respects it.
   if (tab) {
     try {
       await chrome.tabs.sendMessage(tab.id, { type: 'pt_toggle_overlay' });
@@ -104,7 +103,7 @@ async function toggleOverlay() {
   }
   const stored = await chrome.storage.local.get(['pt_settings']);
   const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
-  const newSettings = { ...settings, overlayHideWhenNoToken: !settings.overlayHideWhenNoToken };
+  const newSettings = { ...settings, overlayEnabled: !settings.overlayEnabled };
   await chrome.storage.local.set({ pt_settings: newSettings });
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
   $('status').textContent = tab
