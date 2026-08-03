@@ -371,6 +371,25 @@ test('the overlay visibility can be toggled between master and auto-hide control
     'popup.js must control the master overlay switch');
 });
 
+test('the trade tab is resizable and persists its size', () => {
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'engine.js'), 'utf8');
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const dashboardSrc = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+
+  assert.match(engineSrc, /overlayWidth:\s*null/,
+    'engine defaults must store a null overlay width');
+  assert.match(engineSrc, /overlayHeight:\s*null/,
+    'engine defaults must store a null overlay height');
+  assert.match(contentSrc, /class="pt-resize"/,
+    'the trade tab markup must include a resize handle');
+  assert.match(contentSrc, /function onOverlayResizeStart/,
+    'the content script must implement drag-to-resize');
+  assert.match(contentSrc, /function applyOverlaySize/,
+    'the content script must re-apply the saved overlay size');
+  assert.match(dashboardSrc, /overlayWidth.*overlayHeight|overlay size/,
+    'dashboard settings save must not wipe overlay size');
+});
+
 test('average mcap lines are drawn from the live bar close, not a stale resolver mcap', () => {
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
 

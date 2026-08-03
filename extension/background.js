@@ -26,6 +26,8 @@ const DEFAULTS = {
   autoReview: false,
   overlayEnabled: true,
   overlayHideWhenNoToken: true,
+  overlayWidth: null,
+  overlayHeight: null,
   tradeEffectsEnabled: true,
   tradeSoundsEnabled: true,
   profitAlertsEnabled: false,

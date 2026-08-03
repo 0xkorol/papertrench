@@ -1967,7 +1967,9 @@ function gatherSettingsFromForm() {
 }
 
 async function saveFromForm() {
-  settings = gatherSettingsFromForm();
+  // Merge form values into the existing settings object so fields that are not
+  // exposed in the form (like overlay size) are not wiped.
+  settings = { ...settings, ...gatherSettingsFromForm() };
   await saveSettings();
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
   document.getElementById('ai-test-result').textContent = 'Saved.';

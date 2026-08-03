@@ -43,6 +43,10 @@
     // home page or a screener without a selected token). It pops back the
     // moment the user opens a coin page.
     overlayHideWhenNoToken: true,
+    // Last user-resized width/height of the trade tab, in pixels. null means
+    // use the CSS default (336px by content height).
+    overlayWidth: null,
+    overlayHeight: null,
     // Feedback features. On by default so a fill is unmistakable; every one
     // of them can be switched off individually in Settings.
     tradeEffectsEnabled: true,

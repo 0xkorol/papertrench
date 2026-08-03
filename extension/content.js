@@ -76,6 +76,9 @@
   let lastCmTickPrice = 0;
   // Track whether the main panel is collapsed to the mini pill.
   let panelMinimized = false;
+  // Track an in-progress resize of the trade tab.
+  let resizingOverlay = false;
+  let resizeStart = null;
   const CM = window.PTChartMarkers; // chart bubble markers
   const TF = window.PTTitleFeed;    // zero-cost market-cap change signal
 
@@ -1019,6 +1022,7 @@
         if (els.buyPresets) renderPresets();
         syncAveragePriceLines();
         updateOverlayVisibility();
+        applyOverlaySize();
       }
 
       const stateChange = changes[E.STORAGE_KEYS.state];
@@ -1373,6 +1377,7 @@
     grip: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.2"/><circle cx="7.5" cy="2.5" r="1.2"/><circle cx="2.5" cy="6" r="1.2"/><circle cx="7.5" cy="6" r="1.2"/><circle cx="2.5" cy="9.5" r="1.2"/><circle cx="7.5" cy="9.5" r="1.2"/></svg>',
     eye: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
     'eye-off': '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.7 0 0 1 12 19c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94m2.8-2.8A16.46 16.46 0 0 1 21.94 4.06 18.45 18.45 0 0 1 23 12s-4 8-11 8a12.92 12.92 0 0 1-6.06-1.06M1 1l22 22"/></svg>',
+    resize: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15l-6 6M16 10l-9 9M3 21V3h18"/></svg>',
   };
 
   const CSS = `
@@ -1422,6 +1427,8 @@
     .pt-box {
       position: fixed; top: 84px; right: 18px; z-index: 2147483647;
       width: 336px;
+      min-width: 260px; max-width: 560px;
+      min-height: 320px; max-height: 820px;
       color: var(--pt-text);
       background:
         radial-gradient(120% 90% at 50% -10%, rgba(255, 157, 69, 0.10), transparent 62%),
@@ -1453,6 +1460,16 @@
       from { opacity: 0; transform: translateY(-10px) scale(0.975); }
       to   { opacity: 1; transform: none; }
     }
+    .pt-resize {
+      position: absolute; right: 4px; bottom: 4px; z-index: 6;
+      width: 18px; height: 18px;
+      display: flex; align-items: flex-end; justify-content: flex-end;
+      color: rgba(255, 157, 69, 0.45);
+      cursor: nwse-resize; pointer-events: auto;
+      transition: color 0.12s;
+    }
+    .pt-resize:hover { color: var(--pt-amber); }
+    .pt-resize:active { color: #fff; }
 
     .pt-watermark {
       position: absolute; top: 50%; left: 50%;
@@ -1523,20 +1540,23 @@
 
     /* ---------------- body ---------------- */
 
-    .pt-body { position: relative; z-index: 2; padding: 13px 12px 14px; }
+    .pt-body {
+      position: relative; z-index: 2; padding: 13px 12px 14px;
+      flex: 1; min-height: 0; overflow-y: auto;
+    }
 
     .pt-token-row {
       display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
       margin-bottom: 11px;
     }
-    .pt-token { min-width: 0; }
+    .pt-token { flex: 1; min-width: 0; }
     .pt-token > div:first-child {
       font-size: 17px; font-weight: 800; letter-spacing: -0.3px;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 165px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
     }
     .pt-mint {
       display: inline-block; margin-top: 4px; padding: 2px 7px;
-      max-width: 165px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       font-family: var(--pt-mono); font-size: 9.5px; font-weight: 500; color: var(--pt-dim);
       background: var(--pt-raised); border: 1px solid var(--pt-line);
       border-radius: 999px;
@@ -2105,6 +2125,7 @@
             <span id="pt-site"></span>
             <span><a id="pt-reset">Reset wallet</a> · <a id="pt-settings">Settings</a></span>
           </div>
+          <div class="pt-resize" id="pt-resize" title="Resize">${ICONS.resize}</div>
         </div>
         <button class="pt-minipill" id="pt-pill"><span class="pt-dot on"></span><span id="pt-pill-text">PAPER</span></button>
         <div id="pt-toast-root"></div>
@@ -2140,10 +2161,12 @@
     els.visibility = shadow.getElementById('pt-visibility');
     els.delta = shadow.getElementById('pt-delta');
     els.pillText = shadow.getElementById('pt-pill-text');
+    els.resize = shadow.getElementById('pt-resize');
 
     bindUI();
     renderPresets();
     renderAll();
+    applyOverlaySize();
   }
 
   function bindUI() {
@@ -2152,6 +2175,7 @@
     els.box.addEventListener('pointerdown', primeAudio);
 
     if (els.visibility) els.visibility.addEventListener('click', toggleOverlayAutoHide);
+    if (els.resize) els.resize.addEventListener('pointerdown', onOverlayResizeStart);
     shadow.getElementById('pt-min').addEventListener('click', () => {
       panelMinimized = true;
       setPanelVisible(true);
@@ -2281,6 +2305,61 @@
    * is intentionally left alone: it must remain visible on non-coin pages when
    * the user has open positions.
    */
+  function applyOverlaySize() {
+    if (!els.box || resizingOverlay) return;
+    const w = settings.overlayWidth;
+    const h = settings.overlayHeight;
+    els.box.style.width = (w && Number(w) > 0) ? `${w}px` : '';
+    els.box.style.height = (h && Number(h) > 0) ? `${h}px` : '';
+  }
+
+  const OVERLAY_MIN_W = 260;
+  const OVERLAY_MAX_W = 560;
+  const OVERLAY_MIN_H = 320;
+  const OVERLAY_MAX_H = 820;
+
+  function clampOverlaySize(w, h) {
+    return {
+      w: Math.max(OVERLAY_MIN_W, Math.min(OVERLAY_MAX_W, Math.round(w))),
+      h: Math.max(OVERLAY_MIN_H, Math.min(OVERLAY_MAX_H, Math.round(h))),
+    };
+  }
+
+  function onOverlayResizeStart(e) {
+    if (!els.box) return;
+    e.preventDefault();
+    resizingOverlay = true;
+    resizeStart = {
+      x: e.clientX,
+      y: e.clientY,
+      w: els.box.offsetWidth,
+      h: els.box.offsetHeight,
+    };
+    window.addEventListener('pointermove', onOverlayResizeMove, { passive: false });
+    window.addEventListener('pointerup', onOverlayResizeEnd, { once: true });
+  }
+
+  function onOverlayResizeMove(e) {
+    if (!resizingOverlay || !resizeStart || !els.box) return;
+    e.preventDefault();
+    const nextW = resizeStart.w + (e.clientX - resizeStart.x);
+    const nextH = resizeStart.h + (e.clientY - resizeStart.y);
+    const { w, h } = clampOverlaySize(nextW, nextH);
+    els.box.style.width = `${w}px`;
+    els.box.style.height = `${h}px`;
+  }
+
+  async function onOverlayResizeEnd() {
+    window.removeEventListener('pointermove', onOverlayResizeMove);
+    if (!resizeStart || !els.box) return;
+    resizingOverlay = false;
+    const w = els.box.offsetWidth;
+    const h = els.box.offsetHeight;
+    resizeStart = null;
+    settings = { ...settings, overlayWidth: w, overlayHeight: h };
+    await store.set({ [E.STORAGE_KEYS.settings]: settings });
+  }
+
   function setPanelVisible(visible) {
     if (!els.box || !els.pill) return;
     if (!visible) {
