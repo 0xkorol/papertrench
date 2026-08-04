@@ -3,6 +3,28 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.8 — 2026-08-03
+
+The security patch. A sharp-eyed user reported three privacy/safety bugs; all
+three were confirmed real and all three are fixed here.
+
+- **Snapshots now photograph the tab that traded.** Frame captures (every
+  30 s while recording, plus each fill snapshot) used to grab whatever window
+  happened to be focused — your email, another chart, anything. Captures now
+  resolve the trading tab's own window, and if that tab is hidden or closed
+  the frame is skipped rather than guessing at some other screen.
+- **Websites can no longer trigger paper trades.** Any script on the page
+  could forge a bridge message and run a quick-buy fill with zero input from
+  you. Trade-bearing messages now require a genuine user gesture within the
+  last 5 seconds (`isTrusted` only — synthetic events don't count) and must
+  come from the page's own origin; cross-origin posts are dropped outright.
+  Real chip taps work exactly as before.
+- **Verification no longer breaks for heavy traders.** The attest chain was
+  silently capped at 5000 links, which corrupted chain verification and
+  replay-derived P&L for anyone past that count — even with nothing tampered.
+  The cap is gone; the full chain is retained (the extension already has
+  unlimited storage permission).
+
 ## v1.2.7 — 2026-08-03
 
 The X-feedback batch — four things you asked for, plus one layout fix.
