@@ -117,10 +117,16 @@ async function toggleOverlay() {
 
 async function resetWallet() {
   if (!confirm('Reset the paper wallet and erase positions, trade history, frames, and session replays?')) return;
-  const stored = await chrome.storage.local.get(['pt_settings']);
+  const stored = await chrome.storage.local.get(['pt_settings', 'pt_state']);
   const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+  // Inherit the current seq: a reset written at seq 0 looks OLDER than the
+  // state a still-open trading tab holds, and its next heartbeat write
+  // resurrects the pre-reset wallet.
+  const baseSeq = (stored.pt_state && Number(stored.pt_state.seq)) || 0;
+  const fresh = freshState(settings);
+  fresh.seq = baseSeq + 1;
   await chrome.storage.local.set({
-    pt_state: freshState(settings),
+    pt_state: fresh,
     pt_frames: [],
     pt_replays: [],
   });

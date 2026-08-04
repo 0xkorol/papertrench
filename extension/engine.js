@@ -886,8 +886,14 @@
   }
 
   /** Reset everything back to a fresh wallet with the given settings. */
-  function resetState(settings) {
-    return defaultState(settings);
+  function resetState(settings, baseSeq = 0) {
+    const fresh = defaultState(settings);
+    // A reset that starts back at seq 0 is OLDER than every state a running
+    // tab still holds, so that tab's next heartbeat mark clobbers the reset
+    // and the old wallet reappears — the reported "reset restores old data"
+    // bug. The fresh state must be strictly newer than anything in flight.
+    fresh.seq = (Number(baseSeq) || 0) + 1;
+    return fresh;
   }
 
   /* ---------------- misc ---------------- */

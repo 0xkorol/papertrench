@@ -580,3 +580,23 @@ test('popup backup/restore protects the wallet across reinstalls', () => {
   assert.match(popupHtml, /id="restore"/, 'the restore button must exist in the popup');
   assert.match(popupHtml, /type="file"/, 'restore needs a file picker');
 });
+
+test('fill errors reach the trader — withState no longer swallows them', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  // The reported defect: buy/sell buttons did nothing and showed no toast
+  // when a fill failed (insufficient balance, token changed, storage error).
+  // Root cause: withState returned the CAUGHT chain, so the throw never
+  // reached the catch that toasts. The chain itself stays resilient, but the
+  // caller must receive the real result or error.
+  const fn = contentSrc.slice(
+    contentSrc.indexOf('function withState('),
+    contentSrc.indexOf('async function reloadState'));
+  assert.ok(fn.length > 0, 'withState must be locatable');
+  assert.doesNotMatch(fn, /mutationChain;\s*$/, 'must not return the caught chain directly');
+  assert.match(fn, /return run/, 'the caller must get the un-caught promise');
+
+  // And the buy/sell toasts must still be wired to that error.
+  assert.match(contentSrc, /toast\(err\.message \|\| 'Buy failed'\)/);
+  assert.match(contentSrc, /toast\(err\.message \|\| 'Sell failed'\)/);
+});

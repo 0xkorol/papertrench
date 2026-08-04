@@ -1049,8 +1049,14 @@
 
   let mutationChain = Promise.resolve();
   function withState(fn) {
-    mutationChain = mutationChain.then(async () => { await reloadState(); return fn(); }).catch(() => {});
-    return mutationChain;
+    const run = mutationChain.then(async () => { await reloadState(); return fn(); });
+    // Keep the chain itself resilient so one failed mutation never poisons
+    // every later one — but hand the caller the REAL result or error. The old
+    // `.catch(() => {})` on the returned promise swallowed fill failures
+    // (insufficient balance, token changed, storage error) so the buy/sell
+    // button did nothing with no toast. Errors must surface to the trader.
+    mutationChain = run.catch(() => {});
+    return run;
   }
 
   async function reloadState() {
@@ -2310,7 +2316,9 @@
     shadow.getElementById('pt-settings').addEventListener('click', openDashboard);
     shadow.getElementById('pt-reset').addEventListener('click', async () => {
       if (!confirm(`Reset paper wallet to ${settings.balanceStartSol} SOL? All history is wiped.`)) return;
-      await withState(async () => { state = E.resetState(settings); await persistStateNow(); });
+      // Inherit the current seq: a reset written at seq 0 would be overtaken
+      // by any tab still holding the pre-reset wallet (see engine.resetState).
+      await withState(async () => { state = E.resetState(settings, state.seq); await persistStateNow(); });
       syncAveragePriceLines();
       renderAll(); toast('Paper wallet reset');
     });
@@ -2739,10 +2747,15 @@
         targetPct: Number(targetInput.value) || null,
         stopPct: Number(stopInput.value) || null,
       };
-      await withState(async () => {
-        E.setThesis(state, token.mint, payload, Date.now());
-        await persistStateNow();
-      });
+      try {
+        await withState(async () => {
+          E.setThesis(state, token.mint, payload, Date.now());
+          await persistStateNow();
+        });
+      } catch (err) {
+        toast((err && err.message) || 'Could not save the thesis');
+        return;
+      }
       thesisEditing = false;
       thesisEls = null;
       renderThesis();

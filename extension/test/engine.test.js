@@ -483,3 +483,28 @@ test('revision 6 persists the positions bar collapse state', () => {
   const merged = E.mergeSettings(collapsed);
   assert.equal(merged.positionsBarHidden, true);
 });
+
+/* ---------------- reset must outrun in-flight writers ----------------
+ *
+ * Reported defect: after a reset, the old wallet reappeared. Root cause: the
+ * reset wrote seq 0, and any still-open trading tab holding the pre-reset
+ * state (seq N > 0) saw storage as NOT newer, so its next heartbeat mark
+ * clobbered the reset and resurrected the old wallet.
+ */
+test('resetState inherits the write counter so the reset wins the race', () => {
+  const settings = freshSettings({ balanceStartSol: 10 });
+
+  // A tab mid-session has written the wallet 50 times.
+  const inFlightSeq = 50;
+  const fresh = E.resetState(settings, inFlightSeq);
+
+  assert.ok(fresh.seq > inFlightSeq,
+    'the reset state must be strictly newer than anything a running tab holds');
+  assert.equal(fresh.cashSol, settings.balanceStartSol, 'the reset is still a fresh wallet');
+  assert.equal(Object.keys(fresh.positions).length, 0);
+});
+
+test('a reset with no known prior state starts just above zero', () => {
+  const fresh = E.resetState(freshSettings());
+  assert.ok(fresh.seq >= 1, 'even a first-ever reset must not sit at seq 0');
+});

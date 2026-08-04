@@ -159,6 +159,12 @@ async function saveSettings() {
 }
 
 async function saveState() {
+  // Bump the write counter: every writer must advance seq, or a lagging
+  // content tab (which only adopts when storage's seq is strictly greater)
+  // can clobber this write with a stale copy — e.g. a note silently vanishing
+  // under the next heartbeat mark.
+  state.seq = (Number(state.seq) || 0) + 1;
+  state.updatedAt = Date.now();
   await store.set({ pt_state: state });
 }
 
@@ -1993,10 +1999,15 @@ function bindSettings() {
   }
   document.getElementById('reset-all').addEventListener('click', async () => {
     if (!confirm('Wipe all paper positions, trades, round trips, screenshots, and session replays?')) return;
-    state = E.resetState(settings);
+    // Inherit the current seq so a still-open trading tab (holding the
+    // pre-reset wallet at a higher seq) adopts the reset instead of
+    // resurrecting the old state with its next heartbeat write.
+    state = E.resetState(settings, state.seq);
     replays = [];
     frames = [];
     stopReplayPlayback();
+    state.seq = (Number(state.seq) || 0) + 1;
+    state.updatedAt = Date.now();
     await store.set({ pt_state: state, pt_frames: [], [RP.STORAGE_KEY]: [] });
     chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
     renderSidebar();
