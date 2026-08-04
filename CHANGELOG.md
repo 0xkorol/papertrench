@@ -3,6 +3,25 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.12 — 2026-08-04
+
+Community report round three, both points addressed.
+
+- **Average fill price is now honest on fresh launches.** The "Avg. Fill
+  Price" line used to be computed only from the fills that happened to record
+  a USD price. On a fresh launch the first ticks often pre-date the USD feed,
+  so those fills carried no USD — and the displayed average quietly covered a
+  subset of your fills (say 1 of 3 buys). Now: when the USD set is
+  incomplete, the overlay derives the USD average from the *complete*
+  SOL-denominated average at the live SOL/USD rate, so the line always covers
+  every fill. When every fill recorded USD, the recorded average is used
+  directly, as before.
+- **Quick-buy (QB) settings found at last.** The five QB toggles existed but
+  were buried mid-list inside "Wallet & Trading" — a user looking for "the QB
+  toggle" couldn't find them. They now live in their own settings card titled
+  **Quick-buy (QB)**: presets, one-click buy, screener chips, chip size, and
+  the trade-tab buy section.
+
 ## v1.2.11 — 2026-08-04
 
 Fixes GitHub issue #17 — a user's sell options disappeared mid-session.
