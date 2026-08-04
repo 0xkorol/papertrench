@@ -3,6 +3,14 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.13 — 2026-08-04
+
+- **The panel now remembers its place.** Drag the PaperTrench panel anywhere
+  you like — the position is saved and restored on every refresh, new tab,
+  and every supported site. Previously each page load snapped it back to the
+  top-right corner. If a saved position would land off-screen on a smaller
+  window, it's clamped back so the panel always stays grabbable.
+
 ## v1.2.12 — 2026-08-04
 
 Community report round three, both points addressed.
