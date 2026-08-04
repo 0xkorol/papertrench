@@ -3,6 +3,23 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.9 — 2026-08-03
+
+The "updating shouldn't erase you" release. Unpacked extensions tie their data
+to the install folder, so a fresh unzip into a new folder looked like a brand
+new wallet. Two fixes for that, plus the groundwork for a proper fix.
+
+- **Backup & Restore in the popup.** One click downloads your whole wallet —
+  positions, rounds, history, settings, frames, replays — as a single JSON
+  file. Restore validates the file and confirms before overwriting anything.
+  Moved folders, reinstalled, or switched machines? Two clicks and you're back.
+- **The site now teaches same-folder updates.** Unzip the new release *over the
+  folder you already loaded*, hit Reload, and your data survives. A new folder
+  starts a blank wallet — now spelled out on the install page.
+
+Coming next: Chrome Web Store listing, which makes updates automatic and this
+whole class of problem disappear.
+
 ## v1.2.8 — 2026-08-03
 
 The security patch. A sharp-eyed user reported three privacy/safety bugs; all
