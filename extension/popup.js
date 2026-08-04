@@ -14,6 +14,9 @@ function $(id) { return document.getElementById(id); }
 $('dash').addEventListener('click', () => chrome.runtime.openOptionsPage());
 $('toggle').addEventListener('click', toggleOverlay);
 $('reset').addEventListener('click', resetWallet);
+$('backup').addEventListener('click', backupWallet);
+$('restore').addEventListener('click', () => $('restoreFile').click());
+$('restoreFile').addEventListener('change', restoreWallet);
 
 function fmt(n, dp = 4) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
@@ -129,6 +132,63 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
+}
+
+/* ------------------------- backup / restore -------------------------
+ * Unpacked extensions key their data by install folder. Re-downloading a
+ * release into a NEW folder therefore looks like a fresh install and the
+ * wallet disappears. Backup/Restore makes that a two-click recovery: the
+ * snapshot carries every storage key, versioned so future formats can be
+ * migrated on import.
+ */
+const BACKUP_KEYS = ['pt_state', 'pt_settings', 'pt_frames', 'pt_replays'];
+
+async function backupWallet() {
+  const stored = await chrome.storage.local.get(BACKUP_KEYS);
+  const backup = {
+    app: 'papertrench-backup',
+    format: 1,
+    exportedAt: new Date().toISOString(),
+    data: stored,
+  };
+  const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `papertrench-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  $('status').textContent = 'Backup downloaded — keep the file somewhere safe.';
+}
+
+async function restoreWallet(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = ''; // allow re-selecting the same file later
+  if (!file) return;
+  let backup;
+  try {
+    backup = JSON.parse(await file.text());
+  } catch (_) {
+    $('status').textContent = 'That file is not valid JSON.';
+    return;
+  }
+  // Accept both the versioned envelope and a bare {pt_state, ...} snapshot,
+  // but refuse anything that does not look like our own export.
+  const data = backup && backup.app === 'papertrench-backup' ? backup.data : backup;
+  if (!data || typeof data !== 'object' || !data.pt_state || typeof data.pt_state !== 'object') {
+    $('status').textContent = 'Not a PaperTrench backup — nothing was restored.';
+    return;
+  }
+  const rounds = Array.isArray(data.pt_state.rounds) ? data.pt_state.rounds.length : 0;
+  if (!confirm(`Restore this backup? It replaces your current wallet (${rounds} closed rounds in the backup).`)) return;
+  const write = {};
+  for (const key of BACKUP_KEYS) if (data[key] !== undefined) write[key] = data[key];
+  await chrome.storage.local.set(write);
+  chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  $('status').textContent = 'Backup restored.';
+  load();
 }
 
 load();

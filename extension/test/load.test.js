@@ -558,3 +558,25 @@ test('the attest chain is never truncated', () => {
   assert.doesNotMatch(commit, /splice\(0,/,
     'no head-splice of any kind may remain in the commit path');
 });
+
+test('popup backup/restore protects the wallet across reinstalls', () => {
+  const popupJs = fs.readFileSync(path.join(ROOT, 'popup.js'), 'utf8');
+  const popupHtml = fs.readFileSync(path.join(ROOT, 'popup.html'), 'utf8');
+
+  // The backup must carry every storage key, or a restore silently drops data.
+  for (const key of ['pt_state', 'pt_settings', 'pt_frames', 'pt_replays']) {
+    assert.ok(popupJs.includes(key), `BACKUP_KEYS must include ${key}`);
+  }
+  assert.match(popupJs, /app: 'papertrench-backup'/,
+    'the export envelope must be identifiable');
+  assert.match(popupJs, /format: 1/, 'the envelope must be versioned for future migrations');
+
+  // Restore must validate before writing — a foreign JSON must never clobber
+  // the wallet.
+  assert.match(popupJs, /data\.pt_state/, 'restore must check pt_state exists before writing');
+  assert.match(popupJs, /confirm\(/, 'restore is destructive — it must ask first');
+
+  assert.match(popupHtml, /id="backup"/, 'the backup button must exist in the popup');
+  assert.match(popupHtml, /id="restore"/, 'the restore button must exist in the popup');
+  assert.match(popupHtml, /type="file"/, 'restore needs a file picker');
+});
