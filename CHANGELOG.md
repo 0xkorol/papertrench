@@ -3,6 +3,21 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.11 — 2026-08-04
+
+Fixes GitHub issue #17 — a user's sell options disappeared mid-session.
+
+- **Sell options no longer vanish on vault-style pools.** Constant-product
+  vault tokens were priced from a description that never carried the token's
+  decimals, so the first live vault update crashed the price handler. That
+  crash killed the whole live-price stream, and without prices the sell
+  buttons had nothing to quote against. Vault tokens now carry full decimals
+  (token + wrapped SOL) before they're ever watched.
+- **The live-price stream can no longer die from a single bad frame.** The
+  socket handler is now crash-isolated: a malformed or hostile update is
+  dropped and the feed keeps streaming. One weird token can't take down
+  everyone's prices anymore.
+
 ## v1.2.10 — 2026-08-03
 
 Second community bug report, second full audit — this one found three real
