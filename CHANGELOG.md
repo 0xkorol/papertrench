@@ -3,6 +3,27 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.10 — 2026-08-03
+
+Second community bug report, second full audit — this one found three real
+bugs, all now fixed and locked in with regression tests.
+
+- **Reset no longer brings the old wallet back.** Resetting from the popup or
+  dashboard wrote the fresh wallet at write-counter zero, so a still-open
+  trading tab (holding the pre-reset wallet at a higher counter) overwrote it
+  with its next heartbeat and resurrected your old positions. Resets now
+  inherit the current counter and land strictly ahead of every open tab.
+- **Buy and sell failures finally say so.** A mutation helper swallowed its
+  own errors, so a rejected fill — insufficient balance, token changed mid-fill,
+  a storage hiccup — left the button doing nothing with no message. Errors now
+  reach the toast that reports them.
+- **Dashboard writes can no longer be clobbered by a lagging tab.** Notes and
+  AI reviews written from the dashboard now advance the write counter, so a
+  slow price-mark from an open tab can't silently erase them.
+
+Prices were checked too: the on-chain feed's stale-slot guard and 2.5s
+freshness window are intact and were already covered by tests.
+
 ## v1.2.9 — 2026-08-03
 
 The "updating shouldn't erase you" release. Unpacked extensions tie their data
