@@ -508,3 +508,47 @@ test('a reset with no known prior state starts just above zero', () => {
   const fresh = E.resetState(freshSettings());
   assert.ok(fresh.seq >= 1, 'even a first-ever reset must not sit at seq 0');
 });
+
+/* ---------------- reported: avg fills not accurate ----------------
+ *
+ * The USD average used to weight only the fills that happened to record a
+ * USD price. Fresh-launch fills often pre-date the USD tick (priceUsd: null),
+ * so the displayed "Avg. Fill Price" covered a SUBSET of the real fills —
+ * e.g. 1 of 3 buys. The honest answer when the USD set is incomplete is
+ * null, and content.js already derives USD from the complete native average
+ * at the live SOL/USD rate in that case.
+ */
+test('the USD average refuses to cover only the fills that recorded USD', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 0, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  // Three buys: the first two pre-date the USD tick (fresh launch), the
+  // third has it. A partial-coverage USD average would be the bug.
+  E.buy(state, settings, { ts: t0, mint: 'MintB', symbol: 'Y', priceNative: 0.001, priceUsd: null, solAmount: 1 });
+  E.buy(state, settings, { ts: t0 + 1000, mint: 'MintB', symbol: 'Y', priceNative: 0.002, priceUsd: null, solAmount: 1 });
+  E.buy(state, settings, { ts: t0 + 2000, mint: 'MintB', symbol: 'Y', priceNative: 0.004, priceUsd: 0.80, solAmount: 1 });
+
+  const averages = E.averageFillPrices(state, 'MintB');
+
+  assert.equal(averages.avgBuyUsd, null,
+    'an incomplete USD set must yield null, never a subset-weighted number');
+  // The native average must still cover ALL three fills, quantity-weighted.
+  const fills = state.journal.filter((t) => t.mint === 'MintB' && t.side === 'buy');
+  const qty = fills.reduce((s, t) => s + t.qty, 0);
+  const native = fills.reduce((s, t) => s + t.qty * t.priceNative, 0) / qty;
+  assert.ok(Math.abs(averages.avgBuyNative - native) < CLOSE,
+    'the native average is the ground truth and must cover every fill');
+});
+
+test('the USD average is used directly when every fill recorded USD', () => {
+  const settings = freshSettings({ balanceStartSol: 10, feeBps: 0, slippageBps: 0 });
+  const state = E.defaultState(settings);
+  const t0 = Date.now();
+
+  E.buy(state, settings, { ts: t0, mint: 'MintC', symbol: 'Z', priceNative: 0.001, priceUsd: 0.20, solAmount: 1 });
+  E.buy(state, settings, { ts: t0 + 1000, mint: 'MintC', symbol: 'Z', priceNative: 0.002, priceUsd: 0.40, solAmount: 1 });
+
+  const averages = E.averageFillPrices(state, 'MintC');
+  assert.ok(averages.avgBuyUsd > 0, 'complete USD coverage keeps the recorded USD average');
+});

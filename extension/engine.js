@@ -792,6 +792,8 @@
     if (position) {
       fills = journal.filter((t) => t.mint === mint && Number(t.ts) >= Number(position.openedAt));
     } else {
+      // Rounds are stored newest-first (unshift), so .find() over the raw
+      // array already returns the most recent round for this mint.
       const round = (state.rounds || []).find((r) => r.mint === mint);
       if (!round) return null;
       const ids = new Set(round.tradeIds || []);
@@ -812,15 +814,28 @@
       return quantity > 0 ? value / quantity : null;
     }
 
+    function weightedUsd(side) {
+      // A USD average is only honest if EVERY fill on that side recorded a
+      // USD price. Fresh-launch fills often pre-date the USD tick and carry
+      // priceUsd: null; weighting only the fills that happened to have USD
+      // silently changes which fills the "average" covers — the reported
+      // "avg fills not accurate". When the set is incomplete return null and
+      // let the caller derive USD from the complete native average.
+      const sideFills = fills.filter((fill) => fill.side === side && Number(fill.qty) > 0);
+      if (!sideFills.length) return null;
+      if (!sideFills.every((fill) => Number(fill.priceUsd) > 0)) return null;
+      return weighted(side, 'priceUsd');
+    }
+
     const buyQty = fills.filter((t) => t.side === 'buy').reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
     const sellQty = fills.filter((t) => t.side === 'sell').reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
     if (!(buyQty > 0) && !(sellQty > 0)) return null;
 
     return {
       avgBuyNative: weighted('buy', 'priceNative'),
-      avgBuyUsd: weighted('buy', 'priceUsd'),
+      avgBuyUsd: weightedUsd('buy'),
       avgSellNative: weighted('sell', 'priceNative'),
-      avgSellUsd: weighted('sell', 'priceUsd'),
+      avgSellUsd: weightedUsd('sell'),
       buyQty,
       sellQty,
       fillCount: fills.length,
