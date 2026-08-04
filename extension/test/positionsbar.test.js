@@ -282,9 +282,14 @@ function runOverlayBar(positions, opts) {
   };
 
   const url = options.url || 'https://example.com/browse';
+  const parsedUrl = new URL(url);
+  const winListeners = {};
   const win = {
-    addEventListener: () => {}, removeEventListener: () => {}, postMessage: () => {},
-    location: { href: url, hostname: new URL(url).hostname, pathname: new URL(url).pathname, search: '' },
+    // Recorded, not no-op: tests forge window events (bridge messages,
+    // gestures) exactly the way a page's own scripts would.
+    addEventListener: (type, fn) => { (winListeners[type] = winListeners[type] || []).push(fn); },
+    removeEventListener: () => {}, postMessage: () => {},
+    location: { href: url, origin: parsedUrl.origin, hostname: parsedUrl.hostname, pathname: parsedUrl.pathname, search: '' },
     getComputedStyle: () => ({ right: '18px', top: '84px' }),
     confirm: () => false,
   };
@@ -326,8 +331,13 @@ function runOverlayBar(positions, opts) {
         getURL: (p) => 'chrome-extension://x/' + p,
         sendMessage: (msg) => {
           const R = win.PaperTrenchResolver;
+          if (msg.type === 'pt_resolve') {
+            // The test's stand-in for the background resolver: it decides
+            // whether an address prices, exactly like pt_resolve in production.
+            const data = options.resolve && options.resolve[msg.address];
+            return Promise.resolve(data || null);
+          }
           if (!R) return Promise.resolve({});
-          if (msg.type === 'pt_resolve') return R.resolve(msg.address);
           if (msg.type === 'pt_refresh') return R.refresh(msg.token);
           if (msg.type === 'pt_sol_usd') return R.solUsd();
           if (msg.type === 'pt_batch_prices') return R.batchPrices(msg.mints);
@@ -387,6 +397,16 @@ function runOverlayBar(positions, opts) {
     writeState: (next) => sandbox.chrome.storage.local.set({ pt_state: JSON.parse(JSON.stringify(next)) }),
     // Settings the content script has saved right now (its own writes land here).
     settings: () => storage.pt_settings,
+    // Wallet state as stored (positions, rounds, attest chain).
+    state: () => storage.pt_state,
+    // Deliver any window event to the content script's own listeners — the
+    // same channel a malicious page uses to forge bridge traffic.
+    fireWindow: (type, ev) => (winListeners[type] || []).forEach((fn) => fn(ev)),
+    // Forge a window.postMessage the way page scripts do. Defaults to the
+    // page's own origin; pass a foreign one to simulate cross-origin posts.
+    fireBridgeMessage: (data, origin) => (winListeners['message'] || []).forEach((fn) => fn({
+      source: win, origin: origin === undefined ? parsedUrl.origin : origin, data,
+    })),
     // Publish settings the way another tab or the dashboard would.
     writeSettings: (next) => sandbox.chrome.storage.local.set({ pt_settings: JSON.parse(JSON.stringify(next)) }),
     bar: () => nodesById['pt-bar'],
@@ -612,4 +632,119 @@ test('the P&L row is given its own full-width line so the USD value is not clipp
     'the P&L must be allowed to wrap rather than be truncated');
   assert.doesNotMatch(rule[1], /text-overflow:\s*ellipsis/,
     'the P&L value must never be ellipsised — it is the number being watched');
+});
+
+/* ---------------- a website must never be able to trigger a trade ----------------
+ *
+ * Reported defect: bridge messages are plain postMessage calls, and any script
+ * on the page can forge { source:'papertrench-bridge', type:'row-buy' }. Before
+ * the fix the content script honoured that and ran a fill with no user input.
+ * A fill is now only allowed inside a window that began with a genuine,
+ * trusted user gesture.
+ */
+
+const ROW_BUY_ADDR = BONK;
+
+function rowBuyForge(address) {
+  return { source: 'papertrench-bridge', type: 'row-buy', payload: { address: address || ROW_BUY_ADDR } };
+}
+
+function pricedResolve() {
+  return {
+    [ROW_BUY_ADDR]: {
+      mint: ROW_BUY_ADDR, symbol: 'BONK', name: 'Bonk',
+      priceNative: 0.000001, priceUsd: 0.0002, mcap: 1e6,
+    },
+  };
+}
+
+function openPositionCount(ov) {
+  // A null state means no fill ever wrote the wallet — i.e. zero positions.
+  const st = ov.state();
+  return st ? Object.keys(st.positions || {}).length : 0;
+}
+
+test('a genuine tap still fills: trusted gesture + bridge row-buy opens the position', async () => {
+  const ov = runOverlayBar(null, {
+    url: 'https://axiom.trade/pulse',
+    state: null,
+    resolve: pricedResolve(),
+  });
+
+  await ov.advance(1200);
+  // The user really taps the chip: the OS delivers a trusted pointerdown.
+  ov.fireWindow('pointerdown', { isTrusted: true });
+  ov.fireBridgeMessage(rowBuyForge());
+  await ov.advance(1200);
+
+  assert.equal(openPositionCount(ov), 1,
+    'a real gesture followed by the chip tap must still fill — the fix must not break buying');
+});
+
+test('a website posting row-buy with no gesture gets nothing', async () => {
+  const ov = runOverlayBar(null, {
+    url: 'https://axiom.trade/pulse',
+    state: null,
+    resolve: pricedResolve(),
+  });
+
+  await ov.advance(1200);
+  // No gesture of any kind — a silent script-driven forge.
+  ov.fireBridgeMessage(rowBuyForge());
+  await ov.advance(1200);
+
+  assert.equal(openPositionCount(ov), 0,
+    'a forged row-buy without a user gesture must not open a position');
+});
+
+test('a synthetic (script-dispatched) gesture does not count as a gesture', async () => {
+  const ov = runOverlayBar(null, {
+    url: 'https://axiom.trade/pulse',
+    state: null,
+    resolve: pricedResolve(),
+  });
+
+  await ov.advance(1200);
+  // Page scripts can dispatchEvent a pointerdown, but it arrives untrusted.
+  ov.fireWindow('pointerdown', { isTrusted: false });
+  ov.fireBridgeMessage(rowBuyForge());
+  await ov.advance(1200);
+
+  assert.equal(openPositionCount(ov), 0,
+    'an isTrusted=false gesture must not arm the trade window');
+});
+
+test('a trusted gesture is only valid inside the trade window', async () => {
+  const ov = runOverlayBar(null, {
+    url: 'https://axiom.trade/pulse',
+    state: null,
+    resolve: pricedResolve(),
+  });
+
+  await ov.advance(1200);
+  ov.fireWindow('pointerdown', { isTrusted: true });
+  // The user taps something else and walks away; far later a script forges.
+  await ov.advance(30_000);
+  ov.fireBridgeMessage(rowBuyForge());
+  await ov.advance(1200);
+
+  assert.equal(openPositionCount(ov), 0,
+    'a gesture must expire — a stale tap cannot authorise a later forged fill');
+});
+
+test('a cross-origin postMessage is never read as bridge traffic', async () => {
+  const ov = runOverlayBar(null, {
+    url: 'https://axiom.trade/pulse',
+    state: null,
+    resolve: pricedResolve(),
+  });
+
+  await ov.advance(1200);
+  ov.fireWindow('pointerdown', { isTrusted: true });
+  // An iframe from another origin posts the same payload.
+  ov.fireBridgeMessage(rowBuyForge(), 'https://evil.example');
+  await ov.advance(1200);
+
+  assert.equal(openPositionCount(ov), 0,
+    'a message from a foreign origin must be dropped before any trade logic runs');
 });

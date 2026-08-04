@@ -48,6 +48,7 @@ const FRAME_CAP = 80;
 const FRAME_INTERVAL_MS = 30_000;
 let frameInterval = null;
 let recActive = false;
+let lastTradeTabId = null;
 let replayMutation = Promise.resolve();
 
 const OLD_LOCAL_AI_ENDPOINT = 'http://127.0.0.1:8765/v1';
@@ -164,12 +165,18 @@ function broadcastRecStatus() {
 
 /* -------------------- frame snapshots -------------------- */
 
-async function snapFrame(kind, sessionValue) {
+async function snapFrame(kind, sessionValue, tabId) {
   const settings = await getSettings();
   if (!settings.framesEnabled) return;
   const session = sessionValue ? RP.normalizeSession(sessionValue) : null;
+  // Never photograph whichever window happens to be focused. A frame is only
+  // honest when it shows the tab that actually traded, so we capture that
+  // tab's own window — and when the tab is gone or hidden, there is no
+  // truthful frame, so we skip instead of grabbing some unrelated screen.
+  const target = await resolveFrameTab(tabId);
+  if (!target) return;
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: 'jpeg', quality: 45 });
+    const dataUrl = await chrome.tabs.captureVisibleTab(target.windowId, { format: 'jpeg', quality: 45 });
     const small = await downscaleDataUrl(dataUrl, 480);
     const { pt_frames = [] } = await chrome.storage.local.get(['pt_frames']);
     pt_frames.push({
@@ -186,6 +193,18 @@ async function snapFrame(kind, sessionValue) {
   } catch (error) {
     console.warn('frame capture failed:', error.message);
   }
+}
+
+/** Resolve the tab a frame should depict: the one that traded, if it still
+ * exists and is the visible tab of its window. Anything else is a lie about
+ * what was on screen, so it resolves to nothing. */
+async function resolveFrameTab(tabId) {
+  const id = Number(tabId || lastTradeTabId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  let tab = null;
+  try { tab = await chrome.tabs.get(id); } catch (_) { tab = null; }
+  if (!tab || !tab.active) return null;
+  return tab;
 }
 
 async function downscaleDataUrl(dataUrl, width) {
@@ -462,8 +481,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       case 'pt_trade_event': {
         const session = RP.normalizeSession(message.session || message.round || {});
+        if (sender.tab && sender.tab.id) lastTradeTabId = sender.tab.id;
         if (message.opened && settings.recordingEnabled) await startRecording(sender.tab?.id, session.symbol);
-        await snapFrame(message.kind || message.trade?.side || 'fill', session);
+        await snapFrame(message.kind || message.trade?.side || 'fill', session, sender.tab?.id);
         if (message.round && settings.recordingEnabled) await stopRecording(message.round.id);
         await recordReplay(session, message.round || null);
         await refreshFrameInterval();
@@ -483,7 +503,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           openedAt: Date.now(),
         });
         if (settings.recordingEnabled) await startRecording(sender.tab?.id, session.symbol);
-        await snapFrame('buy', session);
+        await snapFrame('buy', session, sender.tab?.id);
         await recordReplay(session);
         await refreshFrameInterval();
         sendResponse({ ok: true });
@@ -493,7 +513,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'pt_round_closed': {
         const session = RP.normalizeSession(message.session || message.round || {});
         if (settings.recordingEnabled) await stopRecording(message.round?.id);
-        await snapFrame('sell', session);
+        await snapFrame('sell', session, sender.tab?.id);
         await recordReplay(session, message.round || null);
         await refreshFrameInterval();
         if (settings.autoReview && message.round?.id) autoReview(message.round.id).catch(() => {});
@@ -502,7 +522,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'pt_snap_frame': {
-        await snapFrame(message.kind || 'fill', message.session || message);
+        await snapFrame(message.kind || 'fill', message.session || message, sender.tab?.id);
         await refreshFrameInterval();
         sendResponse({ ok: true });
         break;

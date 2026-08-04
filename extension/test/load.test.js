@@ -538,3 +538,23 @@ test('hiding the positions bar is a saved setting, not a per-page flag', () => {
   assert.equal(reads.length, 2,
     'both the boot path and the storage watcher must restore the saved state');
 });
+
+test('the attest chain is never truncated', () => {
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const start = contentSrc.indexOf('async function commitFill');
+  const end = contentSrc.indexOf('/* -------------------- screener row quick buys');
+  assert.ok(start !== -1 && end > start, 'commitFill must be locatable');
+  const commit = contentSrc.slice(start, end);
+
+  // Reported defect: a 5000-link cap silently spliced the head off the chain.
+  // verifyChain re-verifies from GENESIS and replayChain needs every fill, so
+  // truncation made verification fail and derived P&L wrong for heavy traders
+  // with nothing actually tampered. The chain must grow without bound — the
+  // manifest grants unlimitedStorage, so retention is safe.
+  assert.doesNotMatch(commit, /chain\.length\s*>\s*5000/,
+    'the 5000-link cap is what broke verifyChain and replayChain');
+  assert.doesNotMatch(commit, /splice\(0,\s*chain\.length/,
+    'dropping the head of the chain loses the GENESIS anchor');
+  assert.doesNotMatch(commit, /splice\(0,/,
+    'no head-splice of any kind may remain in the commit path');
+});

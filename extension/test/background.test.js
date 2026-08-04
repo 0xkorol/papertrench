@@ -18,6 +18,7 @@ function serviceWorker() {
   };
   let messageListener = null;
   const fetchCalls = [];
+  const captureCalls = [];
   const get = (keys, callback) => {
     const names = Array.isArray(keys) ? keys : Object.keys(keys || {});
     const result = {};
@@ -102,7 +103,18 @@ function serviceWorker() {
       tabs: {
         query: (query, callback) => callback([]),
         sendMessage: async () => ({}),
-        captureVisibleTab: async () => 'data:image/jpeg;base64,',
+        // Records WHICH window is asked for: the whole point of the
+        // wrong-tab-screenshot fix is that this argument decides what gets
+        // photographed.
+        captureVisibleTab: async (windowId) => {
+          captureCalls.push(windowId);
+          return 'data:image/jpeg;base64,';
+        },
+        get: async (id) => {
+          const tab = values.tabsById && values.tabsById[id];
+          if (!tab) throw new Error('no tab ' + id);
+          return tab;
+        },
       },
       offscreen: {
         hasDocument: async () => false,
@@ -124,7 +136,7 @@ function serviceWorker() {
     }
   };
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8'), context, { filename: 'background.js' });
-  return { values, fetchCalls, get listener() { return messageListener; }, get isAllowedEndpoint() { return context.isAllowedEndpoint; } };
+  return { values, fetchCalls, captureCalls, get listener() { return messageListener; }, get isAllowedEndpoint() { return context.isAllowedEndpoint; } };
 }
 
 function send(listener, message) {
@@ -297,5 +309,55 @@ test('a blank endpoint keeps the coach off: chat errors, models return empty, no
   assert.equal(models.models.length, 0, 'no endpoint means no models, silently');
   assert.equal(worker.fetchCalls.length, 0,
     'an empty endpoint must never reach the network — it is the coach being off');
+});
+
+/* -------------------- frame snapshots: right tab only -------------------- */
+
+function fillEvent(sessionId) {
+  const ts = 1_800_000_000_000;
+  return {
+    type: 'pt_trade_event', kind: 'buy', opened: true,
+    session: { sessionId, mint: MINT, symbol: 'BONK', name: 'Bonk', site: 'padre', openedAt: ts },
+    trade: { id: 't1', sessionId, ts, side: 'buy' },
+  };
+}
+
+test('a fill snapshot photographs the trading tab’s own window, not the focused one', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_settings = Object.assign({}, worker.values.pt_settings,
+    { framesEnabled: true, recordingEnabled: false });
+  // The trading tab is id 1 (that is what sender.tab.id reports), active in
+  // window 3. Whatever window the user is actually looking at is irrelevant.
+  worker.values.tabsById = { 1: { id: 1, active: true, windowId: 3 } };
+
+  await send(worker.listener, fillEvent('pts-frame-window'));
+
+  assert.deepEqual(worker.captureCalls, [3],
+    'captureVisibleTab must be asked for the trading tab’s window (3), never the focused window');
+});
+
+test('when the trading tab is hidden there is no honest frame, so none is captured', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_settings = Object.assign({}, worker.values.pt_settings,
+    { framesEnabled: true, recordingEnabled: false });
+  // The tab that traded is no longer the visible tab of its window.
+  worker.values.tabsById = { 1: { id: 1, active: false, windowId: 3 } };
+
+  await send(worker.listener, fillEvent('pts-frame-hidden'));
+
+  assert.deepEqual(worker.captureCalls, [],
+    'a hidden trading tab must skip the frame instead of photographing some other screen');
+});
+
+test('a closed trading tab yields no frame either', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_settings = Object.assign({}, worker.values.pt_settings,
+    { framesEnabled: true, recordingEnabled: false });
+  worker.values.tabsById = {}; // tab 1 no longer exists
+
+  await send(worker.listener, fillEvent('pts-frame-closed'));
+
+  assert.deepEqual(worker.captureCalls, [],
+    'a vanished tab cannot be depicted; the frame must be skipped, not guessed');
 });
 

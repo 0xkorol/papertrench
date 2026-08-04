@@ -235,14 +235,36 @@
   let lastMarkerStatus = null;
   let lastLineStatus = null;
 
+  /* A website must never be able to trade on its own. Bridge messages are
+   * plain postMessage calls, and the page's own scripts can forge anything
+   * the MAIN-world bridge emits. A trade-bearing message therefore requires
+   * a recent, genuine user gesture — an isTrusted OS event — which page
+   * scripts cannot fabricate. */
+  const TRADE_GESTURE_WINDOW_MS = 5000;
+  let lastGestureAt = 0;
+  // isTrusted is the whole point: page scripts can dispatch synthetic
+  // pointerdown events, but those always carry isTrusted=false, so only a
+  // real OS gesture updates the window.
+  const noteGesture = (ev) => { if (ev && ev.isTrusted) lastGestureAt = Date.now(); };
+  window.addEventListener('pointerdown', noteGesture, true);
+  window.addEventListener('keydown', noteGesture, true);
+
   function onBridgeMessage(event) {
+    // Same-origin only: foreign-origin and cross-window forges never read
+    // as bridge traffic, whatever tag they paste on themselves.
     if (event.source !== window || !event.data || event.data.source !== 'papertrench-bridge') return;
+    if (event.origin && event.origin !== location.origin) return;
     const ev = event.data;
     if (ev.type === 'tick') { noteRowPrice(ev.payload); handlePageTick(ev.payload); }
     else if (ev.type === 'row-buy') {
       // A quick-buy chip injected by the MAIN-world bridge was tapped; the
       // fill pipeline itself lives here. The done-signal lets the bridge
-      // clear the chip's busy state.
+      // clear the chip's busy state. A website posting this message itself
+      // gets nothing: without a genuine recent gesture the fill is refused.
+      if (Date.now() - lastGestureAt > TRADE_GESTURE_WINDOW_MS) {
+        toast('Paper buy needs a real tap — websites cannot trigger fills');
+        return;
+      }
       if (ev.payload && ev.payload.address) {
         doRowBuy(ev.payload.address, null)
           .finally(() => sendPadreMarker('row-buy-done', null));
@@ -2791,8 +2813,13 @@
       const link = await AT.appendFill(previous, trade);
       link.seq = chain.length;
       chain.push(link);
-      // Bound the stored chain; the head hash still commits to all of it.
-      if (chain.length > 5000) chain.splice(0, chain.length - 5000);
+      // The chain is NEVER truncated. Dropping old links would break
+      // verifyChain (the first kept link no longer chains from GENESIS) and
+      // replayChain (derived P&L would silently drop early fills), so a heavy
+      // trader would see "Chain does not match local state" and a wrong
+      // derived number with nothing actually tampered. The manifest already
+      // grants unlimitedStorage; the chain is the product's evidence and must
+      // stay complete to stay honest.
       state.attestChain = chain;
       // The caller writes state once, after this returns. Writing here too
       // would mean two storage round trips per fill for no benefit.
