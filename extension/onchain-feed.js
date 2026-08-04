@@ -117,10 +117,17 @@
       return { kind, watch: poolAddress, decimals, mint };
     }
     // Constant product: the price lives in the two vaults, so those are what
-    // must be watched, not the pool header.
+    // must be watched, not the pool header. The decimals map is required to
+    // turn vault balances into a price — omitting it crashed priceFromEntry
+    // on the first vault update (issue #17: sell options disappeared because
+    // the dead price stream starved the overlay).
     const vaults = await findVaults(bytes, mint);
     if (!vaults) return null;
-    return { kind, watch: vaults.base, watchQuote: vaults.quote, vaults, mint };
+    // Both the token and WSOL decimals are needed to turn vault balances into
+    // a price — fetch them here so priceFromEntry never sees a gap.
+    const decimals = await mintDecimals([mint, O.WSOL_MINT]);
+    if (decimals[mint] == null || decimals[O.WSOL_MINT] == null) return null;
+    return { kind, watch: vaults.base, watchQuote: vaults.quote, vaults, decimals, mint };
   }
 
   const decimalsCache = new Map();
@@ -190,6 +197,9 @@
   function priceFromEntry(entry) {
     if (!entry || !entry.desc) return null;
     const d = entry.desc;
+    // A malformed or partial desc must yield "no price yet", never a throw:
+    // a throw inside the socket handler kills live prices for every token.
+    if (!d.decimals || d.decimals[d.mint] == null) return null;
     if (d.kind === 'whirlpool' || d.kind === 'clmm') {
       if (!entry.raw) return null;
       const pool = O.decodeWhirlpool(entry.raw);
@@ -226,7 +236,7 @@
       POOL.reportSuccess(candidate.id, null);
       for (const mint of watched.keys()) subscribe(mint);
     };
-    socket.onmessage = (event) => handleMessage(event.data);
+    socket.onmessage = (event) => handleMessageSafe(event.data);
     socket.onclose = () => {
       socket = null;
       subToMint.clear();
@@ -330,6 +340,15 @@
       poolKind: desc.kind,
       observedAt: entry.observedAt,
     });
+  }
+
+  /**
+   * One malformed or hostile frame must never kill the stream. handleMessage
+   * runs inside the WebSocket onmessage path, so an uncaught throw there
+   * silently ends every live price in the session (issue #17). Isolate it.
+   */
+  function handleMessageSafe(data) {
+    try { handleMessage(data); } catch (_) { /* drop the frame, keep the feed */ }
   }
 
   /* ---------------- public API ---------------- */
