@@ -2251,6 +2251,17 @@
     document.body.appendChild(host);
 
     els.box = shadow.getElementById('pt-box');
+    // Restore the dragged position saved by the panel's drop handler.
+    // Settings are already loaded (init awaits reloadState before
+    // enableOverlay), and the clamp keeps a position saved on a bigger
+    // monitor reachable on a smaller window — the header must stay grabbable.
+    if (typeof settings.panelRight === 'number' && Number.isFinite(settings.panelRight)) {
+      els.box.style.right = Math.max(0, Math.min(settings.panelRight, (window.innerWidth || 800) - 40)) + 'px';
+      els.box.style.left = 'auto';
+    }
+    if (typeof settings.panelTop === 'number' && Number.isFinite(settings.panelTop)) {
+      els.box.style.top = Math.max(0, Math.min(settings.panelTop, (window.innerHeight || 600) - 48)) + 'px';
+    }
     els.pill = shadow.getElementById('pt-pill');
     els.tokenName = shadow.getElementById('pt-token-name');
     els.tokenMint = shadow.getElementById('pt-token-mint');
@@ -2344,7 +2355,21 @@
       els.box.style.top = Math.max(0, st + (e.clientY - sy)) + 'px';
       els.box.style.left = 'auto';
     });
-    window.addEventListener('mouseup', () => (dragging = false));
+    // "Make it remember its place" (levv6x): the dragged position must
+    // survive page refreshes and new tabs. Persist it on drop, exactly the
+    // way the positions bar already does (setupBarDrag), and restore it in
+    // createUI. Without the write every new page fell back to the CSS
+    // default (top-right).
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      const boxStyle = window.getComputedStyle(els.box);
+      settings.panelRight = parseInt(boxStyle.right) || 18;
+      settings.panelTop = parseInt(boxStyle.top) || 84;
+      try {
+        store.set({ [E.STORAGE_KEYS.settings]: settings });
+      } catch (_) {}
+    });
   }
 
   /** Let the user drag the top positions bar out of the way of host nav. */

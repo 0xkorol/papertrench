@@ -376,3 +376,54 @@ test('with both toggles on, every buy control is visible', async () => {
       `${id} must be visible with default settings`);
   }
 });
+
+/* ---------------- reported: panel forgets its place on refresh ----------------
+ *
+ * levv6x: "make it remember its place — every time I refresh or open a new
+ * tab it gets back to top right". The panel drag only updated the DOM; the
+ * positions bar already persists its dragged position, but the panel's drop
+ * handler threw it away, so every page booted at the CSS default (top-right).
+ * Two contracts pin the fix:
+ *   1. behavioral — a saved panelRight/panelTop is applied at mount;
+ *   2. source — the drop handler persists both coordinates to storage.
+ */
+test('a saved panel position is restored at mount instead of top-right', async () => {
+  const ov = runOverlay([0.001], { initialSettings: { panelRight: 320, panelTop: 240 } });
+
+  await ov.advance(1200);
+
+  assert.equal(ov.shadowNodes['pt-box'].style.right, '320px',
+    'the dragged horizontal position must survive a page load');
+  assert.equal(ov.shadowNodes['pt-box'].style.top, '240px',
+    'the dragged vertical position must survive a page load');
+});
+
+test('a saved panel position never lands off-screen on a smaller window', async () => {
+  // Saved on a wide monitor, opened in an 800x600 window: the clamp keeps the
+  // header reachable so the panel can always be dragged back.
+  const ov = runOverlay([0.001], { initialSettings: { panelRight: 5000, panelTop: 4000 } });
+
+  await ov.advance(1200);
+
+  const right = parseInt(ov.shadowNodes['pt-box'].style.right);
+  const top = parseInt(ov.shadowNodes['pt-box'].style.top);
+  assert.ok(Number.isFinite(right) && right <= 760,
+    'the panel must stay horizontally reachable');
+  assert.ok(Number.isFinite(top) && top <= 552,
+    'the panel header must stay vertically grabbable');
+});
+
+test('the panel drop handler persists the dragged position', () => {
+  // The window mouseup listener cannot be driven from this harness, so pin
+  // the contract in source: the drop must write BOTH coordinates to settings
+  // and then persist them — the exact shape the positions bar uses.
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(content, /settings\.panelRight = parseInt\(boxStyle\.right\)/,
+    'the drop must record the horizontal position');
+  assert.match(content, /settings\.panelTop = parseInt\(boxStyle\.top\)/,
+    'the drop must record the vertical position');
+  const drop = content.indexOf('settings.panelRight = parseInt(');
+  const persist = content.indexOf('store.set({ [E.STORAGE_KEYS.settings]: settings })', drop);
+  assert.ok(drop !== -1 && persist !== -1 && persist - drop < 400,
+    'the recorded position must be written to storage immediately after the drop');
+});
