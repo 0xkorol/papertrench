@@ -103,8 +103,12 @@ test('average lines are labelled in market cap, the unit traders read', () => {
 test('the status line names the actual site rather than always saying Padre', () => {
   assert.doesNotMatch(content, /`Padre · \$\{live\}/,
     'the status line must not hardcode Padre now that Axiom shares the path');
-  assert.match(content, /\$\{site\.name\} · \$\{live\}/,
+  // Wave 1 (F-B4): the footer names the site + the honest warnings only;
+  // hook telemetry (feed/marks/lines) lives in the live-dot tooltip.
+  assert.match(content, /\$\{site\.name\}\$\{feed\}\$\{rug\}/,
     'the connected site must be named honestly');
+  assert.match(content, /liveDot\.title = detail/,
+    'the hook detail must still exist — in the tooltip, not on screen');
 });
 
 /* ---------------- the fallback still exists ---------------- */

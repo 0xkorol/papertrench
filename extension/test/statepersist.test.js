@@ -1053,8 +1053,11 @@ test("focus mode is compact and carries the two-step quick reset (community: lev
   // Compact density rules exist.
   assert.match(content, /\.pt-box\.pt-focus \{ font-size: 12px; \}/);
   // Quick reset: focus-only visibility, two-step inline confirm, no popup.
-  assert.match(content, /#pt-quickreset \{ display: none; \}/);
-  assert.match(content, /\.pt-box\.pt-focus #pt-quickreset \{ display: inline-flex; \}/);
+  // Wave 1 (F-B14): the two-tap ⟲ is the panel's ONE reset in every mode —
+  // always visible, and the footer's standing confirm() link is gone.
+  assert.match(content, /#pt-quickreset \{ display: inline-flex; \}/);
+  assert.doesNotMatch(content, /id="pt-reset"/,
+    'no standing destructive link on a trading surface');
   const fnStart = content.indexOf("function onQuickResetTap(");
   const block = content.slice(fnStart, content.indexOf("\n  }", fnStart) + 4);
   assert.match(block, /3000/, "the armed window is bounded");

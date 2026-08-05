@@ -2010,9 +2010,13 @@
         playTradeSound('sell');
         const pnl = result.trade.pnlSol;
         const exitMcap = mcapAtPrice(result.trade.priceNative);
-        toast(`Sold ${Math.round(fraction * 100)}%${exitMcap ? ` at ${fmtMoney(exitMcap)} MC` : ''} — ${pnl >= 0 ? '+' : ''}${E.fmt(pnl)} SOL paper`);
-        if (result.round) {
-          toast(`Round closed: ${result.round.pnlSol >= 0 ? '+' : ''}${E.fmt(result.round.pnlSol)} SOL (${result.round.pnlPct.toFixed(1)}%)`);
+        // Wave 1 (F-B9): a full close speaks ONCE — sold + round result in
+        // one line instead of two stacked toasts. Partial sells keep the
+        // single sold line; the grade line (gaming) stays its own thought.
+        if (!result.round) {
+          toast(`Sold ${Math.round(fraction * 100)}%${exitMcap ? ` at ${fmtMoney(exitMcap)} MC` : ''} — ${pnl >= 0 ? '+' : ''}${E.fmt(pnl)} SOL paper`);
+        } else {
+          toast(`Sold ${Math.round(fraction * 100)}%${exitMcap ? ` at ${fmtMoney(exitMcap)} MC` : ''} — round closed: ${result.round.pnlSol >= 0 ? '+' : ''}${E.fmt(result.round.pnlSol)} SOL (${result.round.pnlPct.toFixed(1)}%) paper`);
           // The grade toast judges PROCESS, decoupled from P&L on purpose: a
           // disciplined red earns its praise, a lucky win gets named as luck
           // (GAMIFY.md). Plain text — toast() renders textContent only.
@@ -2330,8 +2334,10 @@
     /* Quick reset lives in the header ONLY in focus mode (lev streams fresh
        runs per coin). Two-step inline confirm instead of a popup: first tap
        arms it for 3 s, second tap resets. */
-    #pt-quickreset { display: none; }
-    .pt-box.pt-focus #pt-quickreset { display: inline-flex; }
+    /* Wave 1 (F-B14): the two-tap ⟲ is the ONLY reset on the panel now, in
+       every mode — the footer's standing "Reset wallet" link with a native
+       confirm() was a destructive control on a trading surface. */
+    #pt-quickreset { display: inline-flex; }
     #pt-quickreset.armed { color: #FF5F56; font-weight: 800; }
 
     /* ---------------- paper banner ----------------
@@ -3094,9 +3100,13 @@
     return pos;
   }
 
-  /** Re-clamp the panel into the current viewport (window resize, O-18). */
+  /** Re-clamp the panel into the current viewport (window resize, O-18).
+   *  A clamp that cannot MEASURE must not move anything (the O-17 lesson,
+   *  finished): with the box at zero width or no viewport, any math would
+   *  relocate a legitimately parked panel — including a saved 0px (O-19). */
   function reclampPanel() {
     if (!els.box) return;
+    if (!(els.box.offsetWidth > 0) || !(window.innerWidth > 0)) return;
     const pos = readPanelPos();
     applyPanelPos(pos.right, pos.top);
   }
@@ -3262,7 +3272,7 @@
           </div>
           <div class="pt-footer">
             <span id="pt-site"></span>
-            <span><a id="pt-reset">Reset wallet</a> · <a id="pt-settings">Settings</a></span>
+            <span><a id="pt-settings">Settings</a></span>
           </div>
           <div class="pt-resize" id="pt-resize" data-corner="br" title="Resize">${ICONS.resize}</div>
           <div class="pt-rz-tl" data-corner="tl" title="Resize"></div>
@@ -3373,14 +3383,22 @@
 
     shadow.getElementById('pt-dash').addEventListener('click', openDashboard);
     shadow.getElementById('pt-settings').addEventListener('click', openDashboard);
-    shadow.getElementById('pt-reset').addEventListener('click', async () => {
-      if (!confirm(`Reset paper wallet to ${settings.balanceStartSol} SOL? All history is wiped.`)) return;
-      // Inherit the current seq: a reset written at seq 0 would be overtaken
-      // by any tab still holding the pre-reset wallet (see engine.resetState).
-      await withState(async () => { state = E.resetState(settings, state.seq); await persistStateNow(); });
-      syncAveragePriceLines();
-      renderAll(); toast('Paper wallet reset');
-    });
+    // Wave 1: the footer "Reset wallet" link is gone — the header's two-tap
+    // ⟲ (formerly focus-only) is the panel's one reset in every mode.
+    // Wave 1 (F-B7): the mint pill earns its pixels — click copies the mint.
+    if (els.tokenMint) {
+      els.tokenMint.style.cursor = 'pointer';
+      els.tokenMint.title = 'Click to copy the mint address';
+      els.tokenMint.addEventListener('click', () => {
+        if (!token || !token.mint) return;
+        try {
+          navigator.clipboard.writeText(token.mint).then(
+            () => toast('Mint copied'),
+            () => toast('Copy failed — clipboard blocked')
+          );
+        } catch (_) { toast('Copy failed — clipboard blocked'); }
+      });
+    }
     els.btnBuy.addEventListener('click', () => {
       const custom = Number(els.custom.value);
       const sel = els.buyPresets.querySelector('.pt-preset.sel');
@@ -3699,6 +3717,10 @@
     }
     settings = next;
     await store.set({ [E.STORAGE_KEYS.settings]: settings });
+    // Wave 1 (F-D3): growing the right-anchored panel wider while parked
+    // near the left edge pushed content past x=0 and nothing healed it
+    // until the next drag. Resize ends clamped, like drags do.
+    reclampPanel();
   }
 
   function setPanelVisible(visible) {
@@ -3722,6 +3744,10 @@
     } else {
       els.box.classList.remove('pt-hidden');
       els.pill.style.display = 'none';
+      // Wave 1 (F-D4): a pill parked at the far edge restored a panel that
+      // hung mostly off-screen (the box measured width 0 while hidden, so
+      // the clamp had used the 40px sliver). Restore with real geometry.
+      reclampPanel();
     }
   }
 
@@ -3878,21 +3904,23 @@
       if (els.subtitle) els.subtitle.textContent = site.name;
       return;
     }
-    // Padre and Axiom both drive native TradingView marks and order lines, so
-    // the hook status is reported against whichever site is in front of us.
-    const live = padreHookStatus.barsHooked ? 'LIVE ✓' : 'live connecting…';
-    // A no-getMarks datafeed (fomo) renders fills as execution shapes — that
-    // IS the working state there, not "connecting". And a refused line names
-    // its reason instead of connecting forever (the X-Ray dock lesson).
+    // Wave 1 (F-B4): feed health is ONE element now. The footer keeps only
+    // what a trader acts on — site, on-chain feed, the rug flag. The hook
+    // telemetry (marks/lines/bars status) is engineering truth, so it lives
+    // in the live dot's tooltip and the devtools dataset, not on screen.
     const shapesOwn = lastMarkerStatus && lastMarkerStatus.shapeFallback;
-    const markersReady = padreHookStatus.marksHooked ? 'MARKS ✓'
-      : (shapesOwn ? 'MARKS ✓ (shapes)' : 'marks connecting…');
     const lineOk = (lastLineStatus && lastLineStatus.ok) || padreHookStatus.linesReady;
     const lineReason = lastLineStatus && !lastLineStatus.ok && lastLineStatus.reason;
-    const lines = settings.averagePriceLinesEnabled
-      ? ` · ${lineOk ? 'LINES ✓' : (lineReason ? `lines ✗ ${lineReason}` : 'lines connecting…')}`
-      : '';
-    els.footSite.textContent = `${site.name} · ${live} · ${markersReady}${lines}${feed}${rug}`;
+    els.footSite.textContent = `${site.name}${feed}${rug}`;
+    const detail = [
+      padreHookStatus.barsHooked ? 'feed: live' : 'feed: connecting',
+      padreHookStatus.marksHooked ? 'marks: native' : (shapesOwn ? 'marks: shapes' : 'marks: connecting'),
+      settings.averagePriceLinesEnabled
+        ? (lineOk ? 'lines: ok' : `lines: ${lineReason || 'connecting'}`)
+        : null,
+    ].filter(Boolean).join(' · ');
+    if (els.liveDot) els.liveDot.title = detail;
+    els.footSite.title = detail;
     // One devtools glance = a diagnosis (the data-pt-dock pattern).
     try {
       els.footSite.dataset.ptMarks = padreHookStatus.marksHooked ? 'native' : (shapesOwn ? 'shapes' : 'connecting');
