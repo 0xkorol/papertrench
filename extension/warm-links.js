@@ -28,6 +28,7 @@
   let enabled = false;
   let cardsEnabled = false;    // tweet preview card on X-link hover (opt-in)
   let rowHoverEnabled = false; // trigger the preview from anywhere on a row (opt-in)
+  let everywhereEnabled = false; // pump.fun / Solscan warm viewers (opt-in, Turbo)
 
   function contextAlive() {
     try { return !!(chrome.runtime && chrome.runtime.id); } catch (_) { return false; }
@@ -57,6 +58,12 @@
     const on = !!(settings && settings.appEnabled !== false && settings.warmXLinksEnabled);
     cardsEnabled = !!(settings && settings.warmHoverCardsEnabled);
     rowHoverEnabled = !!(settings && settings.warmHoverRowEnabled);
+    const everywhereOn = !!(settings && settings.appEnabled !== false && settings.warmEverywhereEnabled);
+    const everywhereTurnedOn = everywhereOn && !everywhereEnabled;
+    everywhereEnabled = everywhereOn;
+    if (everywhereTurnedOn && contextAlive()) {
+      chrome.runtime.sendMessage({ type: 'pt_warmdest_prewarm' }).catch(() => {});
+    }
     setEnabled(on);
   }
 
@@ -78,6 +85,29 @@
     } catch (_) {
       return false;
     }
+  }
+
+  function requestWarmDestOpen(url) {
+    if (!contextAlive()) return false;
+    try {
+      chrome.runtime.sendMessage({ type: 'pt_warmdest_open', url }).catch(() => {});
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** Classify a link into a warm DESTINATION (pump.fun / Solscan), applying
+   * the same-site guard: on pump.fun itself, pump.fun links stay native —
+   * the site's own SPA router beats a tab swap. */
+  function destTargetFor(href) {
+    if (!everywhereEnabled) return null;
+    const WDs = window.PTWarmDest;
+    if (!WDs) return null;
+    const target = WDs.classify(href, window.location.href);
+    if (!target) return null;
+    if (WDs.familyOfHost(window.location.hostname) === target.family) return null;
+    return target;
   }
 
   /** The anchor a pointer event is really aimed at. composedPath() beats
@@ -103,14 +133,29 @@
   // terminals stop propagation aggressively) can eat the click before this
   // sees it.
   window.addEventListener('click', (event) => {
-    if (!enabled || event.defaultPrevented) return;
+    if ((!enabled && !everywhereEnabled) || event.defaultPrevented) return;
     if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     const anchor = anchorFromEvent(event);
     if (!anchor) return;
     const X = window.PTXLinks;
     const href = anchor.getAttribute('href');
-    const target = X ? X.classify(href, window.location.href) : null;
-    if (!target) {
+    const target = enabled && X ? X.classify(href, window.location.href) : null;
+    if (target) {
+      // Only claim the click once the message is actually away — with a dead
+      // extension context the native navigation must win, not a swallowed click.
+      if (!requestWarmOpen(target.url)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    const dest = destTargetFor(href);
+    if (dest) {
+      if (!requestWarmDestOpen(dest.url)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (enabled) {
       // An X-host link in a form the classifier refused: log it locally, so
       // "warm links don't work on <site>" comes with the exact URL shape.
       try {
@@ -119,13 +164,7 @@
           console.debug('PaperTrench warm links: unhandled X link form, opening natively: ' + u.href);
         }
       } catch (_) {}
-      return;
     }
-    // Only claim the click once the message is actually away — with a dead
-    // extension context the native navigation must win, not a swallowed click.
-    if (!requestWarmOpen(target.url)) return;
-    event.preventDefault();
-    event.stopPropagation();
   }, true);
 
   /* Hover prefetch. A trader hovers a link a beat before clicking it — that
@@ -308,8 +347,13 @@
   let rowTimer = 0;
   let currentRow = null;
 
+  // Destination hovers navigate a hidden viewer through a FULL page load, so
+  // their dwell is a touch longer than the X SPA hop — a list being skimmed
+  // should not chain-navigate the viewer on every row the cursor crosses.
+  const DEST_HINT_DWELL_MS = 180;
+
   window.addEventListener('mouseover', (event) => {
-    if (!enabled) return;
+    if (!enabled && !everywhereEnabled) return;
     // Inside the card: it stays.
     if (cardHost && typeof event.composedPath === 'function' && event.composedPath().includes(cardHost)) {
       clearTimeout(hideTimer);
@@ -317,7 +361,7 @@
     }
     const anchor = anchorFromEvent(event);
     const X = window.PTXLinks;
-    const target = anchor && X ? X.classify(anchor.getAttribute('href'), window.location.href) : null;
+    const target = enabled && anchor && X ? X.classify(anchor.getAttribute('href'), window.location.href) : null;
 
     if (target) {
       clearTimeout(hideTimer);
@@ -328,8 +372,25 @@
       return;
     }
 
+    const dest = anchor ? destTargetFor(anchor.getAttribute('href')) : null;
+    if (dest) {
+      clearTimeout(hideTimer);
+      if (dest.url === hintUrl) return; // dwell already running/sent for this
+      clearTimeout(hintTimer);
+      hintUrl = dest.url;
+      hintTimer = setTimeout(() => {
+        const now = Date.now();
+        if (lastHint.url === dest.url && now - lastHint.t < HINT_REPEAT_MS) return;
+        lastHint = { url: dest.url, t: now };
+        if (contextAlive()) {
+          try { chrome.runtime.sendMessage({ type: 'pt_warmdest_hint', url: dest.url }).catch(() => {}); } catch (_) {}
+        }
+      }, DEST_HINT_DWELL_MS);
+      return;
+    }
+
     scheduleHide();
-    if (!rowHoverEnabled) return;
+    if (!rowHoverEnabled || !enabled) return; // row previews are X machinery
     if (currentRow && currentRow.contains && currentRow.contains(event.target)) return; // same row: keep waiting/showing
     currentRow = null;
     clearTimeout(rowTimer);

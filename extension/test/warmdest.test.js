@@ -1,0 +1,377 @@
+/* Warm destination viewers — Instant Everything links (Turbo Tier 1).
+ *
+ * The X viewer generalized to pump.fun and Solscan: one kept-warm muted tab
+ * per family, clicks route as a full navigation in the warm tab, hovers
+ * prefetch into the HIDDEN viewer only. This suite pins the same contracts
+ * the X path earned the hard way, plus the ones unique to this design:
+ * hints never create or reveal, toggle-off only closes never-used hidden
+ * viewers, families never cross registrations, and the same-site guard keeps
+ * pump.fun links native ON pump.fun.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const ROOT = path.join(__dirname, '..');
+const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+
+/* ---------------- classifier ---------------- */
+
+function loadWarmDest() {
+  const sandbox = { self: {}, URL, Set, String, RegExp };
+  sandbox.self.self = sandbox.self;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'warmdest.js'), 'utf8'), sandbox, { filename: 'warmdest.js' });
+  return sandbox.self.PTWarmDest;
+}
+
+const MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+const SIG = '5' + 'k'.repeat(60);
+
+test('the classifier routes pump.fun and solscan shapes and refuses everything else', () => {
+  const WD = loadWarmDest();
+  const plain = (v) => (v === null ? null : JSON.parse(JSON.stringify(v)));
+
+  const coin = plain(WD.classify(`https://pump.fun/coin/${MINT}`));
+  assert.deepEqual(coin, { family: 'pumpfun', kind: 'coin', url: `https://pump.fun/coin/${MINT}` });
+
+  // www canonicalizes onto the bare host; path and query pass byte-for-byte.
+  const query = WD.classify(`https://www.pump.fun/coin/${MINT}?include-nsfw=true`);
+  assert.equal(query.url, `https://pump.fun/coin/${MINT}?include-nsfw=true`);
+
+  const bare = WD.classify(`https://pump.fun/${MINT}`);
+  assert.equal(bare.kind, 'coin');
+
+  const board = WD.classify('https://pump.fun/board');
+  assert.equal(board.kind, 'board');
+
+  const token = plain(WD.classify(`https://solscan.io/token/${MINT}`));
+  assert.deepEqual(token, { family: 'solscan', kind: 'token', url: `https://solscan.io/token/${MINT}` });
+
+  const account = WD.classify(`https://www.solscan.io/account/${MINT}`);
+  assert.equal(account.family, 'solscan');
+  assert.equal(account.url, `https://solscan.io/account/${MINT}`);
+
+  const tx = WD.classify(`https://solscan.io/tx/${SIG}`);
+  assert.equal(tx.kind, 'tx');
+
+  // Relative hrefs resolve against the page (terminals emit both forms).
+  const rel = WD.classify(`/coin/${MINT}`, 'https://pump.fun/board');
+  assert.equal(rel && rel.family, 'pumpfun');
+
+  for (const href of [
+    'https://pump.fun/how-it-works',           // not a destination page
+    'https://pump.fun/coin/notbase58!!!',      // junk address
+    `https://solscan.io/token/0xDEADBEEF`,     // EVM shape
+    'https://solscan.io/leaderboard',          // not a destination page
+    `https://pumpfun.evil.example/coin/${MINT}`, // wrong host
+    `http://pump.fun/coin/${MINT}`,            // not https
+    'not a url', '',
+  ]) {
+    assert.equal(WD.classify(href), null, `${JSON.stringify(href)} must not classify`);
+  }
+});
+
+test('familyOfHost powers the same-site guard', () => {
+  const WD = loadWarmDest();
+  assert.equal(WD.familyOfHost('pump.fun'), 'pumpfun');
+  assert.equal(WD.familyOfHost('www.pump.fun'), 'pumpfun');
+  assert.equal(WD.familyOfHost('solscan.io'), 'solscan');
+  assert.equal(WD.familyOfHost('gmgn.ai'), null);
+  // warm-links.js must apply it: a pump.fun link ON pump.fun stays native.
+  const warmLinks = fs.readFileSync(path.join(ROOT, 'warm-links.js'), 'utf8');
+  assert.match(warmLinks, /familyOfHost\(window\.location\.hostname\) === target\.family/,
+    'the interceptor must refuse same-family links — the site router beats a tab swap');
+});
+
+/* ---------------- manifest + message wiring ---------------- */
+
+test('warmdest.js is wired into the right worlds in the right order', () => {
+  const isolatedEntry = manifest.content_scripts.find((cs) => cs.js.includes('content.js'));
+  assert.ok(isolatedEntry.js.includes('warmdest.js'),
+    'the destination classifier must load on the trading sites');
+  assert.ok(isolatedEntry.js.indexOf('warmdest.js') < isolatedEntry.js.indexOf('warm-links.js'),
+    'the interceptor needs the classifier loaded before it');
+  const background = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  assert.match(background, /importScripts\([^)]*'warmdest\.js'/,
+    'the worker needs the classifier for its trust boundary');
+});
+
+test('every warmdest message type sent has a handler on the other side', () => {
+  const background = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  const warmLinks = fs.readFileSync(path.join(ROOT, 'warm-links.js'), 'utf8');
+  for (const type of ['pt_warmdest_open', 'pt_warmdest_hint', 'pt_warmdest_prewarm']) {
+    assert.match(warmLinks, new RegExp(`type: '${type}'`), `warm-links.js must send ${type}`);
+    assert.match(background, new RegExp(`case '${type}'`), `background.js must handle ${type}`);
+  }
+});
+
+/* ---------------- background flows ---------------- */
+
+function destWorker(opts = {}) {
+  const values = {
+    pt_settings: {
+      framesEnabled: false, recordingEnabled: false, autoReview: false,
+      warmEverywhereEnabled: opts.enabled !== false,
+      ...(opts.settings || {}),
+    },
+    pt_state: { positions: {}, rounds: [], journal: [] },
+  };
+  const session = {};
+  const tabsById = new Map();
+  let nextTabId = 900;
+  const calls = { created: [], updated: [], removed: [], windows: [] };
+  const listeners = {};
+  let messageListener = null;
+
+  const sandbox = {
+    console: { debug: () => {}, warn: () => {}, error: () => {}, log: () => {} },
+    Promise, JSON, Math, Date, Number, String, Array, Object, Boolean, RegExp,
+    Error, Set, Map, URL, URLSearchParams, AbortController, Uint8Array,
+    setTimeout: (fn) => { return 1; }, clearTimeout: () => {},
+    setInterval: () => 1, clearInterval: () => {},
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    chrome: {
+      storage: {
+        local: {
+          get: (keys, callback) => {
+            const names = Array.isArray(keys) ? keys : Object.keys(keys || {});
+            const result = {};
+            for (const key of names) if (Object.hasOwn(values, key)) result[key] = values[key];
+            callback(result);
+          },
+          set: (update, callback) => { Object.assign(values, update); if (callback) callback(); },
+        },
+        session: {
+          get: (keys, callback) => {
+            const result = {};
+            for (const key of keys) if (Object.hasOwn(session, key)) result[key] = session[key];
+            callback(result);
+          },
+          set: (update, callback) => { Object.assign(session, update); if (callback) callback(); },
+          remove: (key, callback) => { delete session[key]; if (callback) callback(); },
+        },
+      },
+      runtime: {
+        id: 'papertrench-test',
+        openOptionsPage: () => {},
+        onMessage: { addListener: (listener) => { messageListener = listener; } },
+        onStartup: { addListener: () => {} },
+        onInstalled: { addListener: () => {} },
+        sendMessage: async () => ({}),
+      },
+      tabs: {
+        create: async (props) => {
+          const tab = {
+            id: nextTabId++, windowId: props.windowId ?? 1, index: 0,
+            active: !!props.active, url: props.url, discarded: false, status: 'complete',
+            pinned: false, audible: false,
+          };
+          tabsById.set(tab.id, tab);
+          calls.created.push({ ...props, id: tab.id });
+          return tab;
+        },
+        update: async (id, props) => {
+          calls.updated.push({ id, props });
+          const tab = tabsById.get(id);
+          if (!tab) throw new Error('no tab ' + id);
+          if (props.url) tab.url = props.url;
+          if (props.active) tab.active = true;
+          return tab;
+        },
+        get: async (id) => {
+          const tab = tabsById.get(id);
+          if (!tab) throw new Error('no tab ' + id);
+          return tab;
+        },
+        remove: async (id) => { calls.removed.push(id); tabsById.delete(id); },
+        query: (query, callback) => {
+          const urls = Array.isArray(query && query.url) ? query.url : [];
+          if (urls.some((u) => u.includes('x.com'))) { callback([]); return; }
+          callback(opts.platformTabs || []);
+        },
+        sendMessage: async () => ({ forwarded: true }),
+        captureVisibleTab: async () => 'data:image/jpeg;base64,',
+        onRemoved: { addListener: (fn) => { (listeners.onRemovedAll ||= []).push(fn); listeners.onRemoved = (...a) => listeners.onRemovedAll.forEach((f) => f(...a)); } },
+        onUpdated: { addListener: (fn) => { (listeners.onUpdatedAll ||= []).push(fn); listeners.onUpdated = (...a) => listeners.onUpdatedAll.forEach((f) => f(...a)); } },
+        onActivated: { addListener: (fn) => { (listeners.onActivatedAll ||= []).push(fn); listeners.onActivated = (...a) => listeners.onActivatedAll.forEach((f) => f(...a)); } },
+      },
+      windows: { update: async (id, props) => { calls.windows.push({ id, props }); } },
+      offscreen: { hasDocument: async () => false, createDocument: async () => {} },
+    },
+  };
+  sandbox.self = sandbox;
+  sandbox.globalThis = sandbox;
+  const context = vm.createContext(sandbox);
+  sandbox.importScripts = (...files) => {
+    for (const file of files) {
+      vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
+    }
+  };
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8'), context, { filename: 'background.js' });
+
+  return {
+    values, session, tabsById, calls, listeners,
+    get listener() { return messageListener; },
+    seedDestViewer(family, props = {}) {
+      const urls = { pumpfun: 'https://pump.fun/board', solscan: 'https://solscan.io/' };
+      const tab = {
+        id: nextTabId++, windowId: props.windowId ?? 1, index: 0, active: !!props.active,
+        url: props.url || urls[family], discarded: false, status: 'complete',
+        pinned: false, audible: false,
+      };
+      tabsById.set(tab.id, tab);
+      session['pt_warm_tab_' + family] = { tabId: tab.id, used: !!props.used, createdAt: 1 };
+      return tab;
+    },
+    settle() { return new Promise((resolve) => setImmediate(resolve)); },
+  };
+}
+
+function send(listener, message, sender = { tab: { id: 1, windowId: 1, index: 0 } }) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('background response timed out')), 2000);
+    const asyncResponse = listener(message, sender, (response) => {
+      clearTimeout(timeout);
+      resolve(response);
+    });
+    assert.equal(asyncResponse, true, 'background messages must keep the response channel open');
+  });
+}
+
+const COIN = `https://pump.fun/coin/${MINT}`;
+const TOKEN = `https://solscan.io/token/${MINT}`;
+
+test('feature off: a destination click opens a plain new tab and registers nothing', async () => {
+  const worker = destWorker({ enabled: false });
+  const response = await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
+  assert.equal(response.route, 'new_tab');
+  assert.equal(worker.calls.created.length, 1);
+  assert.equal(worker.calls.created[0].url, COIN);
+  assert.equal(worker.session.pt_warm_tab_pumpfun, undefined);
+});
+
+test('the trust boundary re-classifies: junk from the content script opens nothing', async () => {
+  const worker = destWorker();
+  const response = await send(worker.listener, { type: 'pt_warmdest_open', url: 'https://evil.example/coin/' + MINT });
+  assert.equal(response.ok, false);
+  assert.equal(worker.calls.created.length, 0);
+});
+
+test('first click is cold but the new tab immediately becomes the family viewer', async () => {
+  const worker = destWorker();
+  const response = await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
+  assert.equal(response.route, 'cold_tab');
+  assert.equal(worker.calls.created[0].url, COIN);
+  assert.equal(worker.calls.created[0].active, true);
+  const reg = worker.session.pt_warm_tab_pumpfun;
+  assert.ok(reg && reg.used === true, 'the cold tab registers as the (used) viewer');
+});
+
+test('with a warm viewer, a click is one navigate-and-reveal — no tab churn', async () => {
+  const worker = destWorker();
+  const viewer = worker.seedDestViewer('pumpfun');
+  const response = await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
+  assert.equal(response.route, 'warm_nav');
+  assert.equal(worker.calls.created.length, 0, 'no new tab may be created');
+  const update = worker.calls.updated.find((u) => u.id === viewer.id);
+  assert.ok(update && update.props.url === COIN && update.props.active === true,
+    'the viewer navigates to the target and is revealed in one call');
+});
+
+test('a viewer already parked on the target just reveals', async () => {
+  const worker = destWorker();
+  const viewer = worker.seedDestViewer('pumpfun', { url: COIN });
+  const response = await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
+  assert.equal(response.route, 'already_open');
+  const update = worker.calls.updated.find((u) => u.id === viewer.id);
+  assert.ok(update && !update.props.url, 'no reload of a page already showing the target');
+});
+
+test('families never cross: a solscan click cannot touch the pumpfun viewer', async () => {
+  const worker = destWorker();
+  const pumpViewer = worker.seedDestViewer('pumpfun');
+  const response = await send(worker.listener, { type: 'pt_warmdest_open', url: TOKEN });
+  assert.equal(response.route, 'cold_tab', 'solscan has no viewer yet — cold path');
+  assert.ok(!worker.calls.updated.some((u) => u.id === pumpViewer.id && u.props.url),
+    'the pumpfun viewer must not be navigated by a solscan open');
+  assert.ok(worker.session.pt_warm_tab_solscan, 'solscan registers its own viewer');
+});
+
+test('a hover hint navigates the HIDDEN viewer and never reveals it', async () => {
+  const worker = destWorker();
+  const viewer = worker.seedDestViewer('pumpfun');
+  await send(worker.listener, { type: 'pt_warmdest_hint', url: COIN });
+  await worker.settle();
+  const update = worker.calls.updated.find((u) => u.id === viewer.id);
+  assert.ok(update && update.props.url === COIN, 'the hint drives the prefetch navigation');
+  assert.ok(!update.props.active, 'a hover must never reveal');
+  assert.equal(worker.calls.windows.length, 0, 'a hover must never focus a window');
+  assert.equal(worker.session.pt_warm_tab_pumpfun.used, false,
+    'a hint does not claim the viewer for the user');
+});
+
+test('hints never create tabs and never touch a viewer the user is reading', async () => {
+  const worker = destWorker();
+  await send(worker.listener, { type: 'pt_warmdest_hint', url: COIN });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 0, 'no viewer, no hint tab');
+
+  const activeViewer = worker.seedDestViewer('solscan', { active: true });
+  await send(worker.listener, { type: 'pt_warmdest_hint', url: TOKEN });
+  await worker.settle();
+  assert.ok(!worker.calls.updated.some((u) => u.id === activeViewer.id),
+    'an active viewer is being READ — hover prefetch must not navigate it');
+});
+
+test('prewarm creates both hidden muted viewers, idempotently', async () => {
+  const worker = destWorker({ platformTabs: [{ id: 7 }] });
+  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await worker.settle();
+  const created = worker.calls.created;
+  assert.equal(created.length, 2, 'one viewer per family');
+  assert.ok(created.every((c) => c.active === false), 'prewarmed viewers stay hidden');
+  const mutes = worker.calls.updated.filter((u) => u.props.muted === true);
+  assert.equal(mutes.length, 2, 'both viewers are muted while hidden');
+  assert.equal(worker.session.pt_warm_tab_pumpfun.used, false);
+  assert.equal(worker.session.pt_warm_tab_solscan.used, false);
+
+  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 2, 'a second prewarm creates nothing new');
+});
+
+test('toggle-off closes only never-used hidden viewers and clears every registration', async () => {
+  const worker = destWorker();
+  const idle = worker.seedDestViewer('pumpfun');            // never used, hidden
+  const used = worker.seedDestViewer('solscan', { used: true }); // the user's now
+  worker.values.pt_settings.warmEverywhereEnabled = false;
+  await send(worker.listener, { type: 'pt_settings_changed' });
+  await worker.settle();
+  assert.ok(worker.calls.removed.includes(idle.id), 'the idle viewer is ours to close');
+  assert.ok(!worker.calls.removed.includes(used.id), 'a used viewer belongs to the user');
+  assert.equal(worker.session.pt_warm_tab_pumpfun, undefined);
+  assert.equal(worker.session.pt_warm_tab_solscan, undefined);
+});
+
+test('steering a viewer off its family releases it', async () => {
+  const worker = destWorker();
+  const viewer = worker.seedDestViewer('pumpfun');
+  worker.listeners.onUpdated(viewer.id, { status: 'loading', url: 'https://example.com/' }, viewer);
+  await worker.settle();
+  assert.equal(worker.session.pt_warm_tab_pumpfun, undefined,
+    'a viewer the user navigated elsewhere is their tab now');
+});
+
+test('closing a viewer clears its registration and does NOT respawn it', async () => {
+  const worker = destWorker({ platformTabs: [{ id: 7 }] });
+  const viewer = worker.seedDestViewer('pumpfun');
+  worker.tabsById.delete(viewer.id);
+  worker.listeners.onRemoved(viewer.id, { isWindowClosing: false });
+  await worker.settle();
+  assert.equal(worker.session.pt_warm_tab_pumpfun, undefined, 'registration cleared');
+  assert.equal(worker.calls.created.length, 0,
+    'destination viewers do not respawn — a closed viewer stays closed until the next click');
+});

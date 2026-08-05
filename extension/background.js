@@ -43,6 +43,7 @@ const DEFAULTS = {
   warmXLinksEnabled: false,
   warmHoverCardsEnabled: false,
   warmHoverRowEnabled: false,
+  warmEverywhereEnabled: false,
   xrayEnabled: false,
   xrayDeepScanEnabled: true,
   settingsRevision: 6,
@@ -1130,6 +1131,230 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   });
 });
 
+/* ------------- warm destination viewers (Instant Everything links) --------
+ *
+ * Turbo Tier 1: the X viewer generalized to the two NON-X cold destinations
+ * every token row on the supported terminals carries — pump.fun and solscan.
+ * Opt-in (warmEverywhereEnabled, default off), and structurally simpler than
+ * the X route on purpose:
+ *
+ *   - One kept-warm muted tab per family, registered in storage.session.
+ *   - Clicks route as a FULL navigation in the warm tab (tabs.update + reveal).
+ *     No SPA relay: solscan carries no PaperTrench scripts at all, and a full
+ *     load in an already-hot renderer (live connections, HTTP cache, service
+ *     worker) is the honest, unbreakable version of fast for these sites.
+ *   - Hover prefetch navigates the HIDDEN viewer only. Hints never create
+ *     tabs, never touch a tab the user is looking at (X contract, verbatim).
+ *   - Same ownership rules: used/found tabs belong to the user; toggle-off
+ *     closes only a never-used, still-hidden viewer. A closed viewer does NOT
+ *     respawn (unlike X): two respawning background tabs would read as an
+ *     infestation — the next click simply recreates its viewer cold.
+ *
+ * The X path above is untouched: different messages, different storage keys,
+ * shared warmSerial (tab bookkeeping stays single-file) and shared warmReveal.
+ */
+
+const WD = self.PTWarmDest;
+
+function warmDestFeatureOn(settings) {
+  return settings.appEnabled !== false && settings.warmEverywhereEnabled === true;
+}
+
+const WARM_DEST_FAMILIES = {
+  pumpfun: {
+    storageKey: 'pt_warm_tab_pumpfun',
+    idleUrl: 'https://pump.fun/board',
+    hostRe: /(^|\.)pump\.fun$/,
+    label: 'pump.fun',
+  },
+  solscan: {
+    storageKey: 'pt_warm_tab_solscan',
+    idleUrl: 'https://solscan.io/',
+    hostRe: /(^|\.)solscan\.io$/,
+    label: 'Solscan',
+  },
+};
+
+function readWarmDestTab(family) {
+  const spec = WARM_DEST_FAMILIES[family];
+  return new Promise((resolve) => chrome.storage.session.get([spec.storageKey], (value) => {
+    if (chrome.runtime && chrome.runtime.lastError) { resolve(null); return; }
+    resolve(value[spec.storageKey] || null);
+  }));
+}
+function writeWarmDestTab(family, state) {
+  const spec = WARM_DEST_FAMILIES[family];
+  return new Promise((resolve) => chrome.storage.session.set({ [spec.storageKey]: state }, () => resolve()));
+}
+function clearWarmDestTab(family) {
+  const spec = WARM_DEST_FAMILIES[family];
+  return new Promise((resolve) => chrome.storage.session.remove(spec.storageKey, () => resolve()));
+}
+
+/** The family's registered viewer, revalidated against reality (the X rule:
+ * a tab the user closed or steered elsewhere is theirs, not our viewer). */
+async function validWarmDestTab(family) {
+  const spec = WARM_DEST_FAMILIES[family];
+  const state = await readWarmDestTab(family);
+  if (!state || !Number.isFinite(state.tabId)) return null;
+  let tab = null;
+  try { tab = await chrome.tabs.get(state.tabId); } catch (_) { tab = null; }
+  let host = '';
+  try { host = new URL((tab && (tab.pendingUrl || tab.url)) || '').hostname; } catch (_) { host = ''; }
+  if (!tab || !spec.hostRe.test(host)) {
+    await clearWarmDestTab(family);
+    return null;
+  }
+  return { tab, state };
+}
+
+function sameDestUrl(a, b) {
+  try {
+    const ua = new URL(a); const ub = new URL(b);
+    return ua.hostname.replace(/^www\./, '') === ub.hostname.replace(/^www\./, '')
+      && ua.pathname.replace(/\/+$/, '') === ub.pathname.replace(/\/+$/, '')
+      && ua.search === ub.search;
+  } catch (_) { return false; }
+}
+
+async function warmDestOpen(rawUrl, sender, settings) {
+  // Trust boundary: the terminal-side world only SUGGESTS a URL; what
+  // navigates is what the shared classifier re-derives here.
+  const target = WD && WD.classify(String(rawUrl || ''));
+  if (!target) return { ok: false, reason: 'unclassified' };
+
+  const createNext = async (active) => {
+    const props = { url: target.url, active };
+    if (sender && sender.tab) {
+      props.windowId = sender.tab.windowId;
+      props.index = sender.tab.index + 1;
+      props.openerTabId = sender.tab.id;
+    }
+    try { return await chrome.tabs.create(props); }
+    catch (_) { return chrome.tabs.create({ url: target.url, active }); }
+  };
+
+  if (!warmDestFeatureOn(settings)) {
+    await createNext(true);
+    return { ok: true, route: 'new_tab' };
+  }
+
+  return warmSerial(async () => {
+    const startedAt = Date.now();
+    const valid = await validWarmDestTab(target.family);
+    if (!valid) {
+      // Cold path — the new tab immediately becomes the family viewer, so
+      // only the FIRST open pays the cold price.
+      const tab = await createNext(true);
+      if (tab && Number.isFinite(tab.id)) {
+        await writeWarmDestTab(target.family, { tabId: tab.id, used: true, createdAt: Date.now() });
+      }
+      console.debug('PaperTrench warm dest: route=cold_tab (' + target.family + ')');
+      return { ok: true, route: 'cold_tab' };
+    }
+
+    const { tab, state } = valid;
+    const already = sameDestUrl((tab.pendingUrl || tab.url || ''), target.url);
+    // Full-load route in one call: reveal carries the url unless the viewer
+    // is already parked on the exact target.
+    await warmReveal(tab, already ? undefined : target.url);
+    await writeWarmDestTab(target.family, { ...state, used: true });
+    console.debug('PaperTrench warm dest: route=' + (already ? 'already_open' : 'warm_nav')
+      + ' (' + target.family + ') in ' + (Date.now() - startedAt) + 'ms');
+    return { ok: true, route: already ? 'already_open' : 'warm_nav' };
+  });
+}
+
+/** Hover prefetch: strictly weaker than a click. Never creates a tab, never
+ * reveals, never navigates a tab the user is actually looking at. */
+async function warmDestHint(rawUrl, settings) {
+  if (!warmDestFeatureOn(settings)) return;
+  const target = WD && WD.classify(String(rawUrl || ''));
+  if (!target) return;
+  return warmSerial(async () => {
+    const valid = await validWarmDestTab(target.family);
+    if (!valid) return;
+    const { tab } = valid;
+    if (tab.active) return;
+    if (sameDestUrl((tab.pendingUrl || tab.url || ''), target.url)) return;
+    try { await chrome.tabs.update(tab.id, { url: target.url }); } catch (_) {}
+  });
+}
+
+/** Pre-create both hidden viewers so the session's FIRST click is warm.
+ * Idempotent under warmSerial, exactly like warmPrewarm. */
+function warmDestPrewarm() {
+  return warmSerial(async () => {
+    const settings = await getSettings();
+    if (!warmDestFeatureOn(settings)) return;
+    for (const family of Object.keys(WARM_DEST_FAMILIES)) {
+      if (await validWarmDestTab(family)) continue;
+      const spec = WARM_DEST_FAMILIES[family];
+      let tab = null;
+      try { tab = await chrome.tabs.create({ url: spec.idleUrl, active: false }); } catch (_) { tab = null; }
+      if (!tab || !Number.isFinite(tab.id)) continue;
+      try { await chrome.tabs.update(tab.id, { muted: true }); } catch (_) {}
+      await writeWarmDestTab(family, { tabId: tab.id, used: false, createdAt: Date.now() });
+    }
+  });
+}
+
+async function warmDestSettingsChanged(settings) {
+  if (warmDestFeatureOn(settings)) {
+    const tabs = await new Promise((resolve) => chrome.tabs.query({ url: WARM_PLATFORM_URLS }, (result) => resolve(result || [])));
+    if (tabs.length) warmDestPrewarm().catch(() => {});
+    return;
+  }
+  for (const family of Object.keys(WARM_DEST_FAMILIES)) {
+    const state = await readWarmDestTab(family);
+    if (!state) continue;
+    await clearWarmDestTab(family);
+    if (state.used) continue; // used or user-found tabs are the user's
+    try {
+      const tab = await chrome.tabs.get(state.tabId);
+      if (tab && !tab.active) await chrome.tabs.remove(state.tabId);
+    } catch (_) { /* already gone */ }
+  }
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  warmSerial(async () => {
+    for (const family of Object.keys(WARM_DEST_FAMILIES)) {
+      const state = await readWarmDestTab(family);
+      if (state && state.tabId === tabId) await clearWarmDestTab(family);
+    }
+  });
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'loading') return;
+  warmSerial(async () => {
+    for (const family of Object.keys(WARM_DEST_FAMILIES)) {
+      const state = await readWarmDestTab(family);
+      if (!state || state.tabId !== tabId) continue;
+      const url = changeInfo.url || (tab && (tab.pendingUrl || tab.url)) || '';
+      if (!url) continue;
+      let host = '';
+      try { host = new URL(url).hostname; } catch (_) { host = ''; }
+      if (!WARM_DEST_FAMILIES[family].hostRe.test(host)) {
+        // The user steered the viewer off its family — release it, it is theirs.
+        await clearWarmDestTab(family);
+      }
+    }
+  });
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  warmSerial(async () => {
+    for (const family of Object.keys(WARM_DEST_FAMILIES)) {
+      const state = await readWarmDestTab(family);
+      if (!state || state.tabId !== activeInfo.tabId || state.used) continue;
+      await writeWarmDestTab(family, { ...state, used: true });
+      try { await chrome.tabs.update(activeInfo.tabId, { muted: false }); } catch (_) {}
+    }
+  });
+});
+
 /* -------------------- X-Ray (account intel ledger) --------------------
  *
  * Opt-in (xrayEnabled, default off). The x.com MAIN world digests the page's
@@ -1509,6 +1734,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'pt_settings_changed':
         await refreshFrameInterval();
         await warmSettingsChanged(settings);
+        await warmDestSettingsChanged(settings);
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_warmdest_open':
+        sendResponse(await warmDestOpen(message.url, sender, settings));
+        break;
+
+      case 'pt_warmdest_hint':
+        warmDestHint(message.url, settings).catch(() => {});
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_warmdest_prewarm':
+        warmDestPrewarm().catch(() => {});
         sendResponse({ ok: true });
         break;
 

@@ -129,8 +129,13 @@ test('the row scan carries the user-chosen chip size to the bridge', () => {
     'content script must forward the chip size to the bridge');
   assert.match(bridge, /const size = Math\.max\(0\.6, Math\.min\(1\.5, numberValue\(spec && spec\.size\) \|\| 1\)\);/,
     'bridge must read the size from the scan spec');
-  assert.match(bridge, /el\.style\.transform[^;]*scale\(/,
-    'bridge must scale the chip with the user setting');
+  // The transform is composed in the measure phase's write plan and applied
+  // by the diffed writer (Turbo read/write split) — same visual contract:
+  // the user size ends up in the chip's transform scale.
+  assert.match(bridge, /transform: \(anchor\.align[\s\S]{0,220}' scale\(' \+ size \+ '\)'/,
+    'the write plan must scale the chip with the user setting');
+  assert.match(bridge, /el\.style\.transform = plan\.transform/,
+    'the applier must write the planned transform to the chip');
 });
 
 test('chips live in a fixed overlay layer and never enter the page DOM', () => {

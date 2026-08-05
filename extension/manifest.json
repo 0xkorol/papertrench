@@ -65,6 +65,7 @@
       ],
       "js": [
         "xlinks.js",
+        "warmdest.js",
         "engine.js",
         "pnlcard.js",
         "attest.js",

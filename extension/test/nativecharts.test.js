@@ -240,9 +240,21 @@ function runBridge(opts = {}) {
       return [];
     },
   };
+  // Style-write accounting for the Turbo read/write-phase tests: every
+  // assignment to a created element's style counts as one layout-dirtying
+  // write. Cheap Proxy, only active when a test asks for the row DOM.
+  let styleWrites = 0;
+  function countingChipNode(tag) {
+    const node = makeChipNode(tag);
+    const plain = node.style;
+    node.style = new Proxy(plain, {
+      set(target, prop, value) { styleWrites += 1; target[prop] = value; return true; },
+    });
+    return node;
+  }
   if (rowDomNodes) {
     doc.body = rowDomNodes.body;
-    doc.createElement = (t) => makeChipNode(t);
+    doc.createElement = (t) => countingChipNode(t);
     // Probes to the LEFT of the row's right edge hit the row itself; probes
     // near the chip's right-edge anchor hit the PaperTrench shadow host
     // while the fake panel "covers" that spot.
@@ -329,6 +341,8 @@ function runBridge(opts = {}) {
     enableAxiom: () => { axiomVisible = true; },
     setPanelOverChip: (on) => { panelOverChip = Boolean(on); },
     rowDebug: () => (typeof win.__ptRowChipDebug === 'function' ? win.__ptRowChipDebug() : []),
+    styleWrites: () => styleWrites,
+    resetStyleWrites: () => { styleWrites = 0; },
     axiomRealtime: () => axiomRealtime,
     axiomGetMarksCalls: () => axiomGetMarksCalls,
     axiomDatafeed,
@@ -1912,4 +1926,44 @@ test('Turbo source contract: the content script publishes page-state demand', ()
     'teardown must reset the publisher so a re-enable re-announces');
   assert.match(content, /settings\.listQuickBuyEnabled !== false\s*\n?\s*&& site\.rowBuy\.listPaths\.test\(location\.pathname\)/,
     'chip pages count as demand only while chips are enabled and on a list path');
+});
+
+/* ------------------------------------------------------------------ *
+ * Turbo: chip layout is read-phase/write-phase with diffed writes
+ * ------------------------------------------------------------------ */
+
+test('Turbo: a steady-state chip sweep performs zero style writes', () => {
+  const env = runBridge({ rowDom: true, href: 'https://axiom.trade/pulse' });
+  env.send('row-scan', {
+    amount: 0.1, size: 1,
+    linkSelectors: ['a.testrow'],
+    placement: 'float',
+    buyButtonPattern: null,
+    containerMode: 'heuristic',
+  });
+  const chips = env.rowDebug();
+  assert.equal(chips.length, 1, 'the screener row must get its chip');
+  assert.ok(env.styleWrites() > 0, 'first placement must of course write styles');
+
+  // Nothing moved: the 1s sweep must not touch a single style property.
+  env.resetStyleWrites();
+  env.runTimers();
+  assert.equal(env.styleWrites(), 0,
+    'an unmoved chip must cost zero style writes — writes are what dirty layout for the next read');
+});
+
+test('Turbo source contract: the chip sweep separates reads from writes', () => {
+  const bridge = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
+  const measure = bridge.slice(
+    bridge.indexOf('function positionRowChip('),
+    bridge.indexOf('function applyRowChip('),
+  );
+  assert.doesNotMatch(measure, /\.style\./,
+    'the measure phase must never write styles — that is the reflow interleave (F-18 class)');
+  const sweep = bridge.slice(
+    bridge.indexOf('function sweepRowChips('),
+    bridge.indexOf('let rowChipRaf'),
+  );
+  assert.match(sweep, /Phase R/, 'the sweep must document its read phase');
+  assert.match(sweep, /applyRowChip/, 'writes must route through the diffed applier');
 });

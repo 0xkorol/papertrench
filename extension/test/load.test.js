@@ -145,6 +145,7 @@ const BROWSER_SCRIPTS = [
   { file: 'resolver.js', global: 'PaperTrenchResolver' },
   { file: 'chart-markers.js', global: 'PTChartMarkers' },
   { file: 'xlinks.js', global: 'PTXLinks' },
+  { file: 'warmdest.js', global: 'PTWarmDest' },
   { file: 'xray-core.js', global: 'PTXRay' },
   { file: 'price-bridge.js', global: null },
   { file: 'warm-open-hook.js', global: null },

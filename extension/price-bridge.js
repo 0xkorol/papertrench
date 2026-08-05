@@ -2022,15 +2022,28 @@
     window.addEventListener(type, handleRowChipTap, true);
   }
 
+  /* Chip layout runs in two strict phases (Turbo): ALL reads, then ALL
+   * writes. The old per-chip read→write interleave dirtied layout with every
+   * chip's style writes, forcing a synchronous reflow for the NEXT chip's
+   * getBoundingClientRect/elementFromPoint — O(N chips) reflows per sweep,
+   * on the same thread the feed parses on (the F-18 starvation class).
+   * Measured against clean layout the whole sweep costs one reflow, and the
+   * writes are diffed against the last applied values, so a steady-state
+   * sweep (rows unmoved) writes nothing and leaves layout clean for the
+   * page's own frame.
+   */
+  const PILL_RETRY_MS = 1000;
+
   function positionRowChip(entry) {
+    // READ phase: measures and decides; touches no styles. Returns the write
+    // plan for applyRowChip, or null when the row is gone.
     const { row, el, place } = entry;
-    if (!row.isConnected) return false;
+    if (!row.isConnected) return null;
     const rect = row.getBoundingClientRect();
     if (rect.width < 10 || rect.height < 10 ||
         rect.bottom < 0 || rect.top > window.innerHeight ||
         rect.right < 0 || rect.left > window.innerWidth) {
-      el.style.display = 'none';
-      return true;
+      return { display: 'none' };
     }
     // Occlusion: rows scroll inside their own panes — when a row slides
     // under a sticky header the fixed-layer chip must vanish with it.
@@ -2038,10 +2051,8 @@
     const probeX = Math.min(Math.max(rect.left + rect.width * 0.35, 1), window.innerWidth - 1);
     const hit = document.elementFromPoint(probeX, probeY);
     if (hit && hit !== el && !row.contains(hit) && !el.contains(hit)) {
-      el.style.display = 'none';
-      return true;
+      return { display: 'none' };
     }
-    el.style.display = '';
 
     let anchor = null; // { x, y, align }
     if (place.mode === 'before-buy-button') {
@@ -2055,11 +2066,15 @@
       } else {
         pill = null;
       }
-      if (!pill) {
+      if (!pill) entry.pill = null;
+      if (!pill && Date.now() - (entry.pillMissAt || 0) >= PILL_RETRY_MS) {
         // The pill can live just OUTSIDE the detected row container (Padre
         // renders it in a sibling strip below the card body), so widen the
         // search up two ancestors but only accept buttons overlapping the
-        // row's own column — never a neighbour card's pill.
+        // row's own column — never a neighbour card's pill. The walk reads a
+        // rect per button, so a row that simply HAS no pill must not pay it
+        // on every sweep: misses retry at 1 Hz. A fresh chip searches at
+        // once (pillMissAt starts unset), so first placement is never late.
         const matches = (scope) => [...scope.querySelectorAll('button')].filter((b) => {
           if (!place.pattern.test((b.textContent || '').trim())) return false;
           const r = b.getBoundingClientRect();
@@ -2072,6 +2087,7 @@
           pill = matches(up)[0] || null;
         }
         entry.pill = pill;
+        entry.pillMissAt = pill ? 0 : Date.now();
       }
       if (pill) {
         const pr = pill.getBoundingClientRect();
@@ -2101,29 +2117,54 @@
       1), (window.innerHeight || 1) - 1);
     const over = document.elementFromPoint(chipProbeX, chipProbeY);
     if (over && over !== el && !el.contains(over) && over.id === 'papertrench-host') {
-      el.style.display = 'none';
-      return true;
+      return { display: 'none' };
     }
 
-    el.style.left = anchor.x + 'px';
-    el.style.top = anchor.y + 'px';
     const size = Number(entry.size) > 0 ? entry.size : 1;
-    el.style.transformOrigin = anchor.align === 'right-center' ? '100% 50%'
-      : anchor.align === 'right-bottom' ? '100% 100%'
-      : '100% 0%';
-    el.style.transform = (anchor.align === 'right-center' ? 'translate(-100%, -50%)'
-      : anchor.align === 'right-bottom' ? 'translate(-100%, -100%)'
-      : 'translate(-100%, 0)') + ' scale(' + size + ')';
-    return true;
+    return {
+      display: '',
+      left: anchor.x + 'px',
+      top: anchor.y + 'px',
+      origin: anchor.align === 'right-center' ? '100% 50%'
+        : anchor.align === 'right-bottom' ? '100% 100%'
+        : '100% 0%',
+      transform: (anchor.align === 'right-center' ? 'translate(-100%, -50%)'
+        : anchor.align === 'right-bottom' ? 'translate(-100%, -100%)'
+        : 'translate(-100%, 0)') + ' scale(' + size + ')',
+    };
+  }
+
+  function applyRowChip(entry, plan) {
+    // WRITE phase: every write is diffed — an unmoved chip costs nothing.
+    const el = entry.el;
+    const last = entry.applied || (entry.applied = {});
+    if (plan.display === 'none') {
+      if (last.display !== 'none') { el.style.display = 'none'; last.display = 'none'; }
+      return;
+    }
+    if (last.display !== '') { el.style.display = ''; last.display = ''; }
+    if (last.left !== plan.left) { el.style.left = plan.left; last.left = plan.left; }
+    if (last.top !== plan.top) { el.style.top = plan.top; last.top = plan.top; }
+    if (last.origin !== plan.origin) { el.style.transformOrigin = plan.origin; last.origin = plan.origin; }
+    if (last.transform !== plan.transform) { el.style.transform = plan.transform; last.transform = plan.transform; }
   }
 
   function sweepRowChips() {
+    // Phase R: measure every chip against clean layout…
+    const plans = [];
+    const dead = [];
     for (const [row, entry] of rowChips) {
-      if (!row.isConnected || !positionRowChip(entry)) {
-        entry.el.remove();
+      const plan = positionRowChip(entry);
+      if (!plan) {
+        dead.push(entry);
         rowChips.delete(row);
+        continue;
       }
+      plans.push([entry, plan]);
     }
+    // …Phase W: then write, removals included.
+    for (const entry of dead) entry.el.remove();
+    for (const [entry, plan] of plans) applyRowChip(entry, plan);
   }
 
   let rowChipRaf = 0;
@@ -2327,7 +2368,8 @@
       // propagation during capture.
       layer.appendChild(button);
       rowChips.set(row, entry);
-      positionRowChip(entry);
+      // Placement happens in the sweep below — one batched read/write pass
+      // for every chip, the fresh one included.
     }
 
     sweepRowChips();

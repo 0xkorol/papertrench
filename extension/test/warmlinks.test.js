@@ -218,9 +218,12 @@ function warmWorker(opts = {}) {
           return { forwarded: true };
         },
         captureVisibleTab: async () => 'data:image/jpeg;base64,',
-        onRemoved: { addListener: (fn) => { listeners.onRemoved = fn; } },
-        onUpdated: { addListener: (fn) => { listeners.onUpdated = fn; } },
-        onActivated: { addListener: (fn) => { listeners.onActivated = fn; } },
+        // Chrome fires EVERY registered listener; the background registers
+        // more than one per event (viewer lifecycle + destination families),
+        // so keeping only the last silently unhooks the earlier ones.
+        onRemoved: { addListener: (fn) => { (listeners.onRemovedAll ||= []).push(fn); listeners.onRemoved = (...a) => listeners.onRemovedAll.forEach((f) => f(...a)); } },
+        onUpdated: { addListener: (fn) => { (listeners.onUpdatedAll ||= []).push(fn); listeners.onUpdated = (...a) => listeners.onUpdatedAll.forEach((f) => f(...a)); } },
+        onActivated: { addListener: (fn) => { (listeners.onActivatedAll ||= []).push(fn); listeners.onActivated = (...a) => listeners.onActivatedAll.forEach((f) => f(...a)); } },
       },
       windows: { update: async (id, props) => { calls.windows.push({ id, props }); } },
       offscreen: { hasDocument: async () => false, createDocument: async () => {} },

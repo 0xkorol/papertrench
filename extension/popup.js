@@ -7,7 +7,7 @@
 
 'use strict';
 
-const DEFAULTS = { appEnabled: true, balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true, warmXLinksEnabled: false, xrayEnabled: false, xrayDeepScanEnabled: true, presetsBuy: [0.1, 0.5, 1, 2], sellPcts: [25, 50, 75, 100], feeBps: 100, gasSolPerTx: 0, tipSolPerTx: 0, slippageBps: 0 };
+const DEFAULTS = { appEnabled: true, balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true, warmXLinksEnabled: false, warmEverywhereEnabled: false, xrayEnabled: false, xrayDeepScanEnabled: true, presetsBuy: [0.1, 0.5, 1, 2], sellPcts: [25, 50, 75, 100], feeBps: 100, gasSolPerTx: 0, tipSolPerTx: 0, slippageBps: 0 };
 
 // Same rough starting points the dashboard's Fees & costs card offers; the
 // full form stays there, this is the one-tap version for mid-session fixes.
@@ -27,6 +27,7 @@ $('restore').addEventListener('click', () => $('restoreFile').click());
 $('restoreFile').addEventListener('change', restoreWallet);
 $('overlay-window').addEventListener('click', openStreamOverlay);
 $('warmx').addEventListener('click', toggleWarmXLinks);
+$('warmdest').addEventListener('click', toggleWarmEverywhere);
 $('xray').addEventListener('click', toggleXRay);
 $('power').addEventListener('click', togglePower);
 $('qs-apply').addEventListener('click', applyQuickSettings);
@@ -100,6 +101,10 @@ async function load() {
     $('warmx').textContent = settings.warmXLinksEnabled
       ? '⚡ Instant X links: On'
       : '⚡ Instant X links: Off';
+
+    $('warmdest').textContent = settings.warmEverywhereEnabled
+      ? '⚡ Instant pump.fun & Solscan: On'
+      : '⚡ Instant pump.fun & Solscan: Off';
 
     $('xray').textContent = settings.xrayEnabled
       ? '⌖ X-Ray on x.com: On'
@@ -274,6 +279,20 @@ async function toggleWarmXLinks() {
   $('status').textContent = next.warmXLinksEnabled
     ? 'On — X links on trading sites now open in a kept-warm viewer tab (~0.5s instead of ~3.5s). PaperTrench keeps one muted background x.com tab for this; Ctrl/Cmd/middle-click still opens normal tabs.'
     : 'Off — the background X tab is released and links open normally.';
+}
+
+/* Same honest-cost disclosure pattern as the X toggle: the price of the
+ * feature is stated at the exact moment of opt-in. */
+async function toggleWarmEverywhere() {
+  const stored = await chrome.storage.local.get(['pt_settings']);
+  const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+  const next = { ...settings, warmEverywhereEnabled: !settings.warmEverywhereEnabled };
+  await chrome.storage.local.set({ pt_settings: next });
+  chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  await load();
+  $('status').textContent = next.warmEverywhereEnabled
+    ? 'On — pump.fun and Solscan links on trading sites open in kept-warm viewer tabs; hovering a link preloads it before you click. Costs up to two muted background tabs; Ctrl/Cmd/middle-click still opens normal tabs.'
+    : 'Off — the pump.fun and Solscan viewer tabs are released and links open normally.';
 }
 
 /** Account intel on X itself. The status line states the two things a user
