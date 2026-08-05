@@ -73,3 +73,34 @@ test('one hostile frame must not kill the live-price stream', () => {
   assert.match(src, /function handleMessageSafe\(data\) \{\s*try \{ handleMessage\(data\); \}/,
     'handleMessageSafe must wrap handleMessage in try/catch');
 });
+
+/* ---------------- DEFECTS F-09 / F-21: RPC amplification ---------------- */
+
+test("F-09: vault discovery is cached per pool and scans aligned offsets first", () => {
+  const src = fs.readFileSync(path.join(ROOT, "onchain-feed.js"), "utf8");
+  const fnStart = src.indexOf("async function findVaults(");
+  assert.ok(fnStart !== -1);
+  const block = src.slice(fnStart, src.indexOf("\n  }", fnStart) + 4);
+
+  assert.match(block, /vaultCache\.has\(poolAddress\)/,
+    "revisiting a coin must not re-derive its vaults (the scan is the most RPC-expensive call in the feed)");
+  assert.match(block, /await scan\(8\)/,
+    "the first pass must scan 8-byte-aligned offsets — one round trip instead of eight to fifteen");
+  assert.match(block, /poolBytes\.length <= 1024[\s\S]*?scan\(1\)/,
+    "the exhaustive fallback must be bounded to small pool accounts");
+  // The caller must actually pass the pool address or the cache never hits.
+  assert.match(src, /findVaults\(bytes, mint, poolAddress\)/,
+    "describePool must key the vault cache by pool address");
+});
+
+test("F-21: a subscribe on a cold socket must not orphan a pending entry", () => {
+  const src = fs.readFileSync(path.join(ROOT, "onchain-feed.js"), "utf8");
+  const fnStart = src.indexOf("function subscribe(");
+  const block = src.slice(fnStart, src.indexOf("\n  }", fnStart) + 4);
+  assert.match(block, /const sent = send\(/,
+    "the send result must be observed");
+  assert.match(block, /if \(sent\) pending\.set\(/,
+    "pending acks are registered only for frames that actually went out — onopen resubscribes the rest");
+  assert.doesNotMatch(block, /pending\.set\([\s\S]*?send\(\{/,
+    "the old set-before-send order must be gone");
+});

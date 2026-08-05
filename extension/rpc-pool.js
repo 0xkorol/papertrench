@@ -120,23 +120,36 @@
    * Failover is the entire point: a keyless endpoint WILL throttle, and the
    * user must never see that as a dead price feed.
    */
+  // Circuit breaker: once every endpoint is benched, more traffic resets
+  // nothing — it keeps the strikes coming and the pool benched forever
+  // (DEFECT F-09 cascade). Fail fast during the cooldown and let one
+  // half-open probe through periodically to discover recovery.
+  let lastBenchedProbeAt = 0;
+  const BENCHED_PROBE_MS = 5000;
+
   async function call(method, params, opts) {
-    const endpoints = ranked(opts);
+    let endpoints = ranked(opts);
+    const now = Date.now();
+    if (endpoints.length && endpoints.every((e) => stateFor(e.id).benchedUntil > now)) {
+      if (now - lastBenchedProbeAt < BENCHED_PROBE_MS) {
+        throw new Error('rpc pool cooling down');
+      }
+      lastBenchedProbeAt = now;
+      endpoints = endpoints.slice(0, 1); // the single half-open probe
+    }
     let lastError = null;
 
     for (const endpoint of endpoints) {
       const started = Date.now();
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS) : null;
       try {
-        const controller = typeof AbortController === 'function' ? new AbortController() : null;
-        const timer = controller ? setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS) : null;
-
         const response = await fetch(endpoint.http, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
           signal: controller ? controller.signal : undefined,
         });
-        if (timer) clearTimeout(timer);
 
         if (!response.ok) throw new Error('http ' + response.status);
         const json = await response.json();
@@ -147,6 +160,10 @@
       } catch (error) {
         reportFailure(endpoint.id);
         lastError = error;
+      } finally {
+        // The abort timer must clear on EVERY path — a rejected fetch used
+        // to leak it until it fired (DEFECT F-27).
+        if (timer) clearTimeout(timer);
       }
     }
     throw lastError || new Error('no rpc endpoint available');

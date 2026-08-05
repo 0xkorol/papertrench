@@ -121,7 +121,7 @@
     // turn vault balances into a price — omitting it crashed priceFromEntry
     // on the first vault update (issue #17: sell options disappeared because
     // the dead price stream starved the overlay).
-    const vaults = await findVaults(bytes, mint);
+    const vaults = await findVaults(bytes, mint, poolAddress);
     if (!vaults) return null;
     // Both the token and WSOL decimals are needed to turn vault balances into
     // a price — fetch them here so priceFromEntry never sees a gap.
@@ -159,37 +159,63 @@
    * Layouts differ per program; the vaults themselves are always plain SPL
    * token accounts, which is what makes this reliable.
    */
-  async function findVaults(poolBytes, mint) {
-    if (!poolBytes) return null;
-    const candidates = [];
-    const seen = new Set();
-    for (let offset = 0; offset + 32 <= poolBytes.length; offset += 1) {
-      const key = O.readPubkey(poolBytes, offset);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      candidates.push(key);
-    }
+  // Session cache: re-visiting a coin must not re-derive its vaults — the
+  // scan below is the single most RPC-expensive thing the feed does, and a
+  // trader flipping through ten coins a minute used to exhaust the keyless
+  // pool budget on it alone (DEFECT F-09).
+  const vaultCache = new Map(); // poolAddress -> { base, quote }
+  const VAULT_CACHE_CAP = 100;
 
-    let base = null;
-    let quote = null;
-    for (let i = 0; i < candidates.length; i += 100) {
-      const chunk = candidates.slice(i, i + 100);
-      const accounts = await getAccounts(chunk);
-      accounts.forEach((account, index) => {
-        if (!account) return;
-        if (account.owner !== O.TOKEN_PROGRAM && account.owner !== O.TOKEN_2022_PROGRAM) return;
-        const decoded = O.decodeTokenAccount(O.bytesFromBase64(account.data[0]));
-        if (!decoded) return;
-        const address = chunk[index];
-        if (decoded.mint === mint && (!base || decoded.amount > base.amount)) {
-          base = { address, amount: decoded.amount };
-        } else if (decoded.mint === O.WSOL_MINT && (!quote || decoded.amount > quote.amount)) {
-          quote = { address, amount: decoded.amount };
-        }
-      });
+  async function findVaults(poolBytes, mint, poolAddress) {
+    if (!poolBytes) return null;
+    if (poolAddress && vaultCache.has(poolAddress)) return vaultCache.get(poolAddress);
+
+    const scan = async (step) => {
+      const candidates = [];
+      const seen = new Set();
+      for (let offset = 0; offset + 32 <= poolBytes.length; offset += step) {
+        const key = O.readPubkey(poolBytes, offset);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(key);
+      }
+      let base = null;
+      let quote = null;
+      for (let i = 0; i < candidates.length; i += 100) {
+        const chunk = candidates.slice(i, i + 100);
+        const accounts = await getAccounts(chunk);
+        accounts.forEach((account, index) => {
+          if (!account) return;
+          if (account.owner !== O.TOKEN_PROGRAM && account.owner !== O.TOKEN_2022_PROGRAM) return;
+          const decoded = O.decodeTokenAccount(O.bytesFromBase64(account.data[0]));
+          if (!decoded) return;
+          const address = chunk[index];
+          if (decoded.mint === mint && (!base || decoded.amount > base.amount)) {
+            base = { address, amount: decoded.amount };
+          } else if (decoded.mint === O.WSOL_MINT && (!quote || decoded.amount > quote.amount)) {
+            quote = { address, amount: decoded.amount };
+          }
+        });
+      }
+      return base && quote ? { base: base.address, quote: quote.address } : null;
+    };
+
+    // Pass 1: 8-byte-aligned offsets. Anchor structs and Raydium v4 both
+    // align pubkeys to 8 bytes, so this finds the vaults with ~8x fewer
+    // candidates — one getAccounts round trip instead of eight to fifteen
+    // (DEFECT F-09). Pass 2 keeps the exhaustive scan as a fallback for
+    // exotic byte-packed layouts, bounded to small pool accounts so the
+    // worst case stays cheap.
+    let found = await scan(8);
+    if (!found && poolBytes.length <= 1024) found = await scan(1);
+
+    if (found && poolAddress) {
+      vaultCache.set(poolAddress, found);
+      if (vaultCache.size > VAULT_CACHE_CAP) {
+        vaultCache.delete(vaultCache.keys().next().value);
+      }
     }
-    if (!base || !quote) return null;
-    return { base: base.address, quote: quote.address };
+    return found;
   }
 
   /* ---------------- pricing ---------------- */
@@ -269,11 +295,16 @@
     if (!entry || !entry.desc) return;
     for (const account of accountsToWatch(entry.desc)) {
       const id = nextRequestId++;
-      pending.set(id, { mint, account });
-      send({
+      // Register the pending ack only when the frame actually went out. The
+      // first subscribe after every connect used to land on a CONNECTING
+      // socket: send() returned false, the entry stayed orphaned forever, and
+      // the map grew without bound across a long session (DEFECT F-21).
+      // onopen re-subscribes everything, so a dropped frame loses nothing.
+      const sent = send({
         jsonrpc: '2.0', id, method: 'accountSubscribe',
         params: [account, { encoding: 'base64', commitment: COMMITMENT }],
       });
+      if (sent) pending.set(id, { mint, account });
     }
   }
 

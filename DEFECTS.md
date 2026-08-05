@@ -98,7 +98,7 @@ literal "trades not going in" report.
 
 **F-09 · S2 · findVaults fans out unbounded sequential RPC scans — exhausts the keyless pool in ~10 token switches**
 `onchain-feed.js:162-193`, `rpc-pool.js:13,43,110-115,127-152` · all sites · confirmed
-· open
+· **fixed v1.3.0** (8-byte-aligned scan first + per-pool vault cache + benched-pool circuit breaker with half-open probe)
 Byte-offset scan yields ~700–1500 candidate pubkeys → 8–15 sequential `getAccounts`
 round trips per watched token, against a 100 req/10 s budget. Cascade: failures bench
 all 3 public endpoints (60 s cooldown) → `ranked()` keeps returning least-bad → keeps
@@ -189,7 +189,7 @@ snapshot is accepted to 10 s. Failing strict on the accurate source silently rou
 fills to the loose gate on the inaccurate one.
 
 **F-21 · S3 · subscribe() leaks an orphan pending entry on every cold-socket subscribe**
-`onchain-feed.js:261-278,376-377` · confirmed · open
+`onchain-feed.js:261-278,376-377` · confirmed · **fixed v1.3.0** (pending registered only when the frame went out; onopen resubscribes)
 `pending.set` before `send()` which returns false on CONNECTING; first subscribe after
 every connect is dropped (rescued only by onopen resubscribe). Orphaned entries never
 cleaned — unbounded Map growth over long sessions.
@@ -225,7 +225,7 @@ Re-runs `getRankedCharts()` every second and an 8000-fiber walk every 3 s; never
 down after N failures.
 
 **F-27 · S5 · rpc-pool leaks a 4 s abort timer when fetch rejects**
-`rpc-pool.js:130-139` · confirmed · open — timer cleared only on the resolve path; no
+`rpc-pool.js:130-139` · confirmed · **fixed v1.3.0** (abort timer cleared in finally) — timer cleared only on the resolve path; no
 `finally`.
 
 **F-28 · S3/S5 · commitFill swallows SubtleCrypto failures — fills journal without attestation, user never told**

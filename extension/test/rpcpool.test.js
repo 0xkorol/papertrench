@@ -199,3 +199,35 @@ test('the feed walks the ranked websocket list instead of one hardcoded url', ()
   assert.doesNotMatch(src, /const DEFAULT_RPC/,
     'the feed must not hardcode a single endpoint any more');
 });
+
+/* ---------------- DEFECT F-09: benched-pool circuit breaker ------------- */
+
+test("F-09: a fully benched pool fails fast instead of hammering dead endpoints", async () => {
+  let fetchCalls = 0;
+  const P = loadPool(async () => { fetchCalls += 1; throw new Error("throttled"); });
+
+  // Each failing call walks the whole pool, putting one strike on every
+  // endpoint; two calls bench them all (two-strike rule).
+  await assert.rejects(() => P.call("getSlot", []));
+  await assert.rejects(() => P.call("getSlot", []));
+  const afterBenching = fetchCalls;
+
+  // Third call is the single half-open probe: exactly one endpoint touched.
+  await assert.rejects(() => P.call("getSlot", []));
+  assert.equal(fetchCalls, afterBenching + 1,
+    "the half-open probe must touch exactly one endpoint, not the whole pool");
+
+  // Inside the probe window the pool fails fast with ZERO network traffic —
+  // hammering benched endpoints kept them benched forever (the F-09 cascade).
+  await assert.rejects(() => P.call("getSlot", []), /cooling down/);
+  assert.equal(fetchCalls, afterBenching + 1,
+    "no network traffic while the pool cools down");
+});
+
+test("F-27: the abort timer clears on every path, including a rejected fetch", () => {
+  const src = fs.readFileSync(path.join(ROOT, "rpc-pool.js"), "utf8");
+  const fnStart = src.indexOf("async function call(");
+  const block = src.slice(fnStart, src.indexOf("\n  }", fnStart) + 4);
+  assert.match(block, /finally \{[\s\S]*?clearTimeout\(timer\)/,
+    "clearTimeout must live in a finally so a rejected fetch cannot leak the abort timer");
+});
