@@ -18,6 +18,20 @@
 
   const RELEASES = [
     {
+      v: '2.11.0', date: 'Aug 5, 2026', iso: '2026-08-05',
+      tags: ['feature', 'fix'],
+      title: 'The Game tab — and a round of community fixes',
+      blurb: 'Three trading games played on the live charts you already trade, your full trench profile, and fixes straight from the Discord.',
+      points: [
+        '<b>A Game tab in the dashboard.</b> Your full trench profile: the tier ladder with every gate’s live progress, streaks, reps, the badge case, and your process distribution over the last 30 graded rounds.',
+        '<b>Three trading games on live charts.</b> The Gauntlet (ten straight rounds, thesis written, no revenge), One-Shot (one entry, one exit for the whole day, 50%+ captured), Score Attack (best average capture across a 3+ round day). All derived from your journal — no start button, no stored game state, nothing to cheat.',
+        '<b>Warm pump.fun/Solscan viewers respect a close</b> (reported by Eyes343): closing a warm viewer sticks — refreshing the DEX no longer reopens it; your next actual click brings it back.',
+        '<b>Focus mode, round three</b> (toshi_100x): slimmer header, no subtitle, cost chips collapse — the ✎ still opens the editor.',
+        '<b>fomo.family is a supported terminal.</b> Overlay, warm mirror, and X-Ray contract-address recognition on Fomo pages.',
+        '<b>On the roadmap by community request</b> (TheRedShark123): a paper copy trader — mirror a wallet into a separate shadow book at your realistically-observed fills and get an honest verdict on whether it’s worth copying.',
+      ],
+    },
+    {
       v: '2.10.0', date: 'Aug 5, 2026', iso: '2026-08-05',
       tags: ['feature'],
       title: 'Trench Rank — discipline is now the game',

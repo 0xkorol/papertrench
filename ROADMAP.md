@@ -141,6 +141,32 @@ the user's own thesis), stats that predict real-world survival (expectancy, hold
 discipline, tilt detection, revenge-trade flags), practice drills, and explicit
 graduation criteria surfaced in the dashboard.
 
+## Phase 7 — Paper copy trader (community request, TheRedShark123 2026-08-05)
+
+"A simulated copy trader to test if some wallets are worth it" — exactly the
+product's shape: find out a wallet is mid with fake money instead of real.
+Design constraints, honesty-first:
+
+- **Watch, don't guess.** The user pastes a wallet; the on-chain feed
+  (rpc-pool + onchain-feed, the F-33 vault machinery) observes that wallet's
+  actual swaps and mirrors them into a SEPARATE paper book ("shadow book"),
+  filled at the price WE observe when WE see the trade — the copier's
+  realistic fill, not the leader's. The gap between the leader's entry and
+  our observed fill IS the finding: copy latency is most of why copy trading
+  loses. Both numbers get recorded and shown.
+- **Separate book, never blended.** Shadow books never touch the user's own
+  wallet, rounds, streaks, grades, rank, or attestation chain (F-30's lesson
+  as a design rule: two books must be indistinguishable never). Per-wallet
+  verdict card: expectancy, hold symmetry, revenge pattern, drawdown — the
+  mastery stats applied to the copied wallet, plus "what you'd have paid in
+  fees" through the existing cost model.
+- **Bounded honestly.** Watching starts when the user adds the wallet and the
+  card says so (X-Ray's "observed since" doctrine); no backfilled history, no
+  pretending we saw trades we didn't. Hard cap on watched wallets (RPC
+  budget); everything local, nothing phones home.
+- **Not before the on-chain feed is boringly stable** on the sites people
+  actually copy from (pump.fun launches + AMM tokens, F-33/F-34 class).
+
 ---
 
 ## Execution model

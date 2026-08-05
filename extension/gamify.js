@@ -425,8 +425,203 @@
     };
   }
 
+  /* ---------------- trading games (GAMIFY.md: played on live charts) ------
+   * A "game" here is a RULESET over real paper trading on real charts —
+   * never a synthetic market, never a guess-the-candle machine. All three
+   * are always-on and fully derived from the journal: no start button, no
+   * stored game state, nothing to migrate, nothing to cheat.
+   */
+
+  /** Non-overlapping qualifying runs: current streak, best, and how many
+   *  times a full `target`-length run completed (streak resets on completion
+   *  so the next run starts clean). */
+  function runsOver(rounds, qualifies, target) {
+    let current = 0;
+    let best = 0;
+    let completions = 0;
+    for (const r of rounds) {
+      if (qualifies(r)) {
+        current += 1;
+        if (current > best) best = current;
+        if (current >= target) { completions += 1; current = 0; }
+      } else {
+        current = 0;
+      }
+    }
+    return { current, best, completions };
+  }
+
+  function captureOf(E, round) {
+    const exit = E && typeof E.exitQuality === 'function' ? E.exitQuality(round) : null;
+    return exit ? exit.capturedPct : null;
+  }
+
+  /** Rounds bucketed by LOCAL close day, in day order (D-49 bucketing). */
+  function dayBuckets(rounds) {
+    const byDay = new Map();
+    for (const r of rounds) {
+      const closedAt = num(r.closedAt);
+      if (closedAt === null) continue;
+      const key = dayKey(closedAt);
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(r);
+    }
+    return byDay; // Map preserves insertion order; rounds arrive chronological
+  }
+
+  /** The Gauntlet alone, Date-free on purpose: the overlay computes it in
+   *  its event-driven cache, and the overlay harnesses stub Date down to
+   *  {now} — day-bucketed games stay a dashboard concern. */
+  function gauntletRun(state) {
+    const rounds = chronological(state);
+    const hasThesis = (r) => Boolean(r.thesis
+      && (typeof r.thesis === 'object' || String(r.thesis).trim().length));
+    return runsOver(rounds, (r) => hasThesis(r) && !isRevengeEntry(state, r), 10);
+  }
+
+  function games(state, now) {
+    const { E } = deps();
+    const nowTs = num(now) !== null ? num(now) : Date.now();
+    const rounds = chronological(state);
+    const today = dayKey(nowTs);
+    const byDay = dayBuckets(rounds);
+
+    // The Gauntlet: ten straight rounds, each with a written thesis and no
+    // revenge entry. The discipline streak, made a summit.
+    const gauntlet = gauntletRun(state);
+
+    // One-Shot: a day with EXACTLY one round, capturing 50%+ of what it
+    // offered. One entry, one exit, no second helpings.
+    let oneShotWins = 0;
+    for (const [key, dayRounds] of byDay) {
+      if (key === today) continue; // today is judged live below, not banked
+      const c = dayRounds.length === 1 ? captureOf(E, dayRounds[0]) : null;
+      if (c !== null && c >= 50) oneShotWins += 1;
+    }
+    const todayRounds = byDay.get(today) || [];
+    let oneShotToday = null;
+    if (todayRounds.length === 1) {
+      const c = captureOf(E, todayRounds[0]);
+      oneShotToday = c !== null && c >= 50 ? 'won' : 'missed';
+    } else if (todayRounds.length > 1) {
+      oneShotToday = 'busted';
+    }
+
+    // Score Attack: a day's average capture across 3+ graded rounds. The
+    // high score is a DAY, not a trade — consistency beats one hero exit.
+    let bestDay = null;
+    for (const [key, dayRounds] of byDay) {
+      const caps = dayRounds.map((r) => captureOf(E, r)).filter((c) => c !== null);
+      if (caps.length < 3) continue;
+      const avg = caps.reduce((s, c) => s + c, 0) / caps.length;
+      if (!bestDay || avg > bestDay.score) bestDay = { day: key, score: avg, rounds: caps.length };
+    }
+    const todayCaps = todayRounds.map((r) => captureOf(E, r)).filter((c) => c !== null);
+
+    return [
+      {
+        id: 'gauntlet',
+        label: 'The Gauntlet',
+        detail: 'Ten straight rounds, each with a written thesis and no revenge entry. Break one rule and the run resets.',
+        progress: gauntlet.current,
+        target: 10,
+        best: gauntlet.best,
+        completions: gauntlet.completions,
+      },
+      {
+        id: 'one-shot',
+        label: 'One-Shot',
+        detail: 'One entry, one exit for the whole day, capturing 50%+ of what the trade offered. A second round busts the day.',
+        wins: oneShotWins,
+        today: { rounds: todayRounds.length, verdict: oneShotToday },
+      },
+      {
+        id: 'score-attack',
+        label: 'Score Attack',
+        detail: 'Average capture across 3+ closed rounds in one day. The high score is a day, not a lucky exit.',
+        best: bestDay,
+        today: {
+          rounds: todayCaps.length,
+          avg: todayCaps.length ? todayCaps.reduce((s, c) => s + c, 0) / todayCaps.length : null,
+        },
+      },
+    ];
+  }
+
+  /** Longer-horizon discipline tracks. Days without trades never break a
+   *  day-scoped run — a challenge must never nudge anyone into overtrading. */
+  function challenges(state) {
+    const { E, M } = deps();
+    const rounds = chronological(state);
+    const hasThesis = (r) => Boolean(r.thesis
+      && (typeof r.thesis === 'object' || String(r.thesis).trim().length));
+
+    // Journal Week: 7 consecutive TRADED days where every round has a thesis.
+    let dayRun = 0;
+    let dayBest = 0;
+    let weekCompletions = 0;
+    for (const [, dayRounds] of dayBuckets(rounds)) {
+      if (dayRounds.every(hasThesis)) {
+        dayRun += 1;
+        if (dayRun > dayBest) dayBest = dayRun;
+        if (dayRun >= 7) { weekCompletions += 1; dayRun = 0; }
+      } else {
+        dayRun = 0;
+      }
+    }
+
+    const sweep = runsOver(rounds, (r) => {
+      const exit = E && typeof E.exitQuality === 'function' ? E.exitQuality(r) : null;
+      return !(exit && exit.roundTripped);
+    }, 15);
+
+    const snipers = rounds.filter((r) => {
+      const c = captureOf(E, r);
+      return c !== null && c >= 80;
+    }).length;
+
+    const cold = M ? M.stats(state).coldStreak : { length: 0, disciplined: null };
+
+    return [
+      {
+        id: 'journal-week',
+        label: 'Journal Week',
+        detail: 'Seven traded days in a row where every round carries a written thesis. Quiet days don’t break the run — this is never a reason to force a trade.',
+        progress: dayRun,
+        target: 7,
+        done: dayBest >= 7,
+        completions: weekCompletions,
+      },
+      {
+        id: 'clean-sweep',
+        label: 'Clean Sweep',
+        detail: 'Fifteen straight rounds without round-tripping a green position to red.',
+        progress: sweep.current,
+        target: 15,
+        done: sweep.best >= 15,
+        completions: sweep.completions,
+      },
+      {
+        id: 'sniper-five',
+        label: 'Sniper Five',
+        detail: 'Five rounds capturing 80%+ of the move on offer.',
+        progress: Math.min(snipers, 5),
+        target: 5,
+        done: snipers >= 5,
+      },
+      {
+        id: 'cold-blooded',
+        label: 'Cold Blood',
+        detail: 'Survive a real losing streak (3+) without sizing up. Unlocked by adversity, not by volume.',
+        progress: cold.length >= 3 && cold.disciplined === true ? 1 : 0,
+        target: 1,
+        done: cold.length >= 3 && cold.disciplined === true,
+      },
+    ];
+  }
+
   const api = {
-    roundGrade, streaks, rank, reps, badges, drills,
+    roundGrade, streaks, rank, reps, badges, drills, games, challenges, gauntletRun,
     isRevengeEntry,
     RANKS, GRADE_BANDS, REP_FULL_PER_DAY, REP_HALF_PER_DAY,
     REVENGE_WINDOW_MS, REVENGE_SIZE_RATIO,

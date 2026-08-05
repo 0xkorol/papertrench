@@ -377,6 +377,40 @@ test('closing a viewer clears its registration and does NOT respawn it', async (
     'destination viewers do not respawn — a closed viewer stays closed until the next click');
 });
 
+test('a user-closed viewer stays closed through PREWARM; a real click revives the family', async () => {
+  // Community report (Eyes343): pump.fun + Solscan "open every time you
+  // open/refresh the DEX". warm-links.js fires pt_warmdest_prewarm on every
+  // page load (its enabled-edge detector is per-page), and prewarm happily
+  // recreated whatever the user had just closed. The closed marker makes the
+  // user's close stick for the browser session; a genuine click lifts it.
+  const worker = destWorker({ platformTabs: [{ id: 7 }] });
+  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 2, 'both viewers prewarm initially');
+
+  const pumpId = worker.session.pt_warm_tab_pumpfun.tabId;
+  worker.tabsById.delete(pumpId);
+  worker.listeners.onRemoved(pumpId, { isWindowClosing: false });
+  await worker.settle();
+
+  // The DEX refreshes — warm-links fires prewarm again, twice for good measure.
+  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 2,
+    'prewarm must never resurrect a viewer the user closed (the refresh-infestation report)');
+  assert.equal(worker.session.pt_warm_tab_pumpfun, undefined, 'no zombie registration either');
+  assert.ok(worker.session.pt_warm_tab_solscan, 'the untouched family keeps its viewer');
+
+  // A real pump.fun click is the user asking for the destination again — it
+  // lifts the marker and the family recreates on the spot.
+  await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
+  await worker.settle();
+  assert.ok(worker.session.pt_warm_tab_pumpfun, 'the click recreates the family viewer');
+  assert.equal(worker.session.pt_warm_tab_pumpfun_closed, undefined,
+    'the stay-closed marker is lifted by the click');
+});
+
 /* ---------------- Turbo receipts (local route timings) ---------------- */
 
 test('every routed open leaves a local receipt: route count + bounded timing ring', async () => {

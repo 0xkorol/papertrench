@@ -1380,6 +1380,9 @@ async function warmDestOpen(rawUrl, sender, settings) {
 
   return warmSerial(async () => {
     const startedAt = Date.now();
+    // A real click is the user re-requesting this destination — it lifts the
+    // stay-closed marker the closed viewer left behind.
+    await writeWarmDestClosed(target.family, false);
     const valid = await validWarmDestTab(target.family);
     if (!valid) {
       // Cold path — the new tab immediately becomes the family viewer, so
@@ -1422,8 +1425,34 @@ async function warmDestHint(rawUrl, settings) {
   });
 }
 
+/* The user closing a viewer is an instruction, not an accident. Community
+ * report (Eyes343, 2026-08-05): pump.fun + Solscan "open every time you
+ * open/refresh the DEX" — the per-page settings edge in warm-links.js fires
+ * pt_warmdest_prewarm on EVERY trading-page load, and prewarm recreated any
+ * missing viewer, including ones the user had just closed. The click path
+ * already honored "a closed viewer does NOT respawn"; prewarm now does too:
+ * a session-scoped closed marker blocks re-creation until the user actually
+ * asks for that destination again (a real click clears it). */
+function warmDestClosedKey(family) {
+  return WARM_DEST_FAMILIES[family].storageKey + '_closed';
+}
+function readWarmDestClosed(family) {
+  return new Promise((resolve) => chrome.storage.session.get([warmDestClosedKey(family)], (value) => {
+    if (chrome.runtime && chrome.runtime.lastError) { resolve(false); return; }
+    resolve(Boolean(value[warmDestClosedKey(family)]));
+  }));
+}
+function writeWarmDestClosed(family, closed) {
+  return new Promise((resolve) => {
+    if (closed) chrome.storage.session.set({ [warmDestClosedKey(family)]: Date.now() }, () => resolve());
+    else chrome.storage.session.remove(warmDestClosedKey(family), () => resolve());
+  });
+}
+
 /** Pre-create both hidden viewers so the session's FIRST click is warm.
- * Idempotent under warmSerial, exactly like warmPrewarm. */
+ * Idempotent under warmSerial, exactly like warmPrewarm — and idempotent
+ * against user INTENT: a family whose viewer the user closed sits out until
+ * a real click re-requests it. */
 function warmDestPrewarm() {
   return warmSerial(async () => {
     const settings = await getSettings();
@@ -1432,6 +1461,7 @@ function warmDestPrewarm() {
       const spec = WARM_DEST_FAMILIES[family];
       if (!spec.idleUrl) continue; // terminal viewers are click-created only
       if (await validWarmDestTab(family)) continue;
+      if (await readWarmDestClosed(family)) continue; // closed by the user: stay closed
       let tab = null;
       try { tab = await chrome.tabs.create({ url: spec.idleUrl, active: false }); } catch (_) { tab = null; }
       if (!tab || !Number.isFinite(tab.id)) continue;
@@ -1463,7 +1493,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   warmSerial(async () => {
     for (const family of Object.keys(WARM_DEST_FAMILIES)) {
       const state = await readWarmDestTab(family);
-      if (state && state.tabId === tabId) await clearWarmDestTab(family);
+      if (state && state.tabId === tabId) {
+        await clearWarmDestTab(family);
+        // Only the USER closes a tab we still track: our own toggle-off path
+        // clears the record before removing the tab. Remember the closure so
+        // prewarm stops resurrecting it (Eyes343's "opens on every refresh").
+        await writeWarmDestClosed(family, true);
+      }
     }
   });
 });

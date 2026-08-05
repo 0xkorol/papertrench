@@ -1867,11 +1867,12 @@
    * world. Renderers read the cache; the cache never writes state.
    */
   let trenchStreaks = null;
+  let trenchGauntlet = null;
   let trenchRoundsKey = null;
 
   function refreshTrenchCache() {
     const G = window.PTGamify;
-    if (!G) { trenchStreaks = null; updateTrenchBarChip(); return; }
+    if (!G) { trenchStreaks = null; trenchGauntlet = null; updateTrenchBarChip(); return; }
     // adoptState fires on every ~800 ms persist echo while a position's mark
     // moves — not only on closes. Streaks depend ONLY on the closed-rounds
     // list (newest-first, engine unshift), so a cheap shape key gates the
@@ -1882,6 +1883,9 @@
     if (key === trenchRoundsKey) return;
     trenchRoundsKey = key;
     trenchStreaks = G.streaks(state);
+    // gauntletRun is Date-free by contract: the day-bucketed games are a
+    // dashboard concern, and the overlay harness stubs Date down to {now}.
+    trenchGauntlet = typeof G.gauntletRun === 'function' ? G.gauntletRun(state) : null;
     updateTrenchBarChip();
   }
 
@@ -1893,6 +1897,10 @@
     const parts = [];
     if (st && st.journal.current >= 3) parts.push(`🔥${st.journal.current} journal`);
     if (st && st.cleanExit.current >= 3) parts.push(`🔥${st.cleanExit.current} clean`);
+    // A Gauntlet run within reach of the summit rides the same chip.
+    if (trenchGauntlet && trenchGauntlet.current >= 3) {
+      parts.push(`⚔ ${trenchGauntlet.current}/10 gauntlet`);
+    }
     if (!parts.length) {
       els.barStreak.classList.add('pt-hidden');
       els.barStreak.textContent = '';
@@ -2258,6 +2266,16 @@
        Everything that remains is a chip row, like the terminal's own widget. */
     .pt-box.pt-focus .pt-balance { display: none; }
     .pt-box.pt-focus.pt-focus-instant .pt-buy { display: none; }
+    /* Round 3 (toshi_100x: "small sleek simple", "less info and few
+       keywords"): the header slims to the drag strip it really is — the
+       subtitle line goes, the icon shrinks — and the cost chips collapse
+       out of focus mode entirely: the ✎ in the header stays the editor
+       entry, so nothing is lost, just not narrated. */
+    .pt-box.pt-focus #pt-subtitle { display: none; }
+    .pt-box.pt-focus .pt-header { padding: 7px 10px 6px; gap: 8px; }
+    .pt-box.pt-focus .pt-icon { width: 18px; height: 18px; font-size: 10px; border-radius: 6px; }
+    .pt-box.pt-focus .pt-title { font-size: 12px; }
+    .pt-box.pt-focus .pt-costs { display: none; }
     .pt-box.pt-focus .pt-custom { margin-top: 5px; padding: 6px 9px; }
     .pt-box.pt-focus .pt-token-row { margin-bottom: 4px; }
     .pt-box.pt-focus .pt-costs { margin-top: 4px; }

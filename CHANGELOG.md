@@ -3,6 +3,39 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.11.0 — 2026-08-05
+
+The Game tab — and a round of community fixes.
+
+- **A Game tab in the dashboard.** Your full trench profile: the tier
+  ladder with every gate's live progress, streaks, reps, the badge case,
+  and your process distribution over the last 30 graded rounds.
+- **Three trading games, played on the live charts you already trade.**
+  The Gauntlet (ten straight rounds, thesis written, no revenge — break a
+  rule and the run resets), One-Shot (one entry, one exit for the whole
+  day, 50%+ captured; a second round busts it), and Score Attack (best
+  average capture across a 3+ round day — the high score is a day, not a
+  lucky exit). All derived live from your journal: no start button, no
+  stored game state, nothing to cheat. A Gauntlet run from 3 up rides the
+  positions bar.
+- **Challenge tracks:** Journal Week (seven traded days, every round
+  thesis'd — quiet days never break the run), Clean Sweep (15 rounds
+  without a round-trip), Sniper Five, Cold Blood.
+- **Warm pump.fun/Solscan viewers respect a close.** (Reported by
+  Eyes343.) If you close a warm viewer tab, refreshing the DEX no longer
+  reopens it — closed stays closed for the browser session, and your next
+  actual pump.fun/Solscan click brings it back.
+- **Focus mode, round three — toshi_100x's "small sleek simple".** The
+  header slims to a drag strip (subtitle gone, icon smaller) and the cost
+  chips collapse out of focus mode — the ✎ still opens the editor, so
+  nothing is lost, just not narrated.
+- **fomo.family is a supported terminal.** Overlay, warm mirror, and X-Ray
+  contract-address recognition on Fomo pages.
+- On the roadmap by community request (TheRedShark123): a **paper copy
+  trader** — watch a wallet, mirror its trades into a separate shadow book
+  at your realistically-observed fills, and get an honest verdict on
+  whether it's worth copying. Design is in ROADMAP.md Phase 7.
+
 ## v2.10.0 — 2026-08-05
 
 Trench Rank — discipline is now the game.

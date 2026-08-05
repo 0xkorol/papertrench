@@ -205,6 +205,65 @@ test('the daily drill is deterministic for a day and measures honestly', () => {
   assert.equal(done.progress, 3);
 });
 
+/* ---------------- trading games ---------------- */
+
+test('the Gauntlet counts non-overlapping disciplined runs and resets on a violation', () => {
+  const clean = () => mkRound({ pnlSol: -0.01, peakPnlSol: 0, troughPnlSol: -0.01 });
+  const rounds = [];
+  for (let i = 0; i < 10; i += 1) rounds.push(clean());   // one full run
+  rounds.push(mkRound({ thesis: null }));                  // violation resets
+  for (let i = 0; i < 4; i += 1) rounds.push(clean());     // partial run
+  const g = G.games(state(rounds), Date.now()).find((x) => x.id === 'gauntlet');
+  assert.equal(g.completions, 1);
+  assert.equal(g.progress, 4, 'the current run restarts after the thesisless round');
+  assert.equal(g.best, 10);
+});
+
+test('One-Shot banks exactly-one-round days at 50%+ capture and judges today live', () => {
+  const base = new Date(2026, 7, 1, 10).getTime();
+  const day = (n) => base + n * 24 * 60 * 60 * 1000;
+  const rounds = [
+    mkRound({ openedAt: day(0), closedAt: day(0) + 60_000, pnlSol: 0.6, peakPnlSol: 1.0 }),   // day 0: 60% — win
+    mkRound({ openedAt: day(1), closedAt: day(1) + 60_000, pnlSol: 0.2, peakPnlSol: 1.0 }),   // day 1: 20% — miss
+    mkRound({ openedAt: day(2), closedAt: day(2) + 60_000, pnlSol: 0.9, peakPnlSol: 1.0 }),   // day 2 first…
+    mkRound({ openedAt: day(2), closedAt: day(2) + 120_000, pnlSol: 0.9, peakPnlSol: 1.0 }),  // …second: busted
+    mkRound({ openedAt: day(3), closedAt: day(3) + 60_000, pnlSol: 0.8, peakPnlSol: 1.0 }),   // today: 80%
+  ];
+  const g = G.games(state(rounds), day(3) + 3 * 60 * 60 * 1000).find((x) => x.id === 'one-shot');
+  assert.equal(g.wins, 1, 'only the clean single-round 50%+ day banks');
+  assert.equal(g.today.rounds, 1);
+  assert.equal(g.today.verdict, 'won', 'today is judged live, not banked');
+});
+
+test('Score Attack high score is a day of 3+ graded rounds, never a single exit', () => {
+  const base = new Date(2026, 7, 10, 10).getTime();
+  const day = (n) => base + n * 24 * 60 * 60 * 1000;
+  const at = (d, i, cap) => mkRound({
+    openedAt: day(d) + i * 600_000, closedAt: day(d) + i * 600_000 + 60_000,
+    pnlSol: cap / 100, peakPnlSol: 1.0,
+  });
+  const rounds = [
+    at(0, 0, 90), at(0, 1, 90),                    // two rounds: not enough
+    at(1, 0, 60), at(1, 1, 70), at(1, 2, 80),      // avg 70 — the high score
+  ];
+  const g = G.games(state(rounds), day(2)).find((x) => x.id === 'score-attack');
+  assert.ok(g.best, 'a qualifying day exists');
+  assert.ok(Math.abs(g.best.score - 70) < 1e-9);
+  assert.equal(g.best.rounds, 3);
+});
+
+test('Journal Week advances only on traded days and never punishes a quiet day', () => {
+  const base = new Date(2026, 6, 1, 10).getTime();
+  const day = (n) => base + n * 24 * 60 * 60 * 1000;
+  // Traded days 0,1,2 then a 4-day gap, then days 7,8 — all thesis'd.
+  const rounds = [0, 1, 2, 7, 8].map((n) => mkRound({
+    openedAt: day(n), closedAt: day(n) + 60_000, pnlSol: 0.1, peakPnlSol: 0.2,
+  }));
+  const c = G.challenges(state(rounds)).find((x) => x.id === 'journal-week');
+  assert.equal(c.progress, 5, 'the calendar gap neither breaks nor advances the run');
+  assert.equal(c.done, false);
+});
+
 /* ---------------- purity ---------------- */
 
 test('gamify never mutates the state it reads', () => {
@@ -220,5 +279,7 @@ test('gamify never mutates the state it reads', () => {
   G.reps(s, Date.now());
   G.badges(s);
   G.drills(s, Date.now());
+  G.games(s, Date.now());
+  G.challenges(s);
   assert.equal(JSON.stringify(s), before, 'derived means derived');
 });

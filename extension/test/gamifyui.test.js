@@ -194,6 +194,41 @@ test('cardModel derives trench display strings and the flag hides them (absent =
   assert.equal(bare.rankText, '');
 });
 
+/* ================= the Game tab ================= */
+
+test('the Game tab is wired: nav button, section container, dispatch branch, soft-guarded renderer', () => {
+  assert.match(html, /<button data-section="game">Game<\/button>/, 'the sidebar must offer the tab');
+  assert.match(html, /<section id="game" class="section hidden"><\/section>/, 'the section container must exist');
+  const dispatch = fnBlock(dashJs, 'function renderSection(id)');
+  assert.match(dispatch, /else if \(id === 'game'\) renderGame\(staged\);/, 'the dispatch must route to renderGame');
+  const game = fnBlock(dashJs, 'function renderGame(el)');
+  assert.match(game, /const G = window\.PTGamify;/, 'the tab consumes PTGamify');
+  assert.doesNotMatch(game, /\bthrow\b/, 'a render-path throw blanks the dashboard (D-16) — degrade, never throw');
+  assert.match(game, /G\.games\(state, now\)/, 'the tab renders the trading games');
+  assert.match(game, /G\.challenges\(state\)/, 'the tab renders the challenge tracks');
+});
+
+test('games and challenges are pure derived rulesets — no storage writes anywhere in gamify.js', () => {
+  const gamify = read('gamify.js');
+  assert.doesNotMatch(gamify, /chrome\.storage/, 'gamify.js must never touch storage (derived, not stored)');
+  assert.match(gamify, /function games\(state, now\)/, 'games() exists');
+  assert.match(gamify, /function challenges\(state\)/, 'challenges() exists');
+  assert.doesNotMatch(gamify, /Math\.random/, 'no synthetic randomness — games measure real rounds only');
+});
+
+test('the overlay gauntlet chip rides the event-driven cache via the Date-free seam', () => {
+  const cache = contentBlock('function refreshTrenchCache()');
+  assert.match(cache, /G\.gauntletRun\(state\)/, 'the gauntlet is computed inside the gated cache');
+  assert.doesNotMatch(cache, /G\.games\(/,
+    'the overlay must use gauntletRun — games() day-buckets via new Date(), which the overlay harnesses stub away');
+  const bar = contentBlock('function renderPositionsBar()');
+  assert.doesNotMatch(bar, /G\.games|games\(state|gauntletRun/, 'the per-tick bar render must never compute games');
+  const gamify = read('gamify.js');
+  const gauntletFn = gamify.slice(gamify.indexOf('function gauntletRun(state)'), gamify.indexOf('function games(state, now)'));
+  assert.doesNotMatch(gauntletFn, /new Date|dayKey|dayBuckets/,
+    'gauntletRun stays Date-free by contract');
+});
+
 /* ================= vm-slice: the grade cell renders honestly ================= */
 
 test('renderGradeCell praises a clean red and tags the lucky win', () => {

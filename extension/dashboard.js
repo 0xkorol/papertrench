@@ -638,6 +638,7 @@ function renderSection(id) {
   // Build into a detached element: nothing here is ever painted.
   const staged = document.createElement('div');
   if (id === 'overview') renderOverview(staged);
+  else if (id === 'game') renderGame(staged);
   else if (id === 'calendar') renderCalendar(staged);
   else if (id === 'journal') renderJournal(staged);
   else if (id === 'rounds') renderRounds(staged);
@@ -1020,6 +1021,139 @@ function renderTrenchRank() {
         <span class="mono">${drill.done ? '<span class="green">DONE</span>' : drill.progress >= drill.target ? '<span class="red">NOT MET</span>' : `${drill.progress}/${drill.target}`}</span>
       </div>
       <div class="rank-badges">${badgeCase}</div>
+    </div>`;
+}
+
+/* ---------------- the Game tab (docs/GAMIFY.md, community-requested) ------
+ * The full profile: ladder with every tier, the chart-bound trading games,
+ * challenge tracks, grade distribution, and the badge case. Everything is
+ * the same derived PTGamify data the overview card reads — this tab can
+ * disagree with nothing. Games are RULESETS over real paper trading on real
+ * charts: no synthetic market, no guess-the-candle, and the loop still ends
+ * at graduation on purpose.
+ */
+function renderGame(el) {
+  const G = window.PTGamify;
+  if (!G) { el.innerHTML = `<div class="card">${emptyState('Game module not loaded', 'gamify.js is missing from this build.')}</div>`; return; }
+  const r = G.rank(state);
+  if (!r) { el.innerHTML = `<div class="card">${emptyState('Game module not ready', 'mastery.js is missing from this build.')}</div>`; return; }
+  const now = Date.now();
+  const rep = G.reps(state, now);
+  const st = G.streaks(state);
+  const drill = G.drills(state, now);
+  const games = G.games(state, now);
+  const challenges = G.challenges(state);
+  const badges = G.badges(state);
+
+  // Grade distribution over the recent window — one pass, same map the
+  // rounds table uses (never per-cell recomputation).
+  const tally = { S: 0, A: 0, B: 0, C: 0, D: 0, F: 0 };
+  let graded = 0;
+  for (const round of (state.rounds || []).slice(0, 30)) {
+    const g = G.roundGrade(state, round);
+    if (!g) continue;
+    tally[g.letter] += 1;
+    graded += 1;
+  }
+  const GRADE_TONE = { S: 'var(--violet)', A: 'var(--green)', B: 'var(--blue)', C: 'var(--amber)', D: 'var(--red)', F: 'var(--red)' };
+  const distro = graded ? Object.keys(tally).map((l) => `
+      <div class="game-grade" title="${tally[l]} of your last ${graded} graded rounds">
+        <span class="mono" style="color:${GRADE_TONE[l]};font-weight:800">${l}</span>
+        <div class="rank-bar"><div class="rank-bar-fill" style="width:${Math.round((tally[l] / graded) * 100)}%;background:${GRADE_TONE[l]}"></div></div>
+        <span class="dim mono" style="font-size:11px">${tally[l]}</span>
+      </div>`).join('') : `<div class="dim" style="font-size:12px">No graded rounds yet — close a round and the receipt starts here.</div>`;
+
+  const ladder = G.RANKS.map((tier) => {
+    const stateCls = tier.tier < r.tier ? 'done' : tier.tier === r.tier ? 'current' : '';
+    return `
+      <div class="game-tier ${stateCls}">
+        <span class="mono tier-num">T${tier.tier}</span>
+        <span class="tier-name">${esc(tier.name)}</span>
+        ${tier.tier < r.tier ? '<span class="green">✓</span>' : tier.tier === r.tier ? '<span class="tier-here">YOU</span>' : ''}
+      </div>`;
+  }).join('');
+
+  const gates = r.next ? r.next.requirements.map((g) => `
+      <div class="rank-gate" title="${esc(g.label)}">
+        <span class="rank-gate-label">${g.done ? '<span class="green">✓</span> ' : ''}${esc(g.label)}</span>
+        ${rankBar(g.progress, g.done)}
+      </div>`).join('') : '';
+
+  const gameCards = games.map((g) => {
+    let status = '';
+    if (g.id === 'gauntlet') {
+      status = `
+        <div class="stat"><span class="dim">Run</span><span class="mono">${g.progress}/${g.target}</span></div>
+        <div class="stat"><span class="dim">Best run</span><span class="mono">${g.best}</span></div>
+        <div class="stat"><span class="dim">Completed</span><span class="mono">${g.completions}×</span></div>
+        ${rankBar(g.progress / g.target, g.progress >= g.target)}`;
+    } else if (g.id === 'one-shot') {
+      const verdict = g.today.verdict === 'won' ? '<span class="green">WON</span>'
+        : g.today.verdict === 'missed' ? '<span class="amber">MISSED</span>'
+          : g.today.verdict === 'busted' ? '<span class="red">BUSTED</span>'
+            : '<span class="dim">no round yet</span>';
+      status = `
+        <div class="stat"><span class="dim">Days won</span><span class="mono">${g.wins}</span></div>
+        <div class="stat"><span class="dim">Today (${g.today.rounds} round${g.today.rounds === 1 ? '' : 's'})</span><span class="mono">${verdict}</span></div>`;
+    } else if (g.id === 'score-attack') {
+      status = `
+        <div class="stat"><span class="dim">High score</span><span class="mono">${g.best ? `${g.best.score.toFixed(0)}% avg · ${g.best.rounds} rounds` : '—'}</span></div>
+        <div class="stat"><span class="dim">Today</span><span class="mono">${g.today.rounds >= 1 ? `${g.today.avg === null ? '—' : g.today.avg.toFixed(0) + '% avg'} · ${g.today.rounds}/3 rounds` : '—'}</span></div>`;
+    }
+    return `
+      <div class="card game-card">
+        <h3>${esc(g.label)}</h3>
+        <div class="dim" style="font-size:11.5px;margin-bottom:8px">${esc(g.detail)}</div>
+        ${status}
+      </div>`;
+  }).join('');
+
+  const challengeRows = challenges.map((c) => `
+      <div class="stat" title="${esc(c.detail)}">
+        <span class="dim">${c.done ? '<span class="green">✓</span> ' : ''}${esc(c.label)}${c.completions ? ` <span class="tag">${c.completions}×</span>` : ''}</span>
+        <span class="mono">${c.done && c.target === 1 ? '<span class="green">DONE</span>' : `${c.progress}/${c.target}`}</span>
+      </div>`).join('');
+
+  const badgeCase = badges.map((b) => {
+    const when = b.earnedAt ? ` — ${formatDateTime(b.earnedAt)}` : '';
+    return `<span class="tag badge${b.earned ? ' earned' : ''}" title="${esc(b.detail + (b.earned ? when : ''))}">${esc(b.label)}</span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="card">
+      <h3>Trench profile
+        <span style="margin-left:auto;font-weight:700;color:var(--amber)">TIER ${r.tier} · ${esc(r.name.toUpperCase())}</span>
+      </h3>
+      <div class="dim" style="font-size:11.5px;margin-bottom:10px">LVL ${rep.level} · ${fmt(rep.total, 1)} reps · next level at ${fmt(rep.nextLevelAt, 0)}</div>
+      <div class="game-ladder">${ladder}</div>
+      ${r.next ? `<div class="lab" style="font-size:9.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:var(--faint);margin:10px 0 6px">Next gate: ${esc(r.next.name)}</div>${gates}`
+    : '<div class="green" style="font-size:12.5px;margin-top:8px">Graduated. The bar is passed — the next step is a small, careful real start, not another level here.</div>'}
+      <div class="rank-streaks">
+        ${streakStat('Journal streak', st.journal)}
+        ${streakStat('Clean exits', st.cleanExit)}
+        ${streakStat('No revenge', st.noRevenge)}
+      </div>
+    </div>
+    <div class="lab game-lab">Trading games — played on the live charts you already trade</div>
+    <div class="grid3">${gameCards}</div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="card">
+        <h3>Challenges</h3>
+        ${challengeRows}
+        <div class="stat" title="${esc(drill.detail)}">
+          <span class="dim">Today’s drill: ${esc(drill.label)}</span>
+          <span class="mono">${drill.done ? '<span class="green">DONE</span>' : drill.progress >= drill.target ? '<span class="red">NOT MET</span>' : `${drill.progress}/${drill.target}`}</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Process, last ${graded || 30} graded rounds</h3>
+        ${distro}
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>Badge case</h3>
+      <div class="rank-badges" style="margin-top:2px">${badgeCase}</div>
+      <div class="dim" style="font-size:11px;margin-top:10px">There are no badges for profit, win streaks, or volume — those train the habits this trainer exists to break.</div>
     </div>`;
 }
 
