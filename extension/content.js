@@ -557,6 +557,12 @@
     pageQuoteSeq += 1;
     for (const resolve of pageQuoteWaiters) resolve();
     pageQuoteWaiters.clear();
+    // The After: the on-screen feed prices any active post-exit watch for
+    // this token for free.
+    if (settings.postExitWatchEnabled !== false
+      && E.notePostExitPrice(state, token.mint, verdict.priceNative, lastPriceAt)) {
+      persistSoon();
+    }
     flushArmedBuy();
     // A duplicate tick still proves the feed is alive, but it does not need a
     // position mark, storage write, or DOM render.
@@ -1612,6 +1618,10 @@
   function requestBuy(amt) {
     if (!(amt > 0)) return toast('Pick a SOL amount first');
     if (buyInFlight) return toast('Buy already in progress…');
+    // Guardrails: the trader's own opt-in rules, enforced while the money is
+    // fake so the habit exists before the money is real.
+    const guard = E.guardCheck(state, settings, { solAmount: amt });
+    if (!guard.ok) return toast(guard.message);
     primeAudio();
 
     // A brand-new coin may still be resolving. Rather than refusing the
@@ -3478,6 +3488,9 @@
     primeAudio();
     try {
       const amount = (settings.presetsBuy || [0.1])[0];
+      // Guardrails apply to chip buys exactly like panel buys.
+      const guard = E.guardCheck(state, settings, { solAmount: amount });
+      if (!guard.ok) { toast(guard.message); return; }
       // A screener chip fill must not price from a minute-old display cache
       // (the resolver keeps entries 60 s for display use). Demand a quote no
       // older than the live-feed staleness bound; the resolver refetches when
@@ -3676,6 +3689,11 @@
     chip.lastPnl = row.pnlSol;
   }
 
+  /** True while any closed round still has its post-exit watch running. */
+  function postWatchActive() {
+    return settings.postExitWatchEnabled !== false && E.postWatchMints(state).length > 0;
+  }
+
   /**
    * Keep prices fresh for positions the user is NOT currently looking at.
    *
@@ -3684,13 +3702,26 @@
    * never stack, and a hidden tab backs off hard.
    */
   async function pollPositionPrices() {
-    if (settings.positionsBarEnabled === false) return;
+    if (settings.positionsBarEnabled === false && !postWatchActive()) return;
     if (barPollInFlight) return;
 
-    const mints = Object.keys(state.positions || {}).filter(
-      (mint) => !(token && token.mint === mint)
-    );
-    if (!mints.length) return;
+    const positionMints = settings.positionsBarEnabled === false ? [] :
+      Object.keys(state.positions || {}).filter(
+        (mint) => !(token && token.mint === mint)
+      );
+    // The After: closed rounds keep their coins on watch for a bounded
+    // window, riding the SAME batch request — near-zero extra cost for the
+    // truth about what happened after the exit.
+    const watchMints = settings.postExitWatchEnabled === false ? [] :
+      E.postWatchMints(state).filter(
+        (mint) => !(token && token.mint === mint) && !positionMints.includes(mint)
+      );
+    const mints = positionMints.concat(watchMints);
+    if (!mints.length) {
+      // Watches can expire with no fetch needed; still settle them.
+      if (E.finalizePostWatches(state) > 0) persistSoon();
+      return;
+    }
 
     const now = Date.now();
     const interval = document.hidden ? BAR_POLL_HIDDEN_MS : BAR_POLL_MS;
@@ -3704,12 +3735,16 @@
       for (const mint of Object.keys(prices)) {
         const quote = prices[mint];
         if (!quote || !(quote.priceNative > 0)) continue;
-        livePositionPrices[mint] = { priceNative: quote.priceNative, priceUsd: quote.priceUsd };
-        // Mark the engine too, so peak/trough and equity stay truthful for
-        // positions the user never has on screen.
-        E.markPosition(state, mint, quote.priceNative, quote.priceUsd);
-        changed = true;
+        if (positionMints.includes(mint)) {
+          livePositionPrices[mint] = { priceNative: quote.priceNative, priceUsd: quote.priceUsd };
+          // Mark the engine too, so peak/trough and equity stay truthful for
+          // positions the user never has on screen.
+          E.markPosition(state, mint, quote.priceNative, quote.priceUsd);
+          changed = true;
+        }
+        if (E.notePostExitPrice(state, mint, quote.priceNative, now)) changed = true;
       }
+      if (E.finalizePostWatches(state, now) > 0) changed = true;
       if (changed) {
         persistSoon();
         renderPositionsBar();

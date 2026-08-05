@@ -909,6 +909,30 @@ function renderJournal(el) {
 
 /* ---------- rounds ---------- */
 
+/**
+ * "The After": what the coin actually did in the hour AFTER the exit —
+ * observed extremes only, sample count in the tooltip, an em-dash while the
+ * watch is still running or when nothing was observed. The most expensive
+ * guesswork in this market, replaced with a measured number.
+ */
+function renderAfterCell(r) {
+  const a = r.afterExit;
+  if (!a) {
+    const watching = (state.postWatch || []).some((w) => w.roundId === r.id);
+    return watching
+      ? '<span class="dim" title="Still watching the hour after your exit">watching…</span>'
+      : '<span class="dim">—</span>';
+  }
+  const up = Number(a.maxPct) || 0;
+  const down = Number(a.minPct) || 0;
+  const title = `Observed over ${a.samples} sample${a.samples === 1 ? '' : 's'} in the hour after your exit`;
+  return `<span title="${esc(title)}" style="font-size:11.5px">
+    <span class="${up >= 100 ? 'red' : 'dim'}">↑${up >= 0 ? '+' : ''}${up.toFixed(0)}%</span>
+    <span class="dim">/</span>
+    <span class="${down <= -30 ? 'green' : 'dim'}">↓${down.toFixed(0)}%</span>
+  </span>`;
+}
+
 function renderRounds(el) {
   const rows = (state.rounds || []).map((r) => {
     const replay = RP.findReplay(replays, r.sessionId || '');
@@ -929,6 +953,7 @@ function renderRounds(el) {
         <td class="num ${win ? 'green' : 'red'}" style="font-weight:800">${win ? '+' : ''}${fmt(r.pnlSol)}</td>
         <td class="num ${win ? 'green' : 'red'}">${win ? '+' : ''}${r.pnlPct.toFixed(1)}%</td>
         <td class="num" style="font-size:11.5px"><span class="green">+${fmt(r.peakPnlSol)}</span> <span class="dim">/</span> <span class="red">${fmt(r.troughPnlSol)}</span></td>
+        <td>${renderAfterCell(r)}</td>
         <td>${renderExitCell(r)}</td>
         <td>${renderThesisCell(r)}</td>
         <td>${renderNoteCell(r)}</td>
@@ -941,8 +966,8 @@ function renderRounds(el) {
   el.innerHTML = `
     <div class="card"><h3>Closed round trips <span class="tag">${(state.rounds || []).length}</span></h3>
       <div class="log"><table>
-        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="15">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
+        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>After (1h)</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="16">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
       </table></div>
     </div>`;
   // Handlers are attached in rebindSection() after the element is live.
@@ -2285,6 +2310,7 @@ function renderDisciplinePanel() {
           <span class="${exits.roundTripped ? 'red' : 'green'}" style="font-weight:750">${exits.roundTripped}</span>
         </div>
         ${exits.roundTripped ? '<p class="dim" style="margin:10px 0 0;font-size:12px;line-height:1.55">Round-tripping a winner is the costliest habit on this list — the trade was profitable and the exit gave it back.</p>' : ''}
+        ${renderAfterAggregate()}
       </div>
       <div class="card">
         <h3>Position sizing</h3>
@@ -2293,6 +2319,28 @@ function renderDisciplinePanel() {
         <div class="stat"><span>Trades over 25%</span><span class="${risk.oversized ? 'red' : 'green'}" style="font-weight:750">${risk.oversized}</span></div>
         ${risk.oversized ? '<p class="dim" style="margin:10px 0 0;font-size:12px;line-height:1.55">Oversized entries make one bad read expensive enough to end a run. Consistent size is what makes a win rate meaningful.</p>' : ''}
       </div>
+    </div>`;
+}
+
+/**
+ * The After, aggregated: across rounds with an observed post-exit hour, how
+ * often did the exit dodge a dump, and what was the median further upside?
+ * Median (not mean) so one 40x can't flatter or shame the whole record.
+ */
+function renderAfterAggregate() {
+  const observed = (state.rounds || []).filter((r) => r.afterExit && r.afterExit.samples > 0);
+  if (observed.length < 3) return '';
+  const ups = observed.map((r) => Number(r.afterExit.maxPct) || 0).sort((a, b) => a - b);
+  const medianUp = ups[Math.floor(ups.length / 2)];
+  const dodged = observed.filter((r) => Number(r.afterExit.minPct) <= -30).length;
+  return `
+    <div class="stat" style="margin-top:6px">
+      <span>After your exits (1h, observed)</span>
+      <span style="font-weight:750">median further upside <span class="${medianUp >= 100 ? 'red' : 'dim'}">+${medianUp.toFixed(0)}%</span></span>
+    </div>
+    <div class="stat">
+      <span>Dumps dodged (−30%+ after you sold)</span>
+      <span class="green" style="font-weight:750">${dodged} of ${observed.length}</span>
     </div>`;
 }
 
@@ -2448,6 +2496,16 @@ function renderSettings(el) {
         <div class="field"><label for="set-profit-alert-pct">Profit bell interval (%)</label><input id="set-profit-alert-pct" type="number" min="1" max="1000" step="1" value="${settings.profitAlertPct || 10}"><small>10 rings at +10%, +20%, +30%. Crossed levels never repeat.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-avg-lines" ${settings.averagePriceLinesEnabled ? 'checked' : ''}> Padre-style average price lines</label><small>Native “Avg. Fill Price” and “Avg. Exit Price” lines from your paper fills.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-positions-bar" ${settings.positionsBarEnabled !== false ? 'checked' : ''}> Positions bar</label><small>A top rail on every trading page showing all open paper positions and their live P&amp;L. Click a position to jump to its chart.</small></div>
+      </div>
+      <div class="card">
+        <h3>Guardrails (training wheels)</h3>
+        <p class="dim" style="margin-top:0;font-size:12px;line-height:1.55">The three rules every surviving trader eventually adopts — practicable here while the money is fake. Each blocks the buy with an honest message; each is yours to switch off.</p>
+        <div class="field field-check"><label><input type="checkbox" id="set-guard-tilt" ${settings.guardTiltEnabled === true ? 'checked' : ''}> Tilt breaker</label><small>After a streak of straight losses, buying pauses for a cooldown. Revenge trades are how small losses become big ones.</small></div>
+        <div class="field"><label for="set-guard-tilt-losses">Tilt: losses in a row</label><input id="set-guard-tilt-losses" type="number" min="2" max="10" step="1" value="${Number(settings.guardTiltLosses) || 4}"></div>
+        <div class="field"><label for="set-guard-tilt-minutes">Tilt: cooldown minutes</label><input id="set-guard-tilt-minutes" type="number" min="1" max="120" step="1" value="${Number(settings.guardTiltMinutes) || 10}"></div>
+        <div class="field"><label for="set-guard-max-pct">Max position size (% of book)</label><input id="set-guard-max-pct" type="number" min="1" max="100" step="1" value="${Number(settings.guardMaxPositionPct) > 0 ? settings.guardMaxPositionPct : ''}" placeholder="blank = off"><small>A single buy larger than this share of your equity is refused.</small></div>
+        <div class="field"><label for="set-guard-daily-loss">Daily loss limit (SOL)</label><input id="set-guard-daily-loss" type="number" min="0.01" step="0.01" value="${Number(settings.guardDailyLossSol) > 0 ? settings.guardDailyLossSol : ''}" placeholder="blank = off"><small>Once today's realized paper losses reach this, buying stops until tomorrow.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-post-exit-watch" ${settings.postExitWatchEnabled !== false ? 'checked' : ''}> The After — track the hour after each exit</label><small>Records what the coin actually did after you sold (observed extremes, on the round). Measured truth instead of FOMO guesswork.</small></div>
       </div>
       <div class="card">
         <h3>Overlay</h3>
@@ -2626,6 +2684,19 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     aiEndpoint: document.getElementById('set-endpoint').value.trim() || DEFAULTS.aiEndpoint,
     aiAllowLocalEndpoint: document.getElementById('set-ai-allow-local').checked,
     rpcUrl: document.getElementById('set-rpc') ? document.getElementById('set-rpc').value.trim() : (settings.rpcUrl || ''),
+    // Guardrails + The After. Bounds mirror engine clamps; blank means off.
+    guardTiltEnabled: document.getElementById('set-guard-tilt').checked,
+    guardTiltLosses: Math.min(10, Math.max(2, Math.round(Number(document.getElementById('set-guard-tilt-losses').value) || 4))),
+    guardTiltMinutes: Math.min(120, Math.max(1, Math.round(Number(document.getElementById('set-guard-tilt-minutes').value) || 10))),
+    guardMaxPositionPct: (() => {
+      const v = Number(document.getElementById('set-guard-max-pct').value);
+      return Number.isFinite(v) && v >= 1 && v <= 100 ? v : null;
+    })(),
+    guardDailyLossSol: (() => {
+      const v = Number(document.getElementById('set-guard-daily-loss').value);
+      return Number.isFinite(v) && v > 0 ? v : null;
+    })(),
+    postExitWatchEnabled: document.getElementById('set-post-exit-watch').checked,
     aiModel: document.getElementById('set-model').value.trim(),
     aiApiKey: document.getElementById('set-key').value.trim(),
     recordingEnabled: document.getElementById('set-rec').checked,

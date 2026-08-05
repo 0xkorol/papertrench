@@ -92,6 +92,18 @@
     // Public RPC limits are per IP, so the pool scales across every install.
     // Power users can paste their own endpoint here for extra headroom.
     rpcUrl: '',
+    // "The After": keep watching a coin for a bounded window after a round
+    // closes and record the observed extremes on the round — measured truth
+    // about what your exit actually did, instead of FOMO guesswork.
+    postExitWatchEnabled: true,
+    // Guardrails (training wheels). All opt-in; enforcement happens at buy
+    // time with an honest toast, and each can be turned off in Settings —
+    // the point is practicing the rules, not being jailed by them.
+    guardTiltEnabled: false,
+    guardTiltLosses: 4,
+    guardTiltMinutes: 10,
+    guardMaxPositionPct: null,   // % of current equity per buy; null = off
+    guardDailyLossSol: null,     // paper SOL lost today stops the day; null = off
   };
 
   function defaultSettings() {
@@ -338,6 +350,11 @@
     if (pos.qty <= Math.max(pos.investedSol, 1) * 1e-9 || pos.qty <= EPS) {
       round = closeRound(state, pos, o.ts);
       delete state.positions[o.mint];
+      // The After: px is the effective exit price the trader actually got —
+      // the honest reference for everything that happens next.
+      if (!settings || settings.postExitWatchEnabled !== false) {
+        beginPostWatch(state, round, px);
+      }
     }
     return { trade, position: pos.qty > EPS ? pos : null, round };
   }
@@ -372,6 +389,149 @@
     state.rounds.unshift(round);
     if (state.rounds.length > 500) state.rounds.length = 500;
     return round;
+  }
+
+  /* ---------------- post-exit truth ("The After") ----------------
+   *
+   * The most expensive lesson in this market is what happens AFTER you sell:
+   * did it run without you, or did your exit dodge the dump? Guessing at that
+   * is how revenge FOMO starts. When a round closes, the token stays on a
+   * bounded watch list and the extremes we actually OBSERVE get recorded onto
+   * the round. Observed means observed: sample counts are stored, a watch
+   * that saw nothing records nothing, and no continuous series is invented.
+   */
+  const POST_WATCH_WINDOW_MS = 60 * 60 * 1000;
+  const POST_WATCH_CAP = 12;
+
+  function beginPostWatch(state, round, exitPriceNative) {
+    if (!round || !(Number(exitPriceNative) > 0)) return;
+    if (!Array.isArray(state.postWatch)) state.postWatch = [];
+    state.postWatch = state.postWatch.filter((w) => w.roundId !== round.id);
+    state.postWatch.unshift({
+      roundId: round.id,
+      mint: round.mint,
+      exitPriceNative: Number(exitPriceNative),
+      closedAt: round.closedAt,
+      until: round.closedAt + POST_WATCH_WINDOW_MS,
+      maxPriceNative: null,
+      minPriceNative: null,
+      samples: 0,
+      lastSampleAt: 0,
+    });
+    if (state.postWatch.length > POST_WATCH_CAP) state.postWatch.length = POST_WATCH_CAP;
+  }
+
+  /** Feed an observed price into any active post-exit watches for the mint. */
+  function notePostExitPrice(state, mint, priceNative, ts) {
+    const list = Array.isArray(state.postWatch) ? state.postWatch : null;
+    const p = Number(priceNative);
+    if (!list || !list.length || !(p > 0)) return false;
+    const now = Number(ts) || Date.now();
+    let touched = false;
+    for (const w of list) {
+      if (w.mint !== mint || now > w.until || now < w.closedAt) continue;
+      if (w.maxPriceNative === null || p > w.maxPriceNative) w.maxPriceNative = p;
+      if (w.minPriceNative === null || p < w.minPriceNative) w.minPriceNative = p;
+      w.samples += 1;
+      w.lastSampleAt = now;
+      touched = true;
+    }
+    return touched;
+  }
+
+  /**
+   * Move expired watches onto their rounds as `afterExit`. A watch that never
+   * saw a sample records nothing — an honest gap, not a guess.
+   */
+  function finalizePostWatches(state, now) {
+    const list = Array.isArray(state.postWatch) ? state.postWatch : null;
+    if (!list || !list.length) return 0;
+    const ts = Number(now) || Date.now();
+    let finalized = 0;
+    state.postWatch = list.filter((w) => {
+      if (ts <= w.until) return true;
+      const round = (state.rounds || []).find((r) => r.id === w.roundId);
+      if (round && w.samples > 0) {
+        round.afterExit = {
+          windowMs: POST_WATCH_WINDOW_MS,
+          maxPriceNative: w.maxPriceNative,
+          minPriceNative: w.minPriceNative,
+          maxPct: (w.maxPriceNative / w.exitPriceNative - 1) * 100,
+          minPct: (w.minPriceNative / w.exitPriceNative - 1) * 100,
+          samples: w.samples,
+          observedUntil: w.lastSampleAt,
+        };
+        finalized += 1;
+      }
+      return false;
+    });
+    return finalized;
+  }
+
+  /** Mints that post-exit watching still needs prices for. */
+  function postWatchMints(state, now) {
+    const list = Array.isArray(state.postWatch) ? state.postWatch : null;
+    if (!list || !list.length) return [];
+    const ts = Number(now) || Date.now();
+    return [...new Set(list.filter((w) => ts <= w.until).map((w) => w.mint))];
+  }
+
+  /* ---------------- guardrails (training wheels) ----------------
+   *
+   * The three rules every surviving trader eventually adopts, enforceable
+   * here while the money is fake: a tilt breaker, a position-size cap, and a
+   * daily loss limit. Pure decision function — the caller shows the message.
+   */
+  function guardCheck(state, settings, o) {
+    const now = Number(o && o.now) || Date.now();
+    const sol = Number(o && o.solAmount) || 0;
+
+    if (settings.guardTiltEnabled) {
+      const losses = clamp(Number(settings.guardTiltLosses) || 4, 2, 10);
+      const coolMs = clamp(Number(settings.guardTiltMinutes) || 10, 1, 120) * 60_000;
+      const recent = (state.rounds || []).slice(0, losses);
+      if (recent.length >= losses && recent.every((r) => Number(r.pnlSol) < 0)) {
+        const remaining = (Number(recent[0].closedAt) || 0) + coolMs - now;
+        if (remaining > 0) {
+          return {
+            ok: false, reason: 'tilt', remainingMs: remaining,
+            message: 'Tilt guard: ' + losses + ' straight losses — paused '
+              + Math.ceil(remaining / 60000) + ' more min. Breathe. (Settings → Guardrails)',
+          };
+        }
+      }
+    }
+
+    if (Number(settings.guardMaxPositionPct) > 0 && sol > 0) {
+      const eq = equitySol(state);
+      const cap = eq * (Number(settings.guardMaxPositionPct) / 100);
+      if (sol > cap + EPS) {
+        return {
+          ok: false, reason: 'size',
+          message: 'Size guard: ' + fmt(sol) + ' SOL is over '
+            + settings.guardMaxPositionPct + '% of your ' + fmt(eq)
+            + ' SOL book (max ' + fmt(cap) + ' — Settings → Guardrails)',
+        };
+      }
+    }
+
+    if (Number(settings.guardDailyLossSol) > 0) {
+      const dayStart = new Date(now);
+      dayStart.setHours(0, 0, 0, 0);
+      const start = dayStart.getTime();
+      const todayPnl = (state.journal || [])
+        .filter((t) => t.side === 'sell' && Number(t.ts) >= start && t.pnlSol !== undefined)
+        .reduce((s, t) => s + Number(t.pnlSol || 0), 0);
+      if (todayPnl <= -Number(settings.guardDailyLossSol)) {
+        return {
+          ok: false, reason: 'dailyLoss',
+          message: 'Daily loss guard: ' + fmt(todayPnl)
+            + ' SOL today — that is the limit you set. Come back tomorrow. (Settings → Guardrails)',
+        };
+      }
+    }
+
+    return { ok: true };
   }
 
   /* ---------------- marks / analytics ---------------- */
@@ -1094,6 +1254,12 @@
     equityCurvePoints,
     grossOpenCostSol,
     positionPnlPct,
+    beginPostWatch,
+    notePostExitPrice,
+    finalizePostWatches,
+    postWatchMints,
+    guardCheck,
+    POST_WATCH_WINDOW_MS,
     solUsdRate,
     sessionStats,
     pnlCalendar,
