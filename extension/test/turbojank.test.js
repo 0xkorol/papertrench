@@ -34,7 +34,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 
 /* ---------------- background: the pt_turbo_jank merge ---------------- */
 
-function jankWorker() {
+function jankWorker(opts = {}) {
   const values = {
     pt_settings: { framesEnabled: false, recordingEnabled: false, autoReview: false },
     pt_state: { positions: {}, rounds: [], journal: [] },
@@ -42,6 +42,11 @@ function jankWorker() {
   const session = {};
   let messageListener = null;
 
+  // With slowStorage, get/set complete on a LATER tick, the way real
+  // chrome.storage behaves. That is what makes an unserialized pair of
+  // read-modify-writes actually interleave — synchronous stubs would hide
+  // the race the shared write chain exists to prevent.
+  const defer = opts.slowStorage ? (fn) => setImmediate(fn) : (fn) => fn();
   const sandbox = {
     console: { debug: () => {}, warn: () => {}, error: () => {}, log: () => {} },
     Promise, JSON, Math, Date, Number, String, Array, Object, Boolean, RegExp,
@@ -52,13 +57,13 @@ function jankWorker() {
     chrome: {
       storage: {
         local: {
-          get: (keys, callback) => {
+          get: (keys, callback) => defer(() => {
             const names = Array.isArray(keys) ? keys : Object.keys(keys || {});
             const result = {};
             for (const key of names) if (Object.hasOwn(values, key)) result[key] = values[key];
             callback(result);
-          },
-          set: (update, callback) => { Object.assign(values, update); if (callback) callback(); },
+          }),
+          set: (update, callback) => defer(() => { Object.assign(values, update); if (callback) callback(); }),
         },
         session: {
           get: (keys, callback) => {
@@ -202,6 +207,46 @@ test('the site table stays bounded: the stalest site is evicted', async () => {
   assert.equal(Object.keys(jank).length, 12);
   assert.ok(!('site-0.example' in jank), 'the first-seen (stalest) site is the one dropped');
   assert.ok('site-12.example' in jank);
+});
+
+test('both receipt writers serialize through ONE promise chain (source contract)', () => {
+  const turboBlock = backgroundJs.slice(
+    backgroundJs.indexOf('const TURBO_STATS_KEY'),
+    backgroundJs.indexOf('warm X links (instant post opens)'),
+  );
+  // The property, not just the shape: ONE chain variable exists, and BOTH
+  // writers append to it. A refactor that hands the jank merge its own
+  // chain would still pass every sequential test — and lose interleaved
+  // read-modify-writes on the shared key in the field.
+  assert.equal((turboBlock.match(/let turboChain/g) || []).length, 1,
+    'exactly one write chain may exist for the stats key');
+  const noteFn = turboBlock.slice(
+    turboBlock.indexOf('function turboNote('), turboBlock.indexOf('function turboJankNote('));
+  const jankFn = turboBlock.slice(turboBlock.indexOf('function turboJankNote('));
+  assert.match(noteFn, /turboChain = turboChain/, 'turboNote rides the chain');
+  assert.match(jankFn, /turboChain = turboChain/, 'turboJankNote rides the SAME chain');
+  assert.equal((turboBlock.match(/turboChain = turboChain/g) || []).length, 2,
+    'no writer bypasses the chain');
+});
+
+test('concurrent flushes cannot lose each other: the chain serializes the round-trips', async () => {
+  const worker = jankWorker({ slowStorage: true });
+  // Two flushes for DIFFERENT sites, fired without awaiting in between.
+  // Unserialized writers on tick-later storage would both read {} and the
+  // second write would erase the first site. The shared chain forbids it.
+  const a = send(worker.listener, {
+    type: 'pt_turbo_jank', site: 'axiom.trade', count: 1, blockedMs: 60, sampledMs: 60_000,
+  });
+  const b = send(worker.listener, {
+    type: 'pt_turbo_jank', site: 'gmgn.ai', count: 2, blockedMs: 120, sampledMs: 60_000,
+  });
+  await a; await b;
+  for (let i = 0; i < 25; i++) await worker.settle();
+  const jank = worker.values.pt_turbo_stats.pageJank;
+  assert.ok(jank['axiom.trade'], 'the first concurrent flush must survive the second');
+  assert.ok(jank['gmgn.ai'], 'and the second must land too');
+  assert.equal(jank['axiom.trade'].count, 1);
+  assert.equal(jank['gmgn.ai'].count, 2);
 });
 
 test('route timings and pageJank share the key without clobbering each other', async () => {
