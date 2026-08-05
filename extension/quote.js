@@ -629,6 +629,33 @@
   var ONSCREEN_AGREE_RATIO = 1.06;
 
   /**
+   * Comma-list preset parser — the ONE set of rules for preset editing
+   * everywhere (dashboard form, popup quick settings, the panel's inline
+   * editor): entries must be > 0 and ≤ max, at most 8 (500 presets would be
+   * 500 buttons), optional dedupe where repeats are meaningless. Returns
+   * null for an empty field ("keep the saved list") and { values, dropped }
+   * otherwise so the caller can SAY when entries were rejected instead of
+   * silently shrinking the list (D-42/D-06 semantics).
+   */
+  function parsePresetList(raw, max, opts) {
+    var dedupe = Boolean(opts && opts.dedupe);
+    var parts = String(raw == null ? '' : raw).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!parts.length) return null;
+    var values = parts.map(function (s) { return parseFloat(s); })
+      .filter(function (n) { return isFinite(n) && n > 0 && n <= max; });
+    if (dedupe) {
+      var seen = {};
+      values = values.filter(function (n) {
+        if (seen[n]) return false;
+        seen[n] = true;
+        return true;
+      });
+    }
+    if (values.length > 8) values = values.slice(0, 8);
+    return { values: values, dropped: parts.length - values.length };
+  }
+
+  /**
    * Rug-guard verdict: holder concentration from getTokenLargestAccounts
    * plus the mint's raw supply. Liquidity is not a holder, so positively
    * identified pool/curve reserve accounts are excluded; with none known,
@@ -982,6 +1009,7 @@
     fillSourcesAgree,
     isPumpFamily,
     rugVerdict,
+    parsePresetList,
     positionMark,
     tokenFromJupiter,
     solUsdFromJupiter,

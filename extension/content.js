@@ -2183,13 +2183,23 @@
        own terminal. */
     .pt-box.pt-focus .pt-pos .pt-detail { display: none; }
     .pt-box.pt-focus { font-size: 12px; }
-    .pt-box.pt-focus .pt-body { padding: 8px 10px 10px; }
-    .pt-box.pt-focus .pt-preset { padding: 5px 8px; font-size: 11px; }
+    .pt-box.pt-focus .pt-body { padding: 6px 8px 8px; }
+    .pt-box.pt-focus .pt-preset { padding: 5px 4px; font-size: 11px; }
     .pt-box.pt-focus .pt-buy-btn { padding: 9px 0; font-size: 12.5px; }
     .pt-box.pt-focus .pt-custom input, .pt-box.pt-focus .pt-custom { font-size: 11.5px; }
     .pt-box.pt-focus .pt-sell-row button { padding: 5px 0; font-size: 11px; }
-    .pt-box.pt-focus .pt-label { margin-top: 6px; font-size: 9px; }
-    .pt-box.pt-focus .pt-balance { padding: 7px 9px; }
+    .pt-box.pt-focus .pt-label { margin-top: 5px; font-size: 9px; }
+    /* Round 2 (lev, screenshot vs Axiom's own widget): "the less information
+       in the tab the better". The balance CARD goes — cash rides inline on
+       the Buy label (renderPresets/renderBalance keep it fresh). The custom
+       amount slims down; with one-tap presets on, the big BUY button goes
+       too — the chips ARE the buttons, and Enter in the amount box buys.
+       Everything that remains is a chip row, like the terminal's own widget. */
+    .pt-box.pt-focus .pt-balance { display: none; }
+    .pt-box.pt-focus.pt-focus-instant .pt-buy { display: none; }
+    .pt-box.pt-focus .pt-custom { margin-top: 5px; padding: 6px 9px; }
+    .pt-box.pt-focus .pt-token-row { margin-bottom: 4px; }
+    .pt-box.pt-focus .pt-costs { margin-top: 4px; }
     /* Quick reset lives in the header ONLY in focus mode (lev streams fresh
        runs per coin). Two-step inline confirm instead of a popup: first tap
        arms it for 3 s, second tap resets. */
@@ -2363,6 +2373,50 @@
       color: #2A1400; border-color: transparent;
       background: linear-gradient(145deg, #FFC081, var(--pt-amber));
       box-shadow: 0 4px 14px rgba(255, 157, 69, 0.3);
+    }
+
+    /* The simulated-cost strip: fee, gas, tip, slippage at a glance, exactly
+       like the terminals' own widgets — honest costs should not need a trip
+       to the dashboard to be seen. Clicking it opens the inline editor. */
+    .pt-costs {
+      display: flex; gap: 4px; margin-top: 5px; cursor: pointer;
+      font-size: 10px; color: var(--pt-faint); font-variant-numeric: tabular-nums;
+    }
+    .pt-costs span {
+      padding: 2px 6px; border-radius: var(--pt-r-sm);
+      background: rgba(0, 0, 0, 0.25); border: 1px solid var(--pt-line);
+      white-space: nowrap;
+    }
+    .pt-costs:hover span { color: var(--pt-dim); border-color: var(--pt-line-2, var(--pt-line)); }
+
+    /* Inline preset editor (lev: "on the tab for quick fixes" — the TRADING
+       tab, like the pencil on the site's own widget). One compact block:
+       comma lists for the two preset rows, the four cost numbers, Save. */
+    .pt-editor {
+      margin-top: 6px; padding: 8px; border-radius: var(--pt-r-md);
+      background: rgba(0, 0, 0, 0.32); border: 1px solid var(--pt-line);
+    }
+    .pt-editor .row { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+    .pt-editor .row:last-child { margin-bottom: 0; }
+    .pt-editor label {
+      flex: 0 0 auto; min-width: 44px; font-size: 9.5px; font-weight: 700;
+      letter-spacing: 0.4px; text-transform: uppercase; color: var(--pt-faint);
+    }
+    .pt-editor .row.costs label { min-width: 0; }
+    .pt-editor input {
+      flex: 1; min-width: 0; padding: 5px 7px; border-radius: var(--pt-r-sm);
+      background: rgba(0, 0, 0, 0.35); border: 1px solid var(--pt-line);
+      color: var(--pt-text); font: 11px var(--pt-mono, monospace);
+    }
+    .pt-editor input:focus { outline: none; border-color: rgba(255, 157, 69, 0.55); }
+    .pt-editor .actions button {
+      flex: 1; padding: 6px 0; border-radius: var(--pt-r-sm); cursor: pointer;
+      font-size: 11px; font-weight: 750; border: 1px solid var(--pt-line);
+      background: rgba(0, 0, 0, 0.3); color: var(--pt-dim);
+    }
+    .pt-editor .actions #pt-edit-save {
+      color: #2A1400; border-color: transparent;
+      background: linear-gradient(145deg, #FFC081, var(--pt-amber));
     }
 
     .pt-custom {
@@ -3006,6 +3060,7 @@
             <div class="pt-icon">P</div>
             <div class="pt-title">PaperTrench<span class="sub" id="pt-subtitle">Quick paper buy box</span></div>
             <span class="pt-grow"></span>
+            <button class="pt-hbtn" id="pt-edit" title="Edit presets &amp; fees right here" aria-label="Edit presets and fees">✎</button>
             <button class="pt-hbtn" id="pt-quickreset" title="Reset paper wallet (tap twice)" aria-label="Quick reset">⟲</button>
             <button class="pt-hbtn" id="pt-visibility" title="Toggle auto-hide when no token" aria-label="Toggle visibility">${ICONS.eye}</button>
             <button class="pt-hbtn" id="pt-dash" title="Open dashboard">${ICONS.chart}</button>
@@ -3024,6 +3079,21 @@
             </div>
             <div class="pt-label" id="pt-buy-label">Quick buy (SOL)</div>
             <div class="pt-presets" id="pt-buy-presets"></div>
+            <div class="pt-costs" id="pt-costs" title="Your simulated costs — click to edit"></div>
+            <div class="pt-editor" id="pt-editor" style="display:none">
+              <div class="row"><label>Buy SOL</label><input id="pt-edit-buy" type="text" inputmode="decimal" placeholder="0.1, 0.5, 1, 2"></div>
+              <div class="row"><label>Sell %</label><input id="pt-edit-sell" type="text" inputmode="decimal" placeholder="25, 50, 75, 100"></div>
+              <div class="row costs">
+                <label>Fee %</label><input id="pt-edit-fee" type="number" min="0" max="10" step="0.05">
+                <label>Gas</label><input id="pt-edit-gas" type="number" min="0" max="0.5" step="0.0001">
+                <label>Tip</label><input id="pt-edit-tip" type="number" min="0" max="0.5" step="0.0001">
+                <label>Slip %</label><input id="pt-edit-slip" type="number" min="0" max="20" step="0.1">
+              </div>
+              <div class="row actions">
+                <button id="pt-edit-save">Save</button>
+                <button id="pt-edit-cancel">Cancel</button>
+              </div>
+            </div>
             <input class="pt-custom" id="pt-custom" type="number" min="0" step="0.01" placeholder="Or type a custom SOL amount…" />
             <button class="pt-buy" id="pt-buy">BUY (PAPER)</button>
             <div id="pt-position"></div>
@@ -3067,6 +3137,14 @@
     els.buyPresets = shadow.getElementById('pt-buy-presets');
     els.buyLabel = shadow.getElementById('pt-buy-label');
     els.custom = shadow.getElementById('pt-custom');
+    els.costs = shadow.getElementById('pt-costs');
+    els.editor = shadow.getElementById('pt-editor');
+    els.editBuy = shadow.getElementById('pt-edit-buy');
+    els.editSell = shadow.getElementById('pt-edit-sell');
+    els.editFee = shadow.getElementById('pt-edit-fee');
+    els.editGas = shadow.getElementById('pt-edit-gas');
+    els.editTip = shadow.getElementById('pt-edit-tip');
+    els.editSlip = shadow.getElementById('pt-edit-slip');
     els.btnBuy = shadow.getElementById('pt-buy');
     els.position = shadow.getElementById('pt-position');
     els.thesis = shadow.getElementById('pt-thesis');
@@ -3147,6 +3225,16 @@
       if (!(amt > 0)) return toast('Pick a SOL amount first');
       requestBuy(amt);
     });
+    // Enter in the amount box IS the buy — in compact focus mode the big
+    // button is gone (the chips are the buttons), and in normal mode this
+    // just saves a mouse trip.
+    els.custom.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') els.btnBuy.click();
+    });
+    shadow.getElementById('pt-edit').addEventListener('click', () => togglePresetEditor());
+    if (els.costs) els.costs.addEventListener('click', () => togglePresetEditor(true));
+    shadow.getElementById('pt-edit-save').addEventListener('click', savePresetEditor);
+    shadow.getElementById('pt-edit-cancel').addEventListener('click', () => togglePresetEditor(false));
 
     // "Make it remember its place" (levv6x): the dragged position must
     // survive page refreshes and new tabs. Persist it on drop and restore it
@@ -3233,10 +3321,8 @@
 
     const list = settings.presetsBuy || [0.1, 0.5, 1, 2];
     const instant = settings.instantBuyEnabled !== false;
-    if (sectionOn && els.buyLabel) {
-      // "Tap to fill" only reads honestly while the tappable row is visible.
-      els.buyLabel.textContent = presetsOn && instant ? 'Quick buy — tap to fill (SOL)' : 'Quick buy (SOL)';
-    }
+    if (sectionOn && els.buyLabel) els.buyLabel.textContent = buyLabelText();
+    renderCosts();
     if (!presetsOn) return;
     els.buyPresets.innerHTML = list.map((a, i) =>
       `<button class="pt-preset${i === 1 ? ' sel' : ''}" data-amt="${a}" title="${instant ? 'Buy this amount instantly' : 'Select this amount'}">${a} SOL</button>`
@@ -3249,6 +3335,104 @@
         if (instant) requestBuy(Number(b.dataset.amt));
       });
     });
+  }
+
+  /** The Buy label doubles as the balance line in compact focus mode — the
+   * balance card is hidden there ("the less information in the tab the
+   * better"), but cash on hand is execution information, not decoration. */
+  function buyLabelText() {
+    const presetsOn = settings.panelBuyEnabled !== false && settings.panelPresetsEnabled !== false;
+    const instant = settings.instantBuyEnabled !== false;
+    if (settings.panelFocusMode === true) {
+      return `Buy (SOL) · ${E.fmt(state.cashSol, 2)} cash`;
+    }
+    // "Tap to fill" only reads honestly while the tappable row is visible.
+    return presetsOn && instant ? 'Quick buy — tap to fill (SOL)' : 'Quick buy (SOL)';
+  }
+
+  /** The simulated-cost strip under the presets: fee, gas, tip, slippage at
+   * a glance, like the terminals' own widgets. Clicking it opens the inline
+   * editor — these are the numbers people re-tune mid-session. */
+  function renderCosts() {
+    if (!els.costs) return;
+    if (settings.panelBuyEnabled === false) { els.costs.style.display = 'none'; return; }
+    els.costs.style.display = '';
+    const feePct = (Number(settings.feeBps) || 0) / 100;
+    const slipPct = (Number(settings.slippageBps) || 0) / 100;
+    const chips = [
+      `Fee ${feePct}%`,
+      `Gas ${Number(settings.gasSolPerTx) > 0 ? settings.gasSolPerTx : 0}`,
+      `Tip ${Number(settings.tipSolPerTx) > 0 ? settings.tipSolPerTx : 0}`,
+      `Slip ${slipPct}%`,
+    ];
+    els.costs.innerHTML = chips.map((c) => `<span>${c}</span>`).join('');
+  }
+
+  /* -------------------- inline preset editor --------------------
+   * lev, round two: "when i asked for this i didn't mean these to be added
+   * in the extension but in the trading tab itself" — the pencil on the
+   * panel header (and the cost strip) opens this. Same settings keys and
+   * the SAME validation rules as the dashboard and popup (Q.parsePresetList
+   * is the single source): a bad value keeps the saved value and says so. */
+
+  function togglePresetEditor(force) {
+    if (!els.editor) return;
+    const open = force === undefined ? els.editor.style.display === 'none' : Boolean(force);
+    if (open) {
+      els.editBuy.value = (settings.presetsBuy || [0.1, 0.5, 1, 2]).join(', ');
+      els.editSell.value = (settings.sellPcts || [25, 50, 75, 100]).join(', ');
+      els.editFee.value = (Number(settings.feeBps) || 0) / 100;
+      els.editGas.value = Number(settings.gasSolPerTx) > 0 ? settings.gasSolPerTx : '';
+      els.editTip.value = Number(settings.tipSolPerTx) > 0 ? settings.tipSolPerTx : '';
+      els.editSlip.value = (Number(settings.slippageBps) || 0) / 100;
+    }
+    els.editor.style.display = open ? '' : 'none';
+  }
+
+  async function savePresetEditor() {
+    const notes = [];
+    const patch = {};
+
+    const buy = Q.parsePresetList(els.editBuy.value, 1000);
+    if (buy && buy.values.length) {
+      patch.presetsBuy = buy.values;
+      if (buy.dropped > 0) notes.push(`${buy.dropped} buy preset(s) rejected (each must be > 0 and ≤ 1000, max 8)`);
+    } else if (buy) {
+      notes.push('buy presets: no valid entries — kept the saved list');
+    }
+    const sell = Q.parsePresetList(els.editSell.value, 100, { dedupe: true });
+    if (sell && sell.values.length) {
+      patch.sellPcts = sell.values;
+      if (sell.dropped > 0) notes.push(`${sell.dropped} sell preset(s) rejected (1–100, no repeats, max 8)`);
+    } else if (sell) {
+      notes.push('sell presets: no valid entries — kept the saved list');
+    }
+
+    // Costs enter as the % the site UIs show; stored as bps like everywhere
+    // else. Bounds mirror the dashboard exactly (D-11/D-23).
+    const feePct = Number(els.editFee.value);
+    if (String(els.editFee.value).trim() !== '' && Number.isFinite(feePct) && feePct >= 0) {
+      patch.feeBps = Math.min(1000, Math.max(0, Math.round(feePct * 100)));
+    }
+    const gas = Number(els.editGas.value);
+    patch.gasSolPerTx = Number.isFinite(gas) && gas > 0 ? Math.min(gas, 0.5) : 0;
+    const tip = Number(els.editTip.value);
+    patch.tipSolPerTx = Number.isFinite(tip) && tip > 0 ? Math.min(tip, 0.5) : 0;
+    const slipPct = Number(els.editSlip.value);
+    if (String(els.editSlip.value).trim() !== '' && Number.isFinite(slipPct) && slipPct >= 0) {
+      patch.slippageBps = Math.min(2000, Math.max(0, Math.round(slipPct * 100)));
+    }
+
+    settings = { ...settings, ...patch };
+    await store.set({ [E.STORAGE_KEYS.settings]: settings });
+    // The sell row is built into the position card at mount; rebuild it so
+    // new percents appear immediately, not on the next token switch.
+    if (els.position) els.position.textContent = '';
+    posEls = null;
+    renderPresets();
+    renderPosition();
+    togglePresetEditor(false);
+    toast(notes.length ? `Saved · ${notes.join(' · ')}` : 'Presets & fees saved — live everywhere');
   }
 
   /**
@@ -3442,7 +3626,12 @@
    */
   function applyFocusMode() {
     if (!els.box || !els.box.classList) return;
-    els.box.classList.toggle('pt-focus', settings.panelFocusMode === true);
+    const focus = settings.panelFocusMode === true;
+    els.box.classList.toggle('pt-focus', focus);
+    // With one-tap presets the chips ARE the buttons, so compact mode drops
+    // the big BUY too; with instant buy off the (slim) button must stay or
+    // select-then-buy has no trigger.
+    els.box.classList.toggle('pt-focus-instant', focus && settings.instantBuyEnabled !== false);
   }
 
   /* Quick reset (focus mode): no popup — popups steal stream focus — but
@@ -3564,6 +3753,12 @@
 
   function renderBalance() {
     if (els.balance) els.balance.textContent = `${E.fmt(state.cashSol, 2)} SOL`;
+    // Focus mode carries cash on the Buy label (the balance card is hidden
+    // there); a fill must update it in the same beat.
+    if (els.buyLabel && settings.panelFocusMode === true
+      && settings.panelBuyEnabled !== false) {
+      els.buyLabel.textContent = buyLabelText();
+    }
 
     // Equity (cash + open positions marked live) against the starting stake:
     // the one number that answers "am I actually up?" at a glance.
