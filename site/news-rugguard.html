@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fresh launches are snipeable, and the rug guard · PaperTrench news</title>
+<meta name="description" content="v2.8.0: PaperTrench reads a pump.fun bonding curve straight off chain so an armed buy fires seconds after launch, and refuses a paper buy when the float sits in a handful of wallets — naming the number.">
+<meta property="og:title" content="Fresh launches are snipeable, and the rug guard">
+<meta property="og:description" content="A 39-second-old coin no aggregator has indexed used to strand an armed buy forever. Now the bonding curve is read directly — and a buy into a concentrated float gets refused out loud.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta property="og:type" content="article">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* ---------- rug warning toast mock ---------- */
+  .toast {
+    max-width: 460px; margin: 32px auto 12px; padding: 16px 19px;
+    background: #12080a; border: 1px solid rgba(224,67,58,0.5); border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.6), 0 0 40px rgba(224,67,58,0.10);
+  }
+  .toast .t { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 800; color: #ff8a80; letter-spacing: .2px; }
+  .toast .d { margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.55; }
+  .toast .d b { color: var(--text); font-family: var(--mono); }
+  .toast-cap { text-align: center; font-size: 12.5px; color: var(--dim); margin-top: 13px; }
+
+  /* ---------- armed-buy timeline ---------- */
+  .tl { margin: 30px 0; display: flex; flex-direction: column; gap: 0; }
+  .tl-step { display: flex; gap: 16px; }
+  .tl-rail { flex: none; width: 22px; display: flex; flex-direction: column; align-items: center; }
+  .tl-dot { width: 11px; height: 11px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--panel2); border: 2px solid var(--line2); }
+  .tl-step.on .tl-dot { border-color: var(--green); background: rgba(52,211,153,0.25); box-shadow: 0 0 12px rgba(52,211,153,0.5); }
+  .tl-line { flex: 1; width: 1px; background: var(--line2); margin: 4px 0; min-height: 14px; }
+  .tl-step:last-child .tl-line { display: none; }
+  .tl-body { padding-bottom: 20px; }
+  .tl-t { font-size: 14.5px; font-weight: 750; }
+  .tl-d { margin-top: 4px; font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+  .tl-when { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+</style>
+</head>
+<body class="a-red">
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="index.html#bubbles">Chart bubbles</a>
+      <a href="index.html#replay">Replay</a>
+      <a href="index.html#leaderboard">Leaderboard</a>
+      <a href="news.html" aria-current="page">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<article>
+  <header class="post-hero">
+    <div class="wrap-read">
+      <a class="post-back" href="news.html"><span aria-hidden="true">←</span> All updates</a>
+      <div class="post-meta">
+        <span class="ver-chip">v2.8.0</span>
+        <span class="tag feature">Feature</span>
+        <span class="tag fix">Fix</span>
+        <time class="feat-date" datetime="2026-08-05">August 5, 2026</time>
+        <span class="post-read">· 6 min read</span>
+      </div>
+      <h1 class="post-title">Fresh launches are snipeable, and the rug guard</h1>
+      <p class="post-stand">Two fixes from the maintainer's own trench session, off the same screenshot. A 39-second-old coin used to strand an armed buy forever, because <strong>no aggregator had heard of it yet</strong>. And a paper buy into a float held by ten wallets went through without comment — which is not what practice should teach.</p>
+      <div class="post-rule"></div>
+    </div>
+  </header>
+
+  <div class="wrap-read post-body">
+
+    <div class="callout" style="border-left-color:#ff8a80">
+      <span class="co-label" style="color:#ff8a80">Do not run the v2.8.0 build</span>
+      <p>These features are real and they work — but the v2.8.0 <em>zip</em> shipped with attestation-chain recording broken and has been superseded. Everything described here is in the current release. <a href="news-chain.html">What happened, in full →</a></p>
+    </div>
+
+    <h2>The armed buy that never fired (F-34)</h2>
+
+    <p class="post-lede">Arming a buy on a brand-new launch is the whole game on pump.fun. PaperTrench has always supported it: click buy before the coin has a quote, and the order arms, then fills the instant the first trusted price lands.</p>
+
+    <p>Except on a coin 39 seconds old, the first trusted price never landed. Two independent reasons, stacked:</p>
+
+    <ul>
+      <li><b>No aggregator had indexed it.</b> Dexscreener and Jupiter cannot quote a coin they have not seen. PaperTrench <a href="news-v2.html">refuses to invent a price</a>, so it correctly refused — and kept refusing, forever.</li>
+      <li><b>The chart was in MCap mode.</b> Every close was rejected as "no implied supply", because turning a market-cap value into a price needs a supply figure nobody had published yet.</li>
+    </ul>
+
+    <p>The order sat armed until it expired. Correct behaviour, useless outcome.</p>
+
+    <h3>Fix one: read the bonding curve directly</h3>
+
+    <p>The price was never actually unknowable. It was sitting on chain the whole time — in the coin's own bonding curve.</p>
+
+    <div class="tl reveal">
+      <div class="tl-step on">
+        <div class="tl-rail"><span class="tl-dot"></span><span class="tl-line"></span></div>
+        <div class="tl-body">
+          <div class="tl-t">It looks like pump.fun <span class="tl-when">· t+0s</span></div>
+          <div class="tl-d">The pair address on an Axiom page, or a mint ending in "pump" anywhere.</div>
+        </div>
+      </div>
+      <div class="tl-step on">
+        <div class="tl-rail"><span class="tl-dot"></span><span class="tl-line"></span></div>
+        <div class="tl-body">
+          <div class="tl-t">Find the bonding curve on chain</div>
+          <div class="tl-d">Derived from the mint via the program-address rules — verified against five live mainnet curves, not assumed.</div>
+        </div>
+      </div>
+      <div class="tl-step on">
+        <div class="tl-rail"><span class="tl-dot"></span><span class="tl-line"></span></div>
+        <div class="tl-body">
+          <div class="tl-t">Identify the real mint</div>
+          <div class="tl-d">Read back from the curve's own reserve account, so the coin being priced is provably the coin on screen.</div>
+        </div>
+      </div>
+      <div class="tl-step on">
+        <div class="tl-rail"><span class="tl-dot"></span></div>
+        <div class="tl-body">
+          <div class="tl-t">Stream it as a live CHAIN ⚡ feed</div>
+          <div class="tl-d">Immediate first quote. The armed buy fires seconds after launch — and <b>the fill is chain state, not a guess</b>.</div>
+        </div>
+      </div>
+    </div>
+
+    <p>That last point is the one that matters for a trainer. This is not a faster estimate; it is the actual on-chain reserve ratio. A snipe practised here fills at a price that genuinely existed.</p>
+
+    <h3>Fix two: MCap-mode charts can price pump coins</h3>
+
+    <p>Pump supply is a protocol constant — one billion, always. So on a pump coin, an mcap-scale close <em>is</em> a price, once you divide.</p>
+
+    <p>The trap is knowing which scale you are looking at. An unlabelled number on a chart could be price or cap, in USD or SOL — four readings. PaperTrench judges all four against sane bands and uses the tick <b>only when exactly one fits</b>.</p>
+
+    <p class="post-pull">Ambiguity still refuses. Two plausible readings means no number at all.</p>
+
+    <p>That is the same discipline that governs every other unit decision in the product: a confidently wrong price teaches a lesson that costs real money later.</p>
+
+    <h2>Rug guard</h2>
+
+    <p>Requested with a LOL. Built with a straight face.</p>
+
+    <div class="toast reveal">
+      <div class="t"><span aria-hidden="true">🚩</span>RUG WARNING — top 10 wallets hold 47% of supply</div>
+      <div class="d">Paper buy refused. Exiting is always allowed.</div>
+    </div>
+    <p class="toast-cap">Simulated toast. The percentage is always named — never just "risky".</p>
+
+    <p>When chain state says the float is concentrated in a handful of wallets, a paper BUY is refused with a toast <b>that names the number</b>. Not a vague risk badge, not a colour — the actual figure, so you can disagree with it.</p>
+
+    <h3>How it reads the float</h3>
+
+    <p>The 20 largest token accounts plus the mint supply. The pool or curve reserve is excluded, because a bonding curve holding most of the supply is normal and not a rug signal.</p>
+
+    <div class="callout">
+      <span class="co-label">It admits what it guessed</span>
+      <p>Identifying which account is the reserve is not always unambiguous — and when the guard had to <strong>assume</strong> which account that was, it says so.</p>
+      <p>A concentration figure that silently depends on a guess is a number pretending to be a measurement. This one shows its working.</p>
+    </div>
+
+    <h3>The rules it plays by</h3>
+
+    <ul>
+      <li><b>It never blocks a SELL.</b> Exiting a rug is the right move, and a guard that traps you in a position is worse than no guard.</li>
+      <li><b>A failed chain read blocks nothing.</b> If the guard cannot see, it steps aside — it is not allowed to invent a verdict from missing data.</li>
+      <li><b>The panel footer is flagged the moment the verdict lands</b>, so the signal is on screen even if you never tried to buy.</li>
+      <li><b>Threshold and off-switch live in Settings → Guardrails.</b></li>
+    </ul>
+
+    <p>This is the one guardrail that ships <b>ON</b> — every other <a href="news-the-after.html">Guardrail</a> is opt-in — because the maintainer asked for exactly that. Practising the reflex of checking concentration before you buy is worth more than the friction costs.</p>
+
+    <!-- ---------- patch notes ---------- -->
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.8.0</span>
+        <span class="pn-date">August 5, 2026 · superseded by v2.8.1</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>Fresh launches are snipeable — "ARMED … ON FIRST QUOTE" actually fires now (F-34)</h4>
+          <p>A 39-second-old pump.fun coin used to strand the armed buy forever: no aggregator had indexed it, and with the chart in MCap mode every close was refused as "no implied supply". Two fixes, layered:</p>
+          <p><b>The bonding curve is read directly.</b> The moment a pending coin looks like pump.fun — the pair address on an Axiom page, or a mint ending in "pump" anywhere — PaperTrench finds its bonding curve on chain (derived from the mint via the program-address rules, verified against five live mainnet curves), identifies the real mint from the curve's reserve account, and streams the curve as a live CHAIN ⚡ feed with an immediate first quote. The armed buy fires seconds after launch, and the fill is chain state, not a guess.</p>
+          <p><b>MCap-mode charts can price pump coins.</b> Pump supply is a protocol constant (1e9), so an mcap-scale close IS a price. All four readings of an unlabelled chart value (price vs cap, USD vs SOL) are judged against sane bands and the tick is used only when exactly one fits — ambiguity still refuses, per the F-25 discipline.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Rug guard (on by default)</h4>
+          <p>Requested with a LOL, built with a straight face: when chain state says the float is in a handful of wallets, a paper BUY is refused with a toast that names the number — "🚩 RUG WARNING — top 10 wallets hold 47% of supply". The check reads the 20 largest token accounts plus the mint supply, excludes the pool/curve reserve (and SAYS when it had to assume which account that was), flags the panel footer the moment the verdict lands, and never blocks a SELL — exiting a rug is the right move. A failed chain read blocks nothing: a guard that cannot see is not allowed to invent. Threshold and off-switch live in Settings → Guardrails; this is the one guardrail that ships ON, because the maintainer asked for exactly that.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Also aboard, unmentioned at the time</h4>
+          <p>The Turbo receipts card, and half of an in-flight attestation-chain migration that broke chain recording on this build. <a href="news-chain.html">Both are covered here →</a></p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Full history:</span>
+        <a href="news.html#v2-8-0">this release in the archive</a>
+        <span>·</span>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md ↗</a>
+      </div>
+    </div>
+
+    <div class="post-nav">
+      <a class="pnav" href="news-chain.html">
+        <span class="dir">← Newer</span>
+        <span class="t">We shipped a build that broke the chain</span>
+      </a>
+      <a class="pnav next" href="news-turbo.html">
+        <span class="dir">Older →</span>
+        <span class="t">Terminal Turbo: every terminal, warm</span>
+      </a>
+    </div>
+
+  </div>
+</article>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="index.html">Home</a>
+        <a href="news.html">News</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/DEFECTS.md" target="_blank" rel="noopener">Defect register</a>
+      </div>
+    </div>
+    <div class="foot-note">Paper trading only · not financial advice · the toast above is a simulated example, and the rug guard is a concentration signal, not a guarantee about any token.</div>
+  </div>
+</footer>
+
+<script src="reveal.js"></script>
+</body>
+</html>

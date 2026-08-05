@@ -18,6 +18,44 @@
 
   const RELEASES = [
     {
+      v: '2.9.0', date: 'Aug 5, 2026', iso: '2026-08-05',
+      tags: ['feature'],
+      title: 'The quick fixes live on the trading tab',
+      blurb: 'Lev round two — the quick fixes now live where he meant them.',
+      article: 'news-quickedit.html',
+      points: [
+        '<b>A pencil on the trading panel.</b> The ✎ in the panel header opens a compact inline editor right on the trading tab — buy presets, sell percents, and fee/gas/tip/slippage — with the same validation rulebook the dashboard and popup use. Your costs ride as Fee/Gas/Tip/Slip chips under the buy row, click-to-edit, in both modes.',
+        '<b>Focus mode is genuinely Axiom-compact now.</b> No balance card (cash rides inline on the Buy label, refreshed per fill), and while one-tap presets are on the big BUY button gets out of the way — the preset chips ARE the buttons, and Enter in the amount box buys. Instant-buy off keeps the button.',
+      ],
+    },
+    {
+      v: '2.8.1', date: 'Aug 5, 2026', iso: '2026-08-05',
+      tags: ['fix', 'security'],
+      title: 'The attestation chain lands whole',
+      blurb: 'Update from v2.8.0 — it matters this time.',
+      article: 'news-chain.html',
+      points: [
+        '<b>v2.8.0 shipped with attestation-chain recording broken.</b> That release accidentally carried half of an in-flight migration: fills asked for the new segmented chain store, which was not aboard, so every paper fill made on v2.8.0 failed to append to your local attestation chain. The honest "could not be added to the verification chain" toast fired each time — the failure was visible, the chain simply could not record.',
+        '<b>Your wallet, balances and P&amp;L were never affected.</b> The chain is the tamper-evidence layer used by leaderboard verification. On v2.8.1 the chain records again; fills made during the v2.8.0 window are simply absent from it, and the verify panel shows that gap honestly rather than pretending it is not there.',
+        '<b>The attestation chain grew up (F-14).</b> It moved out of the wallet state into a single-writer segmented store: a fill rewrites one small tail segment instead of the whole history, multi-tab chain races are gone, and no hash is ever truncated. Backups are downgrade-safe, resets clear the chain atomically with the wallet, and the leaderboard verifier format is unchanged.',
+        '<b>For the record: v2.8.0 also contained the Turbo receipts card</b> — the Settings card counting warm vs cold opens, median routing latency and per-site main-thread stalls, measured locally and never sent anywhere. Its release notes did not mention it.',
+      ],
+    },
+    {
+      v: '2.8.0', date: 'Aug 5, 2026', iso: '2026-08-05',
+      superseded: 'Superseded by v2.8.1 — do not trade on this build',
+      tags: ['feature', 'fix'],
+      title: 'Fresh launches are snipeable, and the rug guard',
+      blurb: 'Two from the maintainer\'s own trench session, same screenshot. Note: this build shipped with attestation-chain recording broken — use v2.8.1 or later.',
+      article: 'news-rugguard.html',
+      points: [
+        '<b>"ARMED … ON FIRST QUOTE" actually fires now (F-34).</b> A 39-second-old pump.fun coin used to strand the armed buy forever: no aggregator had indexed it, and with the chart in MCap mode every close was refused as "no implied supply".',
+        '<b>The bonding curve is read directly.</b> The moment a pending coin looks like pump.fun, PaperTrench finds its bonding curve on chain (derived from the mint, verified against five live mainnet curves), identifies the real mint from the curve\'s reserve account, and streams the curve as a live CHAIN ⚡ feed with an immediate first quote. The fill is chain state, not a guess.',
+        '<b>MCap-mode charts can price pump coins.</b> Pump supply is a protocol constant, so an mcap-scale close IS a price. All four readings of an unlabelled chart value are judged against sane bands and the tick is used only when exactly one fits — ambiguity still refuses.',
+        '<b>Rug guard (on by default).</b> When chain state says the float is in a handful of wallets, a paper BUY is refused with a toast that names the number — "🚩 RUG WARNING — top 10 wallets hold 47% of supply". It never blocks a SELL, and a failed chain read blocks nothing: a guard that cannot see is not allowed to invent.',
+      ],
+    },
+    {
       v: '2.7.1', date: 'Aug 5, 2026', iso: '2026-08-05',
       tags: ['fix'],
       title: 'The complete v2.7.0 batch',
@@ -349,13 +387,20 @@
       .join('');
     const blurb = r.blurb ? `<p class="rel-blurb">${r.blurb}</p>` : '';
 
+    // A build we tell people not to use has to LOOK like one. Burying that in
+    // prose is how someone ends up trading on it.
+    const warn = r.superseded
+      ? `<div class="rel-warn"><span class="ic" aria-hidden="true">⚠</span>${r.superseded}</div>`
+      : '';
+
     el.innerHTML = `
-      <div class="rel-card">
+      <div class="rel-card${r.superseded ? ' is-superseded' : ''}">
         <div class="rel-head">
           <span class="ver-chip${r.major ? ' major' : ''}">v${r.v}</span>
           ${tags}
           <time class="rel-date" datetime="${r.iso}">${r.date}</time>
         </div>
+        ${warn}
         <h3 class="rel-title">${r.title}</h3>
         ${blurb}
         <div class="rel-points">${points}</div>

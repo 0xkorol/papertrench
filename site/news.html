@@ -49,7 +49,7 @@
            drifts the moment a release is added, and a wrong number on this
            page is the one thing the page is about. -->
       <div><div class="num o" style="color:var(--orange)" id="relCount">—</div><div class="lbl">RELEASES LOGGED</div></div>
-      <div><div class="num g" style="color:var(--green)">814</div><div class="lbl">TESTS PASSING</div></div>
+      <div><div class="num g" style="color:var(--green)">872</div><div class="lbl">TESTS PASSING</div></div>
       <div><div class="num b" style="color:var(--blue)">116</div><div class="lbl">AUDITED DEFECTS CLOSED</div></div>
       <div><div class="num o" style="color:var(--violet)">0</div><div class="lbl">NUMBERS INVENTED</div></div>
     </div>
@@ -65,15 +65,48 @@
 
     <div class="feat-grid">
 
-      <a class="feat-card lead a-violet reveal" href="news-turbo.html">
+      <a class="feat-card lead a-green reveal" href="news-chain.html">
         <div class="feat-meta">
-          <span class="ver-chip">v2.7.0</span>
-          <span class="tag speed">Speed</span>
+          <span class="ver-chip">v2.8.1</span>
+          <span class="tag fix">Fix</span>
+          <span class="tag security">Integrity</span>
+          <time class="feat-date" datetime="2026-08-05">Aug 5, 2026</time>
+        </div>
+        <h3>We shipped a build that broke the chain, and said so</h3>
+        <p>v2.8.0 carried half an in-flight migration, and every paper fill on it failed to append to the attestation chain — the tamper-evidence layer the leaderboard verifies against. Wallets, balances and P&amp;L were never touched, the failure showed a toast on every fill, and the gap is disclosed rather than back-filled: a chain entry written after the outcome is known proves nothing. Here is what broke, who it affects, and how the chain was rebuilt.</p>
+        <span class="go">Read the full story <span class="arr" aria-hidden="true">→</span></span>
+      </a>
+
+      <a class="feat-card a-red reveal" href="news-rugguard.html">
+        <div class="feat-meta">
+          <span class="ver-chip">v2.8.0</span>
           <span class="tag feature">Feature</span>
           <time class="feat-date" datetime="2026-08-05">Aug 5, 2026</time>
         </div>
+        <h3>Fresh launches are snipeable, and the rug guard</h3>
+        <p>A 39-second-old coin no aggregator had indexed used to strand an armed buy forever. Now the bonding curve is read straight off chain and the buy fires seconds after launch. And a buy into a float held by ten wallets gets refused out loud — with the percentage named, because a vague risk badge is not information.</p>
+        <span class="go">Read the full story <span class="arr" aria-hidden="true">→</span></span>
+      </a>
+
+      <a class="feat-card a-orange reveal d1" href="news-quickedit.html">
+        <div class="feat-meta">
+          <span class="ver-chip">v2.9.0</span>
+          <span class="tag feature">Feature</span>
+          <time class="feat-date" datetime="2026-08-05">Aug 5, 2026</time>
+        </div>
+        <h3>The quick fixes live on the trading tab</h3>
+        <p>A ✎ on the panel header opens presets, sell percents and your fee/gas/tip/slippage inline — without leaving the chart. And focus mode finally goes properly Axiom-compact: the preset chips <em>are</em> the buttons, and Enter buys.</p>
+        <span class="go">Read the full story <span class="arr" aria-hidden="true">→</span></span>
+      </a>
+
+      <a class="feat-card a-violet reveal" href="news-turbo.html">
+        <div class="feat-meta">
+          <span class="ver-chip">v2.7.0</span>
+          <span class="tag speed">Speed</span>
+          <time class="feat-date" datetime="2026-08-05">Aug 5, 2026</time>
+        </div>
         <h3>Terminal Turbo: every terminal, warm</h3>
-        <p>The warm-viewer trick was never really about X. Axiom, Padre, GMGN, pump.fun and Solscan all get kept-warm viewers now — click through from one terminal and the next is already booted. Then the half nobody demos: PaperTrench switched off donates zero parsing to the page, chips stopped thrashing layout at volume peaks, and the dashboard stopped re-reading everything every four seconds. With receipts, measured on your own machine.</p>
+        <p>Axiom, Padre, GMGN, pump.fun and Solscan all get kept-warm viewers — click through from one terminal and the next is already booted. Plus the half nobody demos: switched off, PaperTrench donates zero parsing to the page. With receipts, measured on your own machine.</p>
         <span class="go">Read the full story <span class="arr" aria-hidden="true">→</span></span>
       </a>
 
@@ -184,7 +217,7 @@
     <h2 class="reveal d1" style="margin-top:24px">Every one of these<br><span class="grad-orange" style="background:linear-gradient(100deg,var(--orange2),var(--orange-deep));-webkit-background-clip:text;background-clip:text;color:transparent">is already in the build.</span></h2>
     <p class="sec-sub reveal d2" style="text-align:center;margin-top:16px">Update by unzipping the latest release over the folder you already loaded, then hitting ↻ Reload on the extension card. Your wallet, journal and attest chain survive.</p>
     <div class="hero-ctas reveal d3" style="margin-top:36px">
-      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.7.1/papertrench-2.7.1.zip" target="_blank" rel="noopener">⬇ Get the latest build</a>
+      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.9.0/papertrench-2.9.0.zip" target="_blank" rel="noopener">⬇ Get the latest build</a>
       <a class="btn btn-ghost" href="https://github.com/OnlyTerp/papertrench/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Raw changelog on GitHub ↗</a>
     </div>
   </div>

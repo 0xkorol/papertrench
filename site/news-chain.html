@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>We shipped a build that broke the chain, and said so · PaperTrench news</title>
+<meta name="description" content="v2.8.1: v2.8.0 carried half an in-flight migration and every paper fill failed to append to the attestation chain. The failure was visible, the gap is disclosed, and the chain has been rebuilt as a single-writer segmented store (F-14).">
+<meta property="og:title" content="We shipped a build that broke the chain, and said so">
+<meta property="og:description" content="A tamper-evidence layer that quietly stops recording is worse than one that never existed. Here is exactly what broke, who it affected, and what the verify panel will tell you.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta property="og:type" content="article">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* ---------- the "do not use" banner ---------- */
+  .danger {
+    display: flex; gap: 15px; align-items: flex-start;
+    margin: 34px 0 10px; padding: 20px 24px;
+    background: linear-gradient(120deg, rgba(224,67,58,0.13), rgba(224,67,58,0.04));
+    border: 1px solid rgba(224,67,58,0.45); border-radius: var(--radius);
+  }
+  .danger .ic { font-size: 24px; flex: none; line-height: 1.2; }
+  .danger h3 { font-size: 17px; font-weight: 800; color: #ff8a80; margin-bottom: 6px; }
+  .danger p { font-size: 14.5px; color: var(--muted); line-height: 1.6; margin: 0; }
+  .danger a { color: var(--orange2); font-weight: 700; }
+
+  /* ---------- chain segment diagram ---------- */
+  .chain { margin: 30px 0; }
+  .chain-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chain-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: 1.3px; text-transform: uppercase; color: var(--dim); width: 100%; margin-bottom: 4px; }
+  .seg {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    padding: 8px 11px; border-radius: 9px;
+    border: 1px solid var(--line2); background: rgba(255,255,255,0.03); color: var(--muted);
+  }
+  .seg.hot { border-color: rgba(52,211,153,0.4); background: rgba(52,211,153,0.08); color: var(--green); }
+  .seg.rw { border-color: rgba(224,67,58,0.4); background: rgba(224,67,58,0.08); color: #ff8a80; }
+  .chain-note { font-size: 12.5px; color: var(--dim); }
+</style>
+</head>
+<body class="a-green">
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="index.html#bubbles">Chart bubbles</a>
+      <a href="index.html#replay">Replay</a>
+      <a href="index.html#leaderboard">Leaderboard</a>
+      <a href="news.html" aria-current="page">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<article>
+  <header class="post-hero">
+    <div class="wrap-read">
+      <a class="post-back" href="news.html"><span aria-hidden="true">←</span> All updates</a>
+      <div class="post-meta">
+        <span class="ver-chip">v2.8.1</span>
+        <span class="tag fix">Fix</span>
+        <span class="tag security">Integrity</span>
+        <time class="feat-date" datetime="2026-08-05">August 5, 2026</time>
+        <span class="post-read">· 5 min read</span>
+      </div>
+      <h1 class="post-title">We shipped a build that broke the chain, and said so</h1>
+      <p class="post-stand">v2.8.0 went out carrying half of an in-flight migration. Every paper fill made on it <strong>failed to append to your local attestation chain</strong> — the tamper-evidence layer the leaderboard verifies against. Your money, balances and P&amp;L were never touched. Here is exactly what happened, who it affects, and what your verify panel will tell you.</p>
+      <div class="post-rule"></div>
+    </div>
+  </header>
+
+  <div class="wrap-read post-body">
+
+    <div class="danger reveal">
+      <span class="ic" aria-hidden="true">⚠</span>
+      <div>
+        <h3>If you are running v2.8.0, update now</h3>
+        <p>Do not trade on that build. <a href="https://github.com/OnlyTerp/papertrench/releases/download/v2.9.0/papertrench-2.9.0.zip" target="_blank" rel="noopener">Get the current release</a> and unzip it over the same folder — your wallet, journal and existing chain survive. The v2.8.0 zip is deliberately not linked anywhere on this site.</p>
+      </div>
+    </div>
+
+    <p class="post-lede">The attestation chain is the reason a PaperTrench leaderboard record means anything. Every fill is committed to a SHA-256 hash chain the moment it happens, before the outcome is known, so trades cannot be inserted, deleted or backdated after the fact.</p>
+
+    <p>A chain that silently stops recording is therefore worse than no chain at all. It leaves you believing you have a verifiable record while you are quietly accumulating a hole in it.</p>
+
+    <h2>What went wrong</h2>
+
+    <p>The attestation chain was being migrated to a new segmented store. v2.8.0 was cut while that migration was in flight, and it shipped with the two halves out of step: <b>fills asked for the new segmented chain store, and the new store was not aboard.</b></p>
+
+    <p>So every paper fill on v2.8.0 tried to append to a chain writer that did not exist, and failed.</p>
+
+    <div class="callout">
+      <span class="co-label">The one thing that went right</span>
+      <p>It failed <strong>loudly</strong>. The honest "could not be added to the verification chain" toast fired on every single fill — the failure was visible on screen, every time, not swallowed.</p>
+      <p>That toast exists because of an earlier rule: no silent death, ever. This is the release where that rule earned its keep. A user on v2.8.0 was told, at the moment of each fill, that the chain had not recorded it.</p>
+    </div>
+
+    <h2>What it did and did not affect</h2>
+
+    <div class="ba-grid">
+      <div class="ba after">
+        <div class="ba-lbl">Never affected</div>
+        <p>Your wallet, balances, positions, rounds, journal and P&amp;L. All of it recorded normally. No data was lost and nothing was corrupted.</p>
+      </div>
+      <div class="ba before">
+        <div class="ba-lbl">Affected</div>
+        <p>The attestation chain only. Fills made during the v2.8.0 window are absent from it — they exist in your history, but carry no chain commitment.</p>
+      </div>
+    </div>
+
+    <p>The practical consequence is narrow but real: those fills cannot be proven to have been recorded before their outcome was known. For ordinary practice that changes nothing. For a leaderboard submission, it is a gap.</p>
+
+    <h2>What the verify panel says about it</h2>
+
+    <p class="post-pull">The gap is shown. It is not smoothed over, back-filled, or re-derived.</p>
+
+    <p>It would be technically easy to walk your fill history after the fact and manufacture chain entries for the missing window. It would also destroy the entire point: a chain entry written <em>after</em> the outcome is known proves nothing, and a verifier cannot tell a helpfully back-filled entry from a dishonest one.</p>
+
+    <p>So on v2.8.1 the chain records again from that moment forward, and the verify panel <b>honestly shows the gap rather than pretending it is not there</b>. A record that admits a hole is worth more than one that quietly papers over it.</p>
+
+    <h2>The rebuild itself (F-14)</h2>
+
+    <p>The migration that caused the mess was worth doing, and it landed whole in v2.8.1. The chain moved out of the wallet state and into a <b>single-writer segmented store</b>.</p>
+
+    <div class="chain reveal">
+      <div class="chain-row">
+        <span class="chain-lbl">Before — one blob, rewritten on every fill</span>
+        <span class="seg rw">entire chain · rewritten</span>
+      </div>
+      <div class="chain-row">
+        <span class="chain-lbl">After — append to the tail segment only</span>
+        <span class="seg">seg 001</span>
+        <span class="seg">seg 002</span>
+        <span class="seg">seg 003</span>
+        <span class="seg hot">seg 004 · rewritten</span>
+      </div>
+      <p class="chain-note">A fill now rewrites one small tail segment instead of the whole history.</p>
+    </div>
+
+    <p>Four things fall out of that:</p>
+
+    <ul>
+      <li><b>Multi-tab chain races are gone.</b> One writer, by construction — not by hoping two tabs never write at once.</li>
+      <li><b>No hash is ever truncated.</b> The old shape had a size ceiling that could clip history; heavy traders hit exactly this class of problem back in v1.2.8.</li>
+      <li><b>Backups are downgrade-safe.</b> A backup taken on the new build restores intact on a pre-segmentation build. Upgrading should never strand your own data on the far side of a version bump.</li>
+      <li><b>Resets clear the chain atomically with the wallet</b> — no state where you have a fresh wallet and a stale chain.</li>
+    </ul>
+
+    <p>And the part that matters to anyone who has already submitted a record: <b>the leaderboard verifier format is unchanged.</b> This was an internal storage change, not a protocol change.</p>
+
+    <h2>Why write this up at all</h2>
+
+    <p>Nobody would have noticed if this page did not exist. The bug is invisible unless you read your own toasts carefully, the affected window was short, and no money is real.</p>
+
+    <p>But the product's entire claim is that its numbers are true, and <a href="news-v2.html">we publish our own defect register</a> for the same reason. A team that hides the one bug that undermines its verification story has no standing to ask anyone to trust the verification story.</p>
+
+    <div class="callout">
+      <span class="co-label">One more thing v2.8.0 shipped without telling anyone</span>
+      <p>The <strong>Turbo receipts card</strong> — the Settings card counting warm vs cold opens, median routing latency and per-site main-thread stalls, all measured locally and never sent anywhere — was in v2.8.0 and went unmentioned in its release notes. It is described in both entries now, where it belongs. <a href="news-turbo.html">More on Turbo →</a></p>
+    </div>
+
+    <!-- ---------- patch notes ---------- -->
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.8.1</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>v2.8.0 shipped with attestation-chain recording broken</h4>
+          <p>The release accidentally carried half of an in-flight migration: fills asked for the new segmented chain store, which was not aboard, so every paper fill made on v2.8.0 failed to append to your local attestation chain (the honest "could not be added to the verification chain" toast fired each time — the failure was visible, the chain simply could not record). Your wallet, balances and P&amp;L were never affected — the chain is the tamper-evidence layer used by leaderboard verification. On v2.8.1 the chain records again; fills made during the v2.8.0 window are simply absent from the chain, and the verify panel will honestly show that gap rather than pretend it is not there.</p>
+        </div>
+        <div class="pn-item">
+          <h4>The attestation chain grew up (F-14)</h4>
+          <p>It moved out of the wallet state into a single-writer segmented store: a fill now rewrites one small tail segment instead of the whole history, multi-tab chain races are gone, and no hash is ever truncated. Backups are downgrade-safe — a new backup restores intact on a pre-segmentation build. Resets clear the chain atomically with the wallet, and the leaderboard verifier format is unchanged.</p>
+        </div>
+        <div class="pn-item">
+          <h4>For the record: v2.8.0 also contained the Turbo receipts card</h4>
+          <p>The Settings card counting warm vs cold opens, median routing latency, and per-site main-thread stalls — measured locally, never sent anywhere. Its release notes did not mention it; the feature description now lives in both entries, where it belongs.</p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Full history:</span>
+        <a href="news.html#v2-8-1">this release in the archive</a>
+        <span>·</span>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">how verification works ↗</a>
+      </div>
+    </div>
+
+    <div class="post-nav">
+      <a class="pnav" href="news-quickedit.html">
+        <span class="dir">← Newer</span>
+        <span class="t">The quick fixes live on the trading tab</span>
+      </a>
+      <a class="pnav next" href="news-rugguard.html">
+        <span class="dir">Older →</span>
+        <span class="t">Fresh launches, and the rug guard</span>
+      </a>
+    </div>
+
+  </div>
+</article>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="index.html">Home</a>
+        <a href="news.html">News</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+      </div>
+    </div>
+    <div class="foot-note">Paper trading only · not financial advice · no real funds were ever involved in this defect, and no wallet data was lost.</div>
+  </div>
+</footer>
+
+<script src="reveal.js"></script>
+</body>
+</html>

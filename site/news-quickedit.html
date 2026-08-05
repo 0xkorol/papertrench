@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The quick fixes live on the trading tab · PaperTrench news</title>
+<meta name="description" content="v2.9.0: a ✎ inline editor on the trading panel for presets, fees, gas, tip and slippage — and a focus mode that is genuinely Axiom-compact, where the preset chips ARE the buttons and Enter buys.">
+<meta property="og:title" content="The quick fixes live on the trading tab">
+<meta property="og:description" content="Retuning your presets mid-session should not mean leaving the chart. Lev round two, shipped where he meant it.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta property="og:type" content="article">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* ---------- compact focus-mode panel mock ---------- */
+  .fm-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 32px 0 12px; align-items: start; }
+  @media (max-width: 700px) { .fm-wrap { grid-template-columns: 1fr; } }
+  .fm {
+    background: #0b0f16; border: 1px solid rgba(255,255,255,0.10); border-radius: 14px;
+    overflow: hidden; box-shadow: 0 22px 56px rgba(0,0,0,0.55); font-size: 12px;
+  }
+  .fm-h { display: flex; align-items: center; gap: 7px; padding: 9px 11px; border-bottom: 1px solid var(--line); }
+  .fm-h .ic { width: 17px; height: 17px; border-radius: 5px; background: linear-gradient(135deg, var(--orange2), var(--orange-deep)); color: #2a1400; display: grid; place-items: center; font-size: 9px; font-weight: 900; }
+  .fm-h .nm { font-weight: 750; font-size: 11.5px; }
+  .fm-h .pen { margin-left: auto; color: var(--orange2); font-size: 12px; }
+  .fm-b { padding: 11px; }
+  .fm-tok { display: flex; align-items: baseline; justify-content: space-between; }
+  .fm-tok .s { font-weight: 800; font-size: 13.5px; }
+  .fm-tok .p { font-family: var(--mono); font-size: 11.5px; font-weight: 700; }
+  .fm-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 10px; }
+  .fm-chip { text-align: center; padding: 7px 2px; border-radius: 8px; font-family: var(--mono); font-size: 10.5px; font-weight: 700; border: 1px solid rgba(52,211,153,0.35); background: rgba(52,211,153,0.10); color: var(--green); }
+  .fm-buy { margin-top: 8px; text-align: center; padding: 9px; border-radius: 9px; background: linear-gradient(135deg, #2ec27e, #22b573); color: #032b1b; font-weight: 800; font-size: 11.5px; }
+  .fm-costs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 9px; }
+  .fm-cost { font-family: var(--mono); font-size: 9.5px; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line2); color: var(--muted); background: rgba(255,255,255,0.03); }
+  .fm-lbl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--dim); margin-bottom: 9px; }
+  .fm-note { font-size: 12px; color: var(--dim); margin-top: 9px; text-align: center; }
+  .fx-cap2 { text-align: center; font-size: 12.5px; color: var(--dim); margin-top: 14px; }
+</style>
+</head>
+<body class="a-orange">
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="index.html#bubbles">Chart bubbles</a>
+      <a href="index.html#replay">Replay</a>
+      <a href="index.html#leaderboard">Leaderboard</a>
+      <a href="news.html" aria-current="page">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<article>
+  <header class="post-hero">
+    <div class="wrap-read">
+      <a class="post-back" href="news.html"><span aria-hidden="true">←</span> All updates</a>
+      <div class="post-meta">
+        <span class="ver-chip">v2.9.0</span>
+        <span class="tag feature">Feature</span>
+        <time class="feat-date" datetime="2026-08-05">August 5, 2026</time>
+        <span class="post-read">· 4 min read</span>
+      </div>
+      <h1 class="post-title">The quick fixes live on the trading tab</h1>
+      <p class="post-stand">Lev round two. Both items had technically shipped already — the settings existed, focus mode existed — but <strong>in the wrong place and at the wrong size</strong>. Shipping a knob is not the same as shipping it where a hand can reach it mid-trade.</p>
+      <div class="post-rule"></div>
+    </div>
+  </header>
+
+  <div class="wrap-read post-body">
+
+    <div class="fm-wrap reveal">
+      <div>
+        <div class="fm-lbl">Focus mode · instant buy ON</div>
+        <div class="fm">
+          <div class="fm-h"><span class="ic">P</span><span class="nm">PaperTrench</span><span class="pen">✎</span></div>
+          <div class="fm-b">
+            <div class="fm-tok"><span class="s">$TRENCH</span><span class="p">0.00003412</span></div>
+            <div class="fm-chips">
+              <span class="fm-chip">0.1</span><span class="fm-chip">0.5</span><span class="fm-chip">1</span><span class="fm-chip">2</span>
+            </div>
+            <div class="fm-costs">
+              <span class="fm-cost">Fee 1%</span><span class="fm-cost">Gas 0.0012</span><span class="fm-cost">Tip 0.003</span><span class="fm-cost">Slip 5%</span>
+            </div>
+            <div class="fm-note">chips ARE the buttons · 10.42 ◎</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="fm-lbl">Focus mode · instant buy OFF</div>
+        <div class="fm">
+          <div class="fm-h"><span class="ic">P</span><span class="nm">PaperTrench</span><span class="pen">✎</span></div>
+          <div class="fm-b">
+            <div class="fm-tok"><span class="s">$TRENCH</span><span class="p">0.00003412</span></div>
+            <div class="fm-chips">
+              <span class="fm-chip">0.1</span><span class="fm-chip">0.5</span><span class="fm-chip">1</span><span class="fm-chip">2</span>
+            </div>
+            <div class="fm-buy">BUY (PAPER) · 10.42 ◎</div>
+            <div class="fm-costs">
+              <span class="fm-cost">Fee 1%</span><span class="fm-cost">Gas 0.0012</span><span class="fm-cost">Tip 0.003</span><span class="fm-cost">Slip 5%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="fx-cap2">Simulated panels. Cash rides on the Buy label instead of a balance card.</p>
+
+    <h2>A pencil on the trading panel</h2>
+
+    <p class="post-lede">The settings that actually change mid-session are your buy presets, your sell percents, and your costs. Everything else you configure once and forget. Yet changing any of them meant leaving the chart — opening the dashboard, or at best the popup.</p>
+
+    <p>The <b>✎</b> in the panel header now opens a compact inline editor right on the trading tab: buy presets, sell percents, and fee / gas / tip / slippage. You are still looking at the candle while you retune.</p>
+
+    <p>Your costs also ride visibly under the buy row as <b>Fee / Gas / Tip / Slip</b> chips, click-to-edit, in both modes. <a href="news-fees.html">Costs only teach you something if you can see them</a> — a fee model buried three screens away is a fee model you forget is on.</p>
+
+    <div class="callout">
+      <span class="co-label">One rulebook, three places</span>
+      <p>The inline editor uses <strong>the same validation rulebook</strong> as the dashboard and the popup. A bad value keeps your saved value and says so — identically, wherever you typed it.</p>
+      <p>Three surfaces editing the same settings is three chances to disagree about what a valid number is. They share one implementation instead.</p>
+    </div>
+
+    <h2>Focus mode is genuinely Axiom-compact now</h2>
+
+    <p>Focus mode has existed since v1.2.15, requested by someone who wanted the panel to feel like the terminals they already used. It stripped decoration — but it was still visibly a PaperTrench panel wearing a smaller coat, and it was still taller than the thing it was imitating.</p>
+
+    <p>Two changes close the gap:</p>
+
+    <ul>
+      <li><b>No balance card.</b> Your cash rides inline on the Buy label, refreshed on every fill. It was never worth a whole card — you need the number, not a panel about the number.</li>
+      <li><b>While one-tap presets are on, the big BUY button gets out of the way.</b> The preset chips <em>are</em> the buttons, and Enter in the amount box buys.</li>
+    </ul>
+
+    <p class="post-pull">A button whose only job is to confirm a decision you already made with the previous click is a button in the way.</p>
+
+    <p>Turn instant-buy off and the button comes back, because then it is doing real work. The layout follows the mode instead of being one compromise for both.</p>
+
+    <h2>Why this is a release and not a tweak</h2>
+
+    <p>Neither of these is a new capability. Every setting was already editable and focus mode already existed. What changed is the distance between a decision and the control that acts on it — and in this market that distance is the feature.</p>
+
+    <p>It is also the second round of feedback from the same person, shipped the same day. <a href="news.html">Most of the archive</a> looks like that.</p>
+
+    <!-- ---------- patch notes ---------- -->
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.9.0</span>
+        <span class="pn-date">August 5, 2026 · current release</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>A pencil on the trading panel</h4>
+          <p>The ✎ in the panel header opens a compact inline editor right on the trading tab — buy presets, sell percents, and fee/gas/tip/slippage — with the same validation rulebook the dashboard and popup use. Your costs ride as Fee/Gas/Tip/Slip chips under the buy row, click-to-edit, in both modes.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Focus mode is genuinely Axiom-compact now</h4>
+          <p>No balance card (cash rides inline on the Buy label, refreshed per fill), and while one-tap presets are on the big BUY button gets out of the way — the preset chips ARE the buttons, and Enter in the amount box buys. Instant-buy off keeps the button.</p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Full history:</span>
+        <a href="news.html#v2-9-0">this release in the archive</a>
+        <span>·</span>
+        <a href="https://github.com/OnlyTerp/papertrench/releases/tag/v2.9.0" target="_blank" rel="noopener">release notes on GitHub ↗</a>
+      </div>
+    </div>
+
+    <div class="post-nav">
+      <a class="pnav" href="news.html">
+        <span class="dir">← Newer</span>
+        <span class="t">This is the latest — see all updates</span>
+      </a>
+      <a class="pnav next" href="news-chain.html">
+        <span class="dir">Older →</span>
+        <span class="t">We shipped a build that broke the chain</span>
+      </a>
+    </div>
+
+  </div>
+</article>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="index.html">Home</a>
+        <a href="news.html">News</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+    <div class="foot-note">Paper trading only · not financial advice · the panels above are simulated demo data.</div>
+  </div>
+</footer>
+
+<script src="reveal.js"></script>
+</body>
+</html>

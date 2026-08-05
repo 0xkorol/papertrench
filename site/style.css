@@ -789,6 +789,19 @@ footer { border-top: 1px solid var(--line); padding: 42px 0; }
 .rel-more + .rel-more { margin-left: 20px; }
 .rel-more:hover { color: #ffd9b5; }
 
+/* A superseded build — one we actively tell people not to run. It gets a red
+   card and a banner, because "don't trade on this" cannot be a sentence a
+   reader might skim past. */
+.rel-card.is-superseded { border-color: rgba(224,67,58,0.35); background: linear-gradient(180deg, rgba(224,67,58,0.05), transparent 60%), var(--panel); }
+.rel-warn {
+  display: flex; align-items: center; gap: 9px; margin: 14px 0 2px;
+  padding: 10px 14px; border-radius: 11px;
+  background: rgba(224,67,58,0.10); border: 1px solid rgba(224,67,58,0.38);
+  font-size: 13px; font-weight: 700; color: #ff8a80;
+}
+.rel-warn .ic { font-size: 14px; flex: none; }
+.rel-card.is-superseded .rel-title { color: var(--muted); }
+
 /* ---------- article pages ---------- */
 .post-hero { padding: 122px 0 0; position: relative; }
 .post-back { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 700; color: var(--muted); transition: color .2s; }
