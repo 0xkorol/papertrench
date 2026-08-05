@@ -62,6 +62,17 @@ video evidence doing the heavy lifting.
 - **Chips stopped fighting the page for layout.** Chip positioning now runs
   in read/write phases with diffed style writes, so screener chips no
   longer thrash layout at volume peaks.
+- **Instant terminal links (opt-in).** Axiom, Padre and GMGN token links
+  clicked on another terminal open in that terminal's kept-warm viewer, and
+  a positions-bar hop to another terminal no longer replaces the tab you
+  are on. Terminal viewers appear on first use (pump.fun and Solscan still
+  pre-warm) — the cost stays up to two muted background tabs.
+- **Turbo receipts.** The popup counts your warm vs cold opens and shows
+  the median routing time — measured on your machine, stored locally,
+  never sent anywhere.
+- **The positions bar respects late headers.** It now measures the site
+  header until it settles, so slow-painting headers no longer end up
+  underneath it.
 
 ## v2.6.0 — 2026-08-05
 
