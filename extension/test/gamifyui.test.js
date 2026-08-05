@@ -65,8 +65,8 @@ test('the Trench Rank card renders on the overview and soft-degrades like the gr
   const overview = fnBlock(dashJs, 'function renderOverview(el)');
   assert.match(overview, /\$\{renderTrenchRank\(\)\}/, 'the overview must interpolate the card');
   const card = fnBlock(dashJs, 'function renderTrenchRank()');
-  assert.match(card, /const G = window\.PTGamify;\s*\n\s*if \(!G\) return '';/,
-    'a missing module renders nothing — a throw here blanks the dashboard (D-16)');
+  assert.match(card, /const G = window\.PTGamify;\s*\n\s*if \(!G \|\| !gamingOn\(\)\) return '';/,
+    'a missing module OR a disabled mode renders nothing — a throw here blanks the dashboard (D-16)');
   assert.match(card, /G\.rank\(state\)/, 'the card consumes PTGamify.rank');
 });
 
@@ -77,12 +77,15 @@ test('the rounds table Grade column keeps its three synchronized edits in sync',
   assert.match(rounds, /const gradeById = new Map\(\)/, 'grades are computed once per render pass');
   const headerRow = rounds.match(/<thead><tr>(.*?)<\/tr><\/thead>/);
   assert.ok(headerRow, 'the header row must exist');
-  const thCount = (headerRow[1].match(/<th[ >]/g) || []).length;
-  const colspan = rounds.match(/colspan="(\d+)"/);
-  assert.ok(colspan, 'the empty state must span the table');
-  assert.equal(String(thCount), colspan[1],
-    'the <th> count and the empty-state colspan are the same number — they drift apart silently otherwise');
-  assert.match(headerRow[1], /<th>Grade<\/th>/, 'the Grade column must exist');
+  // Gaming Mode makes the Grade column conditional: the static columns plus
+  // one conditional <th> must agree with the conditional colspan in BOTH
+  // branches — they drift apart silently otherwise.
+  const staticTh = (headerRow[1].replace(/\$\{G \? '<th>Grade<\/th>' : ''\}/, '').match(/<th[ >]/g) || []).length;
+  const colspan = rounds.match(/colspan="\$\{G \? (\d+) : (\d+)\}"/);
+  assert.ok(colspan, 'the empty state colspan must be mode-conditional');
+  assert.equal(String(staticTh + 1), colspan[1], 'gaming on: static columns + Grade');
+  assert.equal(String(staticTh), colspan[2], 'gaming off: static columns only');
+  assert.match(headerRow[1], /\$\{G \? '<th>Grade<\/th>' : ''\}/, 'the Grade column exists only in Gaming Mode');
 });
 
 test('day-keyed gamify surfaces are covered by the fingerprint (no midnight stale-freeze)', () => {
@@ -192,6 +195,55 @@ test('cardModel derives trench display strings and the flag hides them (absent =
   const bare = PC.cardModel(source, {});
   assert.equal(bare.gradeText, '', 'no trench opts → no invented grade');
   assert.equal(bare.rankText, '');
+});
+
+/* ================= Gaming Mode: the persona wall ================= */
+
+test('Gaming Mode off means gamification does not exist on any surface', () => {
+  // Dashboard: every gamified renderer consults gamingOn().
+  assert.match(fnBlock(dashJs, 'function gamingOn()'), /settings\.gamingModeEnabled === true/,
+    'default-off: only an explicit true turns the mode on');
+  assert.match(fnBlock(dashJs, 'function renderTrenchRank()'), /!G \|\| !gamingOn\(\)/, 'overview card gated');
+  assert.match(fnBlock(dashJs, 'function renderRounds(el)'), /gamingOn\(\) \? window\.PTGamify : null/, 'grade column gated');
+  assert.match(fnBlock(dashJs, 'function renderCalendar(el)'), /gamingOn\(\) \? window\.PTGamify : null/, 'calendar dots gated');
+  assert.match(fnBlock(dashJs, 'function trenchCardOpts(round)'), /!G \|\| !gamingOn\(\)/, 'card trench line gated');
+  assert.match(fnBlock(dashJs, 'function renderGame(el)'), /Gaming Mode is off/, 'the tab explains itself when off');
+  assert.match(fnBlock(dashJs, 'function applyModeNav()'), /classList\.toggle\('hidden', !gamingOn\(\)\)/,
+    'the nav entry hides with the mode');
+  assert.match(fnBlock(dashJs, 'function renderSidebar()'), /applyModeNav\(\);/,
+    'nav visibility re-applies on every refresh so a settings toggle needs no reload');
+  // Overlay: one gate function feeds every gamified surface.
+  assert.match(contentBlock('function gamingOn()'), /settings\.gamingModeEnabled === true/);
+  assert.match(contentBlock('function refreshTrenchCache()'), /!G \|\| !gamingOn\(\)/, 'chip+HUD cache gated');
+  const sell = contentBlock('async function doSellInner(fraction)');
+  assert.match(sell, /gamingOn\(\) && window\.PTGamify/, 'grade toast gated');
+  const closedCard = contentBlock('function renderClosedPnl()');
+  assert.match(closedCard, /gamingOn\(\) && window\.PTGamify/, 'closed-card chip gated');
+  const flex = contentBlock('function openFlexComposer(mint)');
+  assert.match(flex, /gamingOn\(\) && window\.PTGamify/, 'flex card trench gated');
+  // Settings: the mode has a switch, and the engine defaults it OFF.
+  assert.match(dashJs, /id="set-gaming-mode"/, 'the Modes card offers the toggle');
+  assert.match(dashJs, /gamingModeEnabled: document\.getElementById\('set-gaming-mode'\)\.checked/,
+    'the toggle persists');
+  const engine = read('engine.js');
+  assert.match(engine, /gamingModeEnabled: false/, 'gamification is invisible until asked for');
+});
+
+test('game sessions: engine pointer, tab controls, Date-free session scoring for the HUD', () => {
+  const engine = read('engine.js');
+  assert.match(engine, /function startGame\(state, id, ts\)/, 'engine owns the session pointer');
+  assert.match(engine, /function endGame\(state\)/, 'and its removal');
+  const bind = fnBlock(dashJs, 'function bindGame(el)');
+  assert.match(bind, /mutateState/, 'start/end go through the seq-protocol write path');
+  assert.match(bind, /E\.startGame\(fresh, id, Date\.now\(\)\)/);
+  assert.match(bind, /E\.endGame\(fresh\)/);
+  const gamify = read('gamify.js');
+  const sessionFn = gamify.slice(gamify.indexOf('function gameSession(state, now)'), gamify.indexOf('/** Longer-horizon'));
+  assert.doesNotMatch(sessionFn, /new Date|dayKey|dayBuckets/,
+    'gameSession stays Date-free so the overlay HUD can call it in the stubbed-Date harness');
+  const hud = contentBlock('function updateGameHud(session)');
+  assert.match(hud, /session\.status !== 'live'/, 'terminal states are announced');
+  assert.match(hud, /gameHudStatus && gameHudStatus !== statusKey/, 'announced exactly once, not per repaint');
 });
 
 /* ================= the Game tab ================= */

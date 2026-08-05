@@ -548,6 +548,74 @@
     ];
   }
 
+  /**
+   * Score the game session the user explicitly started (state.activeGame,
+   * engine.startGame). Deliberately Date-free: only closedAt comparisons, so
+   * the overlay HUD can call it inside its event-driven cache. The pointer
+   * stays until the player ends it — a terminal status (won/failed/busted/
+   * missed) keeps showing on the HUD until dismissed from the Game tab.
+   */
+  function gameSession(state, now) {
+    const active = state && state.activeGame;
+    if (!active || !active.id || !(num(active.startedAt) > 0)) return null;
+    const { E } = deps();
+    const startedAt = num(active.startedAt);
+    const rounds = chronological(state)
+      .filter((r) => num(r.closedAt) !== null && num(r.closedAt) >= startedAt);
+    const hasThesis = (r) => Boolean(r.thesis
+      && (typeof r.thesis === 'object' || String(r.thesis).trim().length));
+
+    if (active.id === 'gauntlet') {
+      let clean = 0;
+      let broken = null;
+      for (const r of rounds) {
+        if (hasThesis(r) && !isRevengeEntry(state, r)) { clean += 1; }
+        else { broken = !hasThesis(r) ? 'no thesis written' : 'revenge re-entry'; break; }
+        if (clean >= 10) break;
+      }
+      const status = broken ? 'failed' : clean >= 10 ? 'won' : 'live';
+      return {
+        id: 'gauntlet', startedAt, rounds: rounds.length, status,
+        progress: clean, target: 10,
+        detail: broken || (status === 'won' ? 'ten clean rounds' : 'thesis written, no revenge'),
+      };
+    }
+
+    if (active.id === 'one-shot') {
+      let status = 'live';
+      let capture = null;
+      if (rounds.length === 1) {
+        capture = captureOf(E, rounds[0]);
+        status = capture !== null && capture >= 50 ? 'won' : 'missed';
+      } else if (rounds.length > 1) {
+        status = 'busted';
+      }
+      return {
+        id: 'one-shot', startedAt, rounds: rounds.length, status,
+        progress: Math.min(rounds.length, 1), target: 1,
+        score: capture,
+        detail: status === 'busted' ? 'second round busted the shot'
+          : status === 'missed' ? 'under 50% captured'
+            : status === 'won' ? `${capture.toFixed(0)}% captured` : 'one entry, one exit, 50%+',
+      };
+    }
+
+    if (active.id === 'score-attack') {
+      const caps = rounds.map((r) => captureOf(E, r)).filter((c) => c !== null);
+      const avg = caps.length ? caps.reduce((s, c) => s + c, 0) / caps.length : null;
+      return {
+        id: 'score-attack', startedAt, rounds: rounds.length, status: 'live',
+        progress: Math.min(caps.length, 3), target: 3,
+        score: avg,
+        detail: caps.length >= 3
+          ? `${avg.toFixed(0)}% avg over ${caps.length}`
+          : `${caps.length}/3 rounds banked${avg === null ? '' : ` · ${avg.toFixed(0)}% avg`}`,
+      };
+    }
+
+    return null;
+  }
+
   /** Longer-horizon discipline tracks. Days without trades never break a
    *  day-scoped run — a challenge must never nudge anyone into overtrading. */
   function challenges(state) {
@@ -622,6 +690,7 @@
 
   const api = {
     roundGrade, streaks, rank, reps, badges, drills, games, challenges, gauntletRun,
+    gameSession,
     isRevengeEntry,
     RANKS, GRADE_BANDS, REP_FULL_PER_DAY, REP_HALF_PER_DAY,
     REVENGE_WINDOW_MS, REVENGE_SIZE_RATIO,

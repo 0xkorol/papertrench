@@ -264,6 +264,57 @@ test('Journal Week advances only on traded days and never punishes a quiet day',
   assert.equal(c.done, false);
 });
 
+/* ---------------- game sessions ---------------- */
+
+test('a Gauntlet session scores only rounds closed since start, and a violation ends it', () => {
+  const before = mkRound({ thesis: null });                 // pre-session junk must not count
+  const t0 = before.closedAt + 60_000;
+  const clean = (i) => mkRound({ openedAt: t0 + i * 120_000, closedAt: t0 + i * 120_000 + 60_000, pnlSol: -0.01, peakPnlSol: 0, troughPnlSol: -0.01 });
+  const rounds = [before, clean(0), clean(1), clean(2)];
+  const s = state(rounds);
+  s.activeGame = { id: 'gauntlet', startedAt: t0 };
+  const live = G.gameSession(s);
+  assert.equal(live.status, 'live');
+  assert.equal(live.progress, 3, 'the thesisless pre-session round is invisible to the session');
+
+  const broken = mkRound({ thesis: null, openedAt: t0 + 10 * 120_000, closedAt: t0 + 10 * 120_000 + 60_000 });
+  const s2 = state([...rounds, broken]);
+  s2.activeGame = { id: 'gauntlet', startedAt: t0 };
+  const failed = G.gameSession(s2);
+  assert.equal(failed.status, 'failed');
+  assert.match(failed.detail, /no thesis/);
+});
+
+test('One-Shot: one qualifying round wins, a second busts, and no pointer means no session', () => {
+  const t0 = 1_800_000_000_000;
+  const shot = mkRound({ openedAt: t0 + 60_000, closedAt: t0 + 120_000, pnlSol: 0.7, peakPnlSol: 1.0 });
+  const s = state([shot]);
+  s.activeGame = { id: 'one-shot', startedAt: t0 };
+  const won = G.gameSession(s);
+  assert.equal(won.status, 'won');
+  assert.ok(Math.abs(won.score - 70) < 1e-9);
+
+  const second = mkRound({ openedAt: t0 + 200_000, closedAt: t0 + 260_000, pnlSol: 0.9, peakPnlSol: 1.0 });
+  const s2 = state([shot, second]);
+  s2.activeGame = { id: 'one-shot', startedAt: t0 };
+  assert.equal(G.gameSession(s2).status, 'busted');
+
+  assert.equal(G.gameSession(state([shot])), null, 'no active pointer, no session');
+});
+
+test('engine start/end own the pointer and nothing else', () => {
+  const E = require('../engine.js');
+  const s = state([]);
+  assert.equal(E.startGame(s, 'not-a-game', 1), null, 'unknown ids are refused');
+  const started = E.startGame(s, 'score-attack', 123);
+  assert.deepEqual(started, { id: 'score-attack', startedAt: 123 });
+  assert.deepEqual(s.activeGame, { id: 'score-attack', startedAt: 123 });
+  const ended = E.endGame(s);
+  assert.equal(ended.id, 'score-attack');
+  assert.equal(s.activeGame, null);
+  assert.equal(E.endGame(s), null, 'ending twice is a no-op');
+});
+
 /* ---------------- purity ---------------- */
 
 test('gamify never mutates the state it reads', () => {

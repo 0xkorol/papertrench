@@ -54,6 +54,11 @@
     // other platforms for more optimised and less distracted trades".
     // Opt-in — the decorated panel stays the default.
     panelFocusMode: false,
+    // Gaming Mode (maintainer, 2026-08-05): gamification is INVISIBLE until
+    // this is on — no Game tab, no grades, no streaks, no toasts, no card
+    // line, nothing. Three personas share this extension (speed-only,
+    // paper-only, paper+gaming) and no persona may see another's furniture.
+    gamingModeEnabled: false,
     // Hide the overlay on pages where no token is detected (e.g., a project's
     // home page or a screener without a selected token). It pops back the
     // moment the user opens a coin page.
@@ -211,7 +216,32 @@
       rounds: [],      // closed round trips, newest first
       journal: [],     // every fill, newest first
       stats: { totalBuys: 0, totalSells: 0, realizedPnlSol: 0, feesPaidSol: 0 },
+      // The one deliberate exception to gamify's derived-only rule: a game
+      // SESSION the user explicitly started ({ id, startedAt } or null).
+      // Results are still derived from the rounds closed since startedAt —
+      // this pointer only says which game is on and since when.
+      activeGame: null,
     };
+  }
+
+  /* ---------------- game sessions (GAMIFY.md v2, Gaming Mode) ----------------
+   * Started from the dashboard's Game tab, played on the live charts, shown
+   * by the overlay HUD. The engine owns the pointer so every surface reads
+   * one truth through the same seq-protocol state writes as everything else.
+   */
+  const GAME_IDS = ['gauntlet', 'one-shot', 'score-attack'];
+
+  function startGame(state, id, ts) {
+    if (!state || GAME_IDS.indexOf(id) < 0) return null;
+    state.activeGame = { id, startedAt: Number(ts) || Date.now() };
+    return state.activeGame;
+  }
+
+  function endGame(state) {
+    if (!state || !state.activeGame) return null;
+    const ended = state.activeGame;
+    state.activeGame = null;
+    return ended;
   }
 
   /* ---------------- price helpers ---------------- */
@@ -1282,6 +1312,9 @@
     mergeSettings,
     SETTINGS_REVISION,
     defaultState,
+    startGame,
+    endGame,
+    GAME_IDS,
     resetState,
     buy,
     sell,

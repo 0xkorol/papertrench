@@ -1869,24 +1869,74 @@
   let trenchStreaks = null;
   let trenchGauntlet = null;
   let trenchRoundsKey = null;
+  let gameHudStatus = null; // last session status shown, so terminal states toast once
+
+  /** Gaming Mode is a persona wall, not a feature flag: OFF means gamification
+   *  does not exist on this surface — no chip, no HUD, no grade toasts, no
+   *  closed-card grade. Speed-only and paper-only users never see it. */
+  function gamingOn() {
+    return settings.gamingModeEnabled === true;
+  }
 
   function refreshTrenchCache() {
     const G = window.PTGamify;
-    if (!G) { trenchStreaks = null; trenchGauntlet = null; updateTrenchBarChip(); return; }
+    if (!G || !gamingOn()) {
+      trenchStreaks = null;
+      trenchGauntlet = null;
+      trenchRoundsKey = null; // a later toggle-on recomputes from scratch
+      updateTrenchBarChip();
+      updateGameHud(null);
+      return;
+    }
     // adoptState fires on every ~800 ms persist echo while a position's mark
     // moves — not only on closes. Streaks depend ONLY on the closed-rounds
     // list (newest-first, engine unshift), so a cheap shape key gates the
     // O(rounds²) scan: it changes exactly when a round lands, never on a
-    // mark/seq-only echo. Same fingerprint discipline as D-27/D-28.
+    // mark/seq-only echo. Same fingerprint discipline as D-27/D-28. The
+    // active-game pointer joins the key so start/end reflects immediately.
     const rounds = state.rounds || [];
-    const key = `${rounds.length}|${rounds[0] ? Number(rounds[0].closedAt) || 0 : 0}`;
+    const game = state.activeGame;
+    const key = `${rounds.length}|${rounds[0] ? Number(rounds[0].closedAt) || 0 : 0}|${game ? `${game.id}@${game.startedAt}` : ''}`;
     if (key === trenchRoundsKey) return;
     trenchRoundsKey = key;
     trenchStreaks = G.streaks(state);
-    // gauntletRun is Date-free by contract: the day-bucketed games are a
-    // dashboard concern, and the overlay harness stubs Date down to {now}.
+    // gauntletRun/gameSession are Date-free by contract: day-bucketed games
+    // are a dashboard concern, and the overlay harness stubs Date to {now}.
     trenchGauntlet = typeof G.gauntletRun === 'function' ? G.gauntletRun(state) : null;
     updateTrenchBarChip();
+    updateGameHud(typeof G.gameSession === 'function' ? G.gameSession(state) : null);
+  }
+
+  const GAME_HUD_LABEL = { gauntlet: 'GAUNTLET', 'one-shot': 'ONE-SHOT', 'score-attack': 'SCORE ATTACK' };
+
+  /** The on-chart game HUD: one pill, built into the shadow, text-only
+   *  updates, visible ONLY while Gaming Mode is on and a session exists.
+   *  Terminal states stay on screen until dismissed from the Game tab —
+   *  and announce themselves exactly once. */
+  function updateGameHud(session) {
+    if (!els.gameHud) return;
+    if (!session) {
+      gameHudStatus = null;
+      els.gameHud.classList.add('pt-hidden');
+      els.gameHud.textContent = '';
+      return;
+    }
+    const label = GAME_HUD_LABEL[session.id] || session.id.toUpperCase();
+    const body = session.id === 'gauntlet'
+      ? `${session.progress}/${session.target}`
+      : session.id === 'score-attack'
+        ? (session.score === null ? `${session.rounds} rounds` : `${session.score.toFixed(0)}%`)
+        : (session.status === 'live' ? 'take the shot' : session.detail);
+    const statusText = session.status === 'live' ? '' : ` · ${session.status.toUpperCase()}`;
+    els.gameHud.textContent = `⚔ ${label} ${body}${statusText}`;
+    els.gameHud.classList.remove('pt-hidden');
+    els.gameHud.classList.toggle('pt-game-won', session.status === 'won');
+    els.gameHud.classList.toggle('pt-game-bad', session.status === 'failed' || session.status === 'busted' || session.status === 'missed');
+    const statusKey = `${session.id}@${session.startedAt}:${session.status}`;
+    if (gameHudStatus && gameHudStatus !== statusKey && session.status !== 'live') {
+      toast(`${label} ${session.status.toUpperCase()} — ${session.detail}`);
+    }
+    gameHudStatus = statusKey;
   }
 
   /** Streak chip on the positions bar: visible from 3 up — below that it is
@@ -1966,7 +2016,8 @@
           // The grade toast judges PROCESS, decoupled from P&L on purpose: a
           // disciplined red earns its praise, a lucky win gets named as luck
           // (GAMIFY.md). Plain text — toast() renders textContent only.
-          const grade = window.PTGamify ? window.PTGamify.roundGrade(state, result.round) : null;
+          // Gaming Mode only: paper-only users never hear about grades.
+          const grade = gamingOn() && window.PTGamify ? window.PTGamify.roundGrade(state, result.round) : null;
           if (grade) {
             const red = result.round.pnlSol < 0;
             const flavor = grade.luckyWin
@@ -2856,6 +2907,18 @@
       letter-spacing: 0.3px; color: var(--pt-amber); white-space: nowrap;
     }
     .pt-bar-streak.pt-hidden { display: none; }
+    /* The on-chart game HUD (Gaming Mode only): one pill, fixed by the bar
+       tab, click opens the Game tab. Terminal states recolor, never animate. */
+    .pt-game-hud {
+      position: fixed; top: 54px; right: 14px; z-index: 2147483000;
+      padding: 6px 12px; border-radius: 999px; cursor: pointer;
+      background: var(--pt-raised); border: 1px solid var(--pt-amber);
+      font-family: var(--pt-mono); font-size: 10.5px; font-weight: 800;
+      letter-spacing: 0.4px; color: var(--pt-amber); white-space: nowrap;
+    }
+    .pt-game-hud.pt-hidden { display: none; }
+    .pt-game-hud.pt-game-won { border-color: var(--pt-green); color: var(--pt-green); }
+    .pt-game-hud.pt-game-bad { border-color: var(--pt-red); color: var(--pt-red); }
 
     /* scrolling chip rail */
     .pt-bar-rail {
@@ -3152,6 +3215,7 @@
           </div>
         </div>
         <button class="pt-bar-tab" id="pt-bar-tab" title="Show paper positions">POSITIONS</button>
+        <button class="pt-game-hud pt-hidden" id="pt-game-hud" title="Game on — click to open the Game tab"></button>
         <div class="pt-box" id="pt-box">
           <div class="pt-watermark">PAPER</div>
           <div class="pt-banner"><b>Paper Trading</b> · Simulated Funds</div>
@@ -3256,6 +3320,7 @@
     els.barGrip = shadow.getElementById('pt-bar-grip');
     els.barTotal = shadow.getElementById('pt-bar-total');
     els.barStreak = shadow.getElementById('pt-bar-streak');
+    els.gameHud = shadow.getElementById('pt-game-hud');
     els.barRail = shadow.getElementById('pt-bar-rail');
     els.barTab = shadow.getElementById('pt-bar-tab');
     els.liveDot = shadow.getElementById('pt-live-dot');
@@ -3296,6 +3361,7 @@
     // Positions bar controls.
     const barBrand = shadow.getElementById('pt-bar-brand');
     if (barBrand) barBrand.addEventListener('click', openDashboard);
+    if (els.gameHud) els.gameHud.addEventListener('click', openDashboard);
     const barHide = shadow.getElementById('pt-bar-hide');
     if (barHide) barHide.addEventListener('click', () => {
       setBarHidden(true);
@@ -4690,7 +4756,7 @@
     // Process grade chip (GAMIFY.md) — computed HERE, inside the once-per-
     // close keyed build, so the O(rounds) grade scan never rides a heartbeat.
     // Full closes only: partial exits are not rounds and are never graded.
-    if (closed.kind === 'round' && window.PTGamify && token) {
+    if (closed.kind === 'round' && gamingOn() && window.PTGamify && token) {
       const gradedRound = (state.rounds || []).find(
         (r) => r.mint === token.mint && Number(r.closedAt) === Number(closed.closedAt));
       const grade = gradedRound ? window.PTGamify.roundGrade(state, gradedRound) : null;
@@ -4888,7 +4954,7 @@
     // Same derived-display shape the dashboard composer passes — one
     // implementation (PTGamify), two callers, zero drift (GAMIFY.md).
     flexTrench = null;
-    if (window.PTGamify) {
+    if (gamingOn() && window.PTGamify) {
       const G = window.PTGamify;
       const grade = trenchRound ? G.roundGrade(state, trenchRound) : null;
       const r = G.rank(state);

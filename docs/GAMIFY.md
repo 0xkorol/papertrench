@@ -19,11 +19,21 @@ dashboard, overlay, close toast, and PnL card.
    bar (docs/GRADUATION.md). The win state is being told, with evidence, that
    a small careful real start is rational — i.e., leaving. An engagement loop
    with a designed exit is the whole ethical difference.
-4. **Derived, not stored.** v1 computes everything as pure functions over the
-   existing journal/rounds — zero new persisted state, zero migrations,
-   nothing for a cheater to edit that the attestation chain doesn't already
-   cover. (Rounds are capped at 500 in storage; every mechanic is windowed or
-   monotonic within that horizon by design.)
+4. **Derived, not stored.** Everything is computed as pure functions over the
+   existing journal/rounds — zero migrations, nothing for a cheater to edit
+   that the attestation chain doesn't already cover. (Rounds are capped at
+   500 in storage; every mechanic is windowed or monotonic within that
+   horizon by design.) The ONE deliberate exception (v2, maintainer-approved):
+   `state.activeGame = { id, startedAt }` — the pointer saying which game the
+   user explicitly started and when. Results are still derived from the
+   rounds closed since `startedAt`; the pointer stores no score.
+5. **Gaming Mode is a persona wall (maintainer, 2026-08-05).** Three kinds of
+   people share this extension: speed-only, paper-only, and paper+gaming.
+   `settings.gamingModeEnabled` (default OFF) gates EVERY gamified surface —
+   the Game tab, grades, streaks, toasts, chips, calendar dots, the card
+   line. Off does not mean disabled; it means none of it exists. Games are
+   SESSIONS: started from the Game tab, played on the live charts with the
+   overlay HUD riding along, ended or dismissed from the tab.
 
 ## Components (implemented in gamify.js)
 

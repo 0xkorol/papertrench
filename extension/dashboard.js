@@ -698,13 +698,57 @@ function rebindSection(id, el) {
   }
   if (id === 'leaderboard') { bindLeaderboard(el); return; }
   if (id === 'settings') bindSettings();
+  if (id === 'game') bindGame(el);
+}
+
+/** Start/end game sessions — the ONLY writes the Game tab makes, and both go
+ *  through mutateState's seq protocol like every other dashboard write. */
+function bindGame(el) {
+  el.querySelectorAll('[data-game-start]').forEach((button) =>
+    button.addEventListener('click', async () => {
+      const id = button.dataset.gameStart;
+      try {
+        await mutateState((fresh) => { E.startGame(fresh, id, Date.now()); });
+        renderSection('game');
+      } catch (err) { console.warn('start game failed', err); }
+    }));
+  const end = el.querySelector('#game-end');
+  if (end) {
+    end.addEventListener('click', async () => {
+      try {
+        await mutateState((fresh) => { E.endGame(fresh); });
+        renderSection('game');
+      } catch (err) { console.warn('end game failed', err); }
+    });
+  }
 }
 
 /* ---------- sidebar ---------- */
 
+/** Gaming Mode is a persona wall (maintainer, 2026-08-05): OFF means the
+ *  Game tab and every gamified surface do not exist on this dashboard. */
+function gamingOn() {
+  return settings.gamingModeEnabled === true;
+}
+
+/** Show/hide the Game nav entry with the mode, and never strand the user on
+ *  a tab that just stopped existing. Runs with every sidebar refresh, so a
+ *  toggle in Settings applies without a reload. */
+function applyModeNav() {
+  const btn = document.querySelector('nav button[data-section="game"]');
+  if (btn) btn.classList.toggle('hidden', !gamingOn());
+  if (!gamingOn() && currentSection === 'game') {
+    currentSection = 'overview';
+    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x.dataset.section === 'overview'));
+    SECTIONS.forEach((id) => document.getElementById(id).classList.toggle('hidden', id !== 'overview'));
+    renderSection('overview');
+  }
+}
+
 function renderSidebar() {
   const sb = document.getElementById('sidebar');
   if (!sb) return;
+  applyModeNav();
   const stats = E.sessionStats(state, settings);
   const up = stats.equityVsStart >= 0;
   const pct = settings.balanceStartSol ? (stats.equityVsStart / settings.balanceStartSol) * 100 : 0;
@@ -973,7 +1017,7 @@ function streakStat(label, s) {
  */
 function renderTrenchRank() {
   const G = window.PTGamify;
-  if (!G) return '';
+  if (!G || !gamingOn()) return '';
   const r = G.rank(state);
   if (!r) return '';
   const now = Date.now();
@@ -1034,6 +1078,10 @@ function renderTrenchRank() {
  */
 function renderGame(el) {
   const G = window.PTGamify;
+  if (!gamingOn()) {
+    el.innerHTML = `<div class="card">${emptyState('Gaming Mode is off', 'Turn it on in Settings → Modes and this tab wakes up.')}</div>`;
+    return;
+  }
   if (!G) { el.innerHTML = `<div class="card">${emptyState('Game module not loaded', 'gamify.js is missing from this build.')}</div>`; return; }
   const r = G.rank(state);
   if (!r) { el.innerHTML = `<div class="card">${emptyState('Game module not ready', 'mastery.js is missing from this build.')}</div>`; return; }
@@ -1079,6 +1127,25 @@ function renderGame(el) {
         ${rankBar(g.progress, g.done)}
       </div>`).join('') : '';
 
+  // The session panel: a game the user explicitly STARTED, scored live over
+  // the rounds closed since. Terminal results stay until dismissed here.
+  const session = typeof G.gameSession === 'function' ? G.gameSession(state) : null;
+  const sessionPanel = session ? (() => {
+    const label = { gauntlet: 'The Gauntlet', 'one-shot': 'One-Shot', 'score-attack': 'Score Attack' }[session.id] || session.id;
+    const tone = session.status === 'won' ? 'green' : session.status === 'live' ? 'amber' : 'red';
+    const headline = session.status === 'live'
+      ? (session.id === 'score-attack' && session.score !== null ? `${session.score.toFixed(0)}% avg` : `${session.progress}/${session.target}`)
+      : session.status.toUpperCase();
+    return `
+    <div class="card game-session">
+      <h3>GAME ON — ${esc(label)}
+        <button class="btn-sec" id="game-end" style="margin-left:auto">${session.status === 'live' ? 'End game' : 'Dismiss result'}</button>
+      </h3>
+      <div class="${tone}" style="font-size:21px;font-weight:850;letter-spacing:-0.4px">${esc(headline)}</div>
+      <div class="dim" style="font-size:11.5px;margin-top:3px">${esc(session.detail)} · ${session.rounds} round${session.rounds === 1 ? '' : 's'} this session — go trade it on the chart, the HUD is riding along.</div>
+    </div>`;
+  })() : '';
+
   const gameCards = games.map((g) => {
     let status = '';
     if (g.id === 'gauntlet') {
@@ -1100,11 +1167,15 @@ function renderGame(el) {
         <div class="stat"><span class="dim">High score</span><span class="mono">${g.best ? `${g.best.score.toFixed(0)}% avg · ${g.best.rounds} rounds` : '—'}</span></div>
         <div class="stat"><span class="dim">Today</span><span class="mono">${g.today.rounds >= 1 ? `${g.today.avg === null ? '—' : g.today.avg.toFixed(0) + '% avg'} · ${g.today.rounds}/3 rounds` : '—'}</span></div>`;
     }
+    const isRunning = session && session.id === g.id;
     return `
       <div class="card game-card">
         <h3>${esc(g.label)}</h3>
         <div class="dim" style="font-size:11.5px;margin-bottom:8px">${esc(g.detail)}</div>
         ${status}
+        <button class="btn ${isRunning ? 'btn-sec' : ''}" data-game-start="${esc(g.id)}" style="margin-top:10px;width:100%" ${isRunning ? 'disabled' : ''}>
+          ${isRunning ? 'Running…' : session ? 'Switch to this' : 'Start game'}
+        </button>
       </div>`;
   }).join('');
 
@@ -1120,7 +1191,8 @@ function renderGame(el) {
   }).join('');
 
   el.innerHTML = `
-    <div class="card">
+    ${sessionPanel}
+    <div class="card"${session ? ' style="margin-top:16px"' : ''}>
       <h3>Trench profile
         <span style="margin-left:auto;font-weight:700;color:var(--amber)">TIER ${r.tier} · ${esc(r.name.toUpperCase())}</span>
       </h3>
@@ -1373,7 +1445,7 @@ function renderCalendar(el) {
   // UTC bucket here would pin dots on the wrong cell across midnight. Grades
   // come from one pass over the month's rounds; ties round DOWN to the worse
   // letter — a split day is not rounded up to the better story.
-  const G = window.PTGamify;
+  const G = gamingOn() ? window.PTGamify : null;
   const dayGrades = new Map();
   if (G) {
     for (const r of state.rounds || []) {
@@ -1518,7 +1590,8 @@ function renderRounds(el) {
   // Grades are computed in ONE pass over the table's rounds: roundGrade scans
   // priors per call, so a naive per-cell call inside nested templates is the
   // O(n²)-of-O(n) shape that starves renders at the 500-round cap.
-  const G = window.PTGamify;
+  // Gaming Mode off: the Grade column does not exist — not disabled, absent.
+  const G = gamingOn() ? window.PTGamify : null;
   const gradeById = new Map();
   if (G) for (const r of state.rounds || []) gradeById.set(r.id, G.roundGrade(state, r));
   const rows = (state.rounds || []).map((r) => {
@@ -1539,7 +1612,7 @@ function renderRounds(el) {
         <td class="num">${fmt(r.returnedSol, 4)}</td>
         <td class="num ${win ? 'green' : 'red'}" style="font-weight:800">${win ? '+' : ''}${fmt(r.pnlSol)}</td>
         <td class="num ${win ? 'green' : 'red'}">${win ? '+' : ''}${r.pnlPct.toFixed(1)}%</td>
-        <td>${renderGradeCell(gradeById.get(r.id), r)}</td>
+        ${G ? `<td>${renderGradeCell(gradeById.get(r.id), r)}</td>` : ''}
         <td class="num" style="font-size:11.5px"><span class="green">+${fmt(r.peakPnlSol)}</span> <span class="dim">/</span> <span class="red">${fmt(r.troughPnlSol)}</span></td>
         <td>${renderAfterCell(r)}</td>
         <td>${renderExitCell(r)}</td>
@@ -1555,8 +1628,8 @@ function renderRounds(el) {
     <div class="card"><h3>Closed round trips <span class="tag">${(state.rounds || []).length}</span>
       <button class="btn-sec" id="rounds-export" style="margin-left:auto" ${(state.rounds || []).length ? '' : 'disabled'}>Export CSV</button></h3>
       <div class="log"><table>
-        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th>Grade</th><th class="num">Peak/Worst</th><th>After (1h)</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="17">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
+        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th>${G ? '<th>Grade</th>' : ''}<th class="num">Peak/Worst</th><th>After (1h)</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="${G ? 17 : 16}">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
       </table></div>
     </div>`;
   // Handlers are attached in rebindSection() after the element is live.
@@ -2456,7 +2529,7 @@ let cardTrenchCurrent = null;  // PTGamify-derived rank/grade/badges for the ope
  */
 function trenchCardOpts(round) {
   const G = window.PTGamify;
-  if (!G) return null;
+  if (!G || !gamingOn()) return null;
   const grade = round ? G.roundGrade(state, round) : null;
   const r = G.rank(state);
   const earned = G.badges(state).filter((b) => b.earned).slice(0, 4).map((b) => b.label);
@@ -3569,6 +3642,12 @@ function renderSettings(el) {
   const sellPctsList = Array.isArray(settings.sellPcts) ? settings.sellPcts : DEFAULTS.sellPcts;
   const presetsBuyList = Array.isArray(settings.presetsBuy) ? settings.presetsBuy : DEFAULTS.presetsBuy;
   el.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <h3>Modes</h3>
+      <div class="dim" style="font-size:11.5px;margin-bottom:8px">PaperTrench is three tools in one — turn on only what you came for.</div>
+      <div class="field field-check"><label><input type="checkbox" id="set-gaming-mode" ${settings.gamingModeEnabled === true ? 'checked' : ''}> Gaming Mode</label><small>Grades, ranks, streaks, badges, and the Game tab with startable trading games. Off means none of it exists anywhere — no tab, no toasts, no chips.</small></div>
+      <div class="dim" style="font-size:11px;margin-top:2px">Paper trading lives in Overlay settings; the speed features (Instant links, warm viewers) live in Turbo — both below.</div>
+    </div>
     <div class="grid2">
       <div class="card">
         <h3>Wallet &amp; Trading</h3>
@@ -3903,6 +3982,7 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     overlayEnabled: document.getElementById('set-overlay').checked,
     overlayHideWhenNoToken: document.getElementById('set-overlay-auto-hide').checked,
     panelFocusMode: document.getElementById('set-focus-mode').checked,
+    gamingModeEnabled: document.getElementById('set-gaming-mode').checked,
     warmXLinksEnabled: document.getElementById('set-warm-x').checked,
     warmHoverCardsEnabled: document.getElementById('set-warm-cards').checked,
     warmHoverRowEnabled: document.getElementById('set-warm-row').checked,
