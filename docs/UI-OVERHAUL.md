@@ -78,6 +78,14 @@ Dashboard/popup (dashboard.js/html, popup):
 
 ### Wave 2 — the panel re-ranked + one movement system
 
+Landed (2A): the hierarchy inversion — position card directly under the
+token row, live P&L at 21px wearing the crown, balance card + sparkline
+deleted in every mode, cash on the Buy label always, live dot beside the
+price, labels de-narrated. Open (2B): the movement system (unified
+controller, per-site position memory + migration, reset gesture, whole-bar
+grab surface, HUD docked to the bar), the full type/spacing token pass, and
+receipt-style thesis/closed collapse.
+
 Panel hierarchy (the audit's F-H findings): the eye should hit money, not
 brand. In-position: P&L hero (balance-hero size) + sell row pinned directly
 under the token strip; buy secondary; thesis and closed-P&L collapse to
