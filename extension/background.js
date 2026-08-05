@@ -1312,6 +1312,15 @@ const WARM_DEST_FAMILIES = {
     hostRe: /(^|\.)gmgn\.ai$/,
     label: 'GMGN',
   },
+  // Terminal rules apply, plus one of fomo's own: token pages are
+  // login-gated, so a pre-created viewer would idle on the marketing shell
+  // for logged-out users. Click-created only, like every terminal.
+  fomo: {
+    storageKey: 'pt_warm_tab_fomo',
+    idleUrl: null,
+    hostRe: /(^|\.)fomo\.family$/,
+    label: 'Fomo',
+  },
 };
 
 function readWarmDestTab(family) {

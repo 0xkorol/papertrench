@@ -31,6 +31,7 @@
   const AXIOM_HOST_RE = /(^|\.)axiom\.trade$/;
   const PADRE_HOST_RE = /(^|\.)padre\.gg$/;
   const GMGN_HOST_RE = /(^|\.)gmgn\.ai$/;
+  const FOMO_HOST_RE = /(^|\.)fomo\.family$/;
 
   function parse(href, baseHref) {
     try {
@@ -89,6 +90,16 @@
       return { family: 'gmgn', kind: 'token', url: 'https://gmgn.ai' + path + url.search };
     }
 
+    if (FOMO_HOST_RE.test(host)) {
+      // fomo.family/tokens/solana/<mint> — the solana chain slug only, same
+      // gate as the sites.js adapter (fomo is multichain and its own /token
+      // entry point lands users on EVM pages routinely), and token pages
+      // only: /u/ and /profile/ handle routes are never warm-routed.
+      const m = path.match(/^\/tokens\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      if (!m) return null;
+      return { family: 'fomo', kind: 'token', url: 'https://fomo.family' + path + url.search };
+    }
+
     if (SOLSCAN_HOSTS.has(host)) {
       const m = path.match(/^\/(token|account|address|tx)\/([^/?#]+)/);
       if (!m) return null;
@@ -124,6 +135,7 @@
     if (AXIOM_HOST_RE.test(h)) return 'axiom';
     if (PADRE_HOST_RE.test(h)) return 'padre';
     if (GMGN_HOST_RE.test(h)) return 'gmgn';
+    if (FOMO_HOST_RE.test(h)) return 'fomo';
     return null;
   }
 

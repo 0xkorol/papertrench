@@ -500,6 +500,13 @@ test('the classifier routes the main terminals token pages and refuses their oth
   assert.equal(gmgn.url, `https://gmgn.ai/sol/token/${MINT}?chain=sol`,
     'query passes byte-for-byte');
 
+  const fomo = WD.classify(`https://fomo.family/tokens/solana/${MINT}?ref=abc`);
+  assert.equal(fomo && fomo.family, 'fomo');
+  assert.equal(fomo.url, `https://fomo.family/tokens/solana/${MINT}?ref=abc`,
+    'query passes byte-for-byte');
+  assert.equal(WD.classify(`https://www.fomo.family/tokens/solana/${MINT}`).url,
+    `https://fomo.family/tokens/solana/${MINT}`, 'www canonicalizes to the bare host');
+
   // The O-10/O-11 discipline carries over: wallet/portfolio/EVM routes and
   // the terminals own list pages must never warm-route.
   for (const href of [
@@ -508,6 +515,11 @@ test('the classifier routes the main terminals token pages and refuses their oth
     `https://trade.padre.gg/wallet/${MINT}`,
     `https://gmgn.ai/eth/token/${MINT}`,
     `https://gmgn.ai/sol/address/${MINT}`,
+    `https://fomo.family/tokens/base/0xabcdef1234567891abcdef1234567891abcdef12`,
+    `https://fomo.family/tokens/robinhood/0xdc29db7d4396ed738710a5373a30afc197e7268a`,
+    'https://fomo.family/u/sometrader',
+    'https://fomo.family/profile/sometrader',
+    'https://fomo.family/token',
   ]) {
     assert.equal(WD.classify(href), null, `${JSON.stringify(href)} must not classify`);
   }
@@ -515,6 +527,7 @@ test('the classifier routes the main terminals token pages and refuses their oth
   assert.equal(WD.familyOfHost('axiom.trade'), 'axiom');
   assert.equal(WD.familyOfHost('trade.padre.gg'), 'padre');
   assert.equal(WD.familyOfHost('gmgn.ai'), 'gmgn');
+  assert.equal(WD.familyOfHost('fomo.family'), 'fomo');
 });
 
 test('terminal viewers are never pre-created — first click pays, then it is warm', async () => {

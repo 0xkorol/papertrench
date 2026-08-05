@@ -191,6 +191,23 @@
   // bases, unrealized P&L) and must never become market-price candidates.
   const POSITION_SUBTREE_KEY = /^(positions?|holdings?|portfolio|userPositions?|myPositions?|openOrders?)$/i;
   const MCAP_KEY = /^(marketCap|marketCapInUsd|mcap|mcapInUsd|fdv|fullyDilutedValuation)$/i;
+  // A record that IS a trade event — an id-carrying or user-attributed
+  // swap/trade object (fomo's social feed, tx-hash trade tapes). Its price
+  // and cap fields describe the moment that trade happened, minutes to
+  // HOURS in the past, and must never tick the live price: F-30's "the
+  // user's own average is not a market price", one layer out. Anonymous
+  // live-tape pushes ({price, ts} with no id or attribution) stay eligible.
+  const TRADE_EVENT_TYPE_RE = /^(swap|trade|buy|sell)/i;
+  function looksLikeTradeEvent(node) {
+    const type = node.type || node.eventType || node.txType;
+    const typed = typeof type === 'string' && TRADE_EVENT_TYPE_RE.test(type);
+    const hasEventId = typeof node.tradeId === 'string' || typeof node.txId === 'string'
+      || typeof node.txHash === 'string' || typeof node.signature === 'string'
+      || typeof node.transactionHash === 'string';
+    const attributed = typeof node.userId === 'string' || typeof node.userHandle === 'string'
+      || typeof node.displayName === 'string' || typeof node.maker === 'string';
+    return (typed && (hasEventId || attributed)) || (hasEventId && attributed);
+  }
   const MINT_KEY = /^(mint|tokenMint|tokenAddress|baseMint|address|contract|ca)$/i;
   const SYMBOL_KEY = /^(symbol|ticker|tokenSymbol|baseSymbol)$/i;
   const NAME_KEY = /^(name|tokenName|baseName)$/i;
@@ -247,6 +264,10 @@
       if (!node || typeof node !== 'object' || depth > MAX_DEPTH || seen.has(node)) return;
       if (budget-- <= 0) return;
       seen.add(node);
+
+      // Trade EVENTS taint their whole subtree exactly like position
+      // subtrees do: identity fields still flow, prices and caps do not.
+      if (!tainted && !Array.isArray(node) && looksLikeTradeEvent(node)) tainted = true;
 
       let target = ctx;
       if (!Array.isArray(node)) {
