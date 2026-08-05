@@ -108,12 +108,18 @@ test('the manifest no longer injects into every page on the internet', () => {
   // visited, and the generic adapter mounted the panel wherever a URL
   // contained an address-shaped string. The manifest is the structural fix.
   //
-  // v2.4.0 adds a second injection surface: two passive viewer bridges on
-  // x.com/twitter.com for the opt-in warm-links feature. The rule stays the
-  // same shape — every entry is either the trading surface or the X viewer,
-  // each pinned to its own host list, and nothing runs anywhere else.
+  // v2.4.0 adds a second injection surface: passive viewer bridges on
+  // x.com/twitter.com for the opt-in warm-links feature, joined in v2.6.0 by
+  // the X-Ray observer and panel. The rule stays the same shape — every entry
+  // is either the trading surface or the X surface, each pinned to its own
+  // host list, and nothing runs anywhere else. The X allowlist is explicit
+  // and closed: a new file only reaches x.com by being named here, which is
+  // the review step that keeps the trading engine off X by construction.
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
-  const X_VIEWER_FILES = new Set(['xwarm-main.js', 'xwarm-relay.js']);
+  const X_VIEWER_FILES = new Set([
+    'xwarm-main.js', 'xwarm-relay.js',
+    'xray-core.js', 'xray-main.js', 'xray-panel.js',
+  ]);
   const isXEntry = (cs) => (cs.js || []).some((f) => X_VIEWER_FILES.has(f));
 
   for (const script of manifest.content_scripts) {
@@ -123,8 +129,8 @@ test('the manifest no longer injects into every page on the internet', () => {
 
   const trading = manifest.content_scripts.filter((cs) => !isXEntry(cs));
   const xViewer = manifest.content_scripts.filter(isXEntry);
-  assert.ok(trading.length >= 2 && xViewer.length === 2,
-    'expected the two trading-surface entries plus the two X viewer entries');
+  assert.ok(trading.length >= 2 && xViewer.length === 3,
+    'expected the two trading-surface entries plus the three X surface entries');
 
   for (const script of trading) {
     assert.ok(script.matches.includes('https://pump.fun/*'),

@@ -28,6 +28,30 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
   enabled it keeps one muted background x.com tab as the viewer. A manifest
   test pins that these entries carry ONLY the two bridge scripts — the
   trading engine and overlay can never run on X.
+- **x.com / twitter.com (v2.6.0, X-Ray).** Two further scripts load on X for
+  the opt-in "X-Ray" account-intel card. What they do, precisely:
+  - The observer runs in the page world and watches the X app's OWN GraphQL
+    responses for a fixed allowlist of operations: the profile lookups, the
+    account's public posts, and follower lists. Home timeline, DMs,
+    notifications, ads, and everything else are never parsed. Responses are
+    passed to the page untouched (the observer reads a clone).
+  - What crosses out of the page is a DIGEST, not a payload: user field
+    snapshots, post ids and dates, and the contract addresses a post
+    carries. Raw post text never leaves the page context.
+  - The ledger lives in `chrome.storage.local` on your machine. There is no
+    server, no shared database, and no upload. Change history is what YOUR
+    device has observed, which is why the card always prints the date it
+    started watching an account.
+  - "Deep scan" (on by default while X-Ray is on, separately switchable) lets
+    the page re-issue a request it already made — the same call X makes when
+    you scroll — to read a few more pages of posts or the follower list.
+    It is throttled (minimum spacing, a per-minute cap, a per-account
+    cooldown), it uses only your existing X session against x.com itself,
+    and it happens only while you are looking at that account. The service
+    worker itself never contacts X. If X changes its API, the deep scan
+    stops working and the passive layer carries on.
+  - X-Ray never follows, likes, posts, blocks, or changes anything on your
+    account. It reads.
 - **`host_permissions` stays broad** because the background service worker
   must `fetch()` endpoints the *user* configures: an OpenAI-compatible AI
   endpoint (any host they choose) and an optional private Solana RPC. Those

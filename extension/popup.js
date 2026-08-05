@@ -7,7 +7,7 @@
 
 'use strict';
 
-const DEFAULTS = { appEnabled: true, balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true, warmXLinksEnabled: false };
+const DEFAULTS = { appEnabled: true, balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true, warmXLinksEnabled: false, xrayEnabled: false, xrayDeepScanEnabled: true };
 
 function $(id) { return document.getElementById(id); }
 
@@ -19,6 +19,7 @@ $('restore').addEventListener('click', () => $('restoreFile').click());
 $('restoreFile').addEventListener('change', restoreWallet);
 $('overlay-window').addEventListener('click', openStreamOverlay);
 $('warmx').addEventListener('click', toggleWarmXLinks);
+$('xray').addEventListener('click', toggleXRay);
 $('power').addEventListener('click', togglePower);
 
 function fmt(n, dp = 4) {
@@ -90,6 +91,10 @@ async function load() {
     $('warmx').textContent = settings.warmXLinksEnabled
       ? '⚡ Instant X links: On'
       : '⚡ Instant X links: Off';
+
+    $('xray').textContent = settings.xrayEnabled
+      ? '⌖ X-Ray on x.com: On'
+      : '⌖ X-Ray on x.com: Off';
 
     // The master switch outranks everything; the popup must show it loudly.
     const appOn = settings.appEnabled !== false;
@@ -178,6 +183,22 @@ async function toggleWarmXLinks() {
   $('status').textContent = next.warmXLinksEnabled
     ? 'On — X links on trading sites now open in a kept-warm viewer tab (~0.5s instead of ~3.5s). PaperTrench keeps one muted background x.com tab for this; Ctrl/Cmd/middle-click still opens normal tabs.'
     : 'Off — the background X tab is released and links open normally.';
+}
+
+/** Account intel on X itself. The status line states the two things a user
+ * deserves to know at the moment of opt-in: where the data comes from (the X
+ * page's own responses, on this device) and what it cannot know (any change
+ * that happened before X-Ray first saw the account). */
+async function toggleXRay() {
+  const stored = await chrome.storage.local.get(['pt_settings']);
+  const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+  const next = { ...settings, xrayEnabled: !settings.xrayEnabled };
+  await chrome.storage.local.set({ pt_settings: next });
+  chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  await load();
+  $('status').textContent = next.xrayEnabled
+    ? 'On — open any X profile or post and the intel card is already there: account age, bio/name/@handle changes, CAs posted, and Smart Following. It reads the X page\'s own data on this device; change history starts from the first time you view an account, and the card says so.'
+    : 'Off — no card on X, and nothing further is read from X pages.';
 }
 
 /** Chromeless window sized for the card layout — OBS window-captures it. */

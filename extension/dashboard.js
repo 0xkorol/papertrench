@@ -3205,6 +3205,12 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-warm-cards" ${settings.warmHoverCardsEnabled === true ? 'checked' : ''}> Tweet preview card on hover</label><small>Hover an X link and a large readable preview of the post renders right on the page — the card itself is the click target, so no aiming at a 14px icon. Deleted posts say so before you click. Uses X's public oEmbed endpoint (no login, no tracking — see docs/PERMISSIONS.md).</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-warm-row" ${settings.warmHoverRowEnabled === true ? 'checked' : ''}> Preview from anywhere on the row</label><small>Rest the cursor about a third of a second anywhere on a token row and its X preview appears — no need to find the icon at all. Needs Instant X links on.</small></div>
       </div>
+      <div class="card">
+        <h3>X-Ray</h3>
+        <div class="field field-check"><label><input type="checkbox" id="set-xray" ${settings.xrayEnabled === true ? 'checked' : ''}> X-Ray account intel on x.com</label><small>On any X profile or post, a card appears immediately with account age, follower counts, bio / display-name / @handle changes, contract addresses the account has posted, and Smart Following (its biggest followers). Built from the data the X page itself loads — no third-party service, no account of yours is used to follow anyone, nothing leaves this device.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-xray-deep" ${settings.xrayDeepScanEnabled !== false ? 'checked' : ''}> Deep scan (read further back)</label><small>Lets X-Ray ask X for a few more pages of the account's posts and its follower list — the same requests the page makes when you scroll, throttled hard and only while you are looking at that account. Off means X-Ray only uses what the page loads on its own.</small></div>
+        <div class="field field-check"><label><small><strong>Honest limits:</strong> change history starts the first time this device sees an account — X-Ray cannot know a bio it never saw, and the card always states the date it started watching. CA history and Smart Following come from posts and follower lists actually read, so they are a floor, never a complete record.</small></label></div>
+      </div>
     </div>
     <div class="card" style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn" id="save-settings">Save settings</button>
@@ -3434,6 +3440,8 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     warmXLinksEnabled: document.getElementById('set-warm-x').checked,
     warmHoverCardsEnabled: document.getElementById('set-warm-cards').checked,
     warmHoverRowEnabled: document.getElementById('set-warm-row').checked,
+    xrayEnabled: document.getElementById('set-xray').checked,
+    xrayDeepScanEnabled: document.getElementById('set-xray-deep').checked,
   };
 }
 

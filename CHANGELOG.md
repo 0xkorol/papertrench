@@ -3,6 +3,58 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.6.0 — 2026-08-05
+
+Requested by the maintainer: the X page you land on should already tell you
+who you are looking at.
+
+- **X-Ray (opt-in).** Open any X profile — or any post, where the card reads
+  the author — and the intel is already on screen. No button, no "analyze",
+  no waiting: PaperTrench remembers what it has seen about an account, so the
+  card paints from local storage in the same frame the page routes, then
+  fills in live as X's own data lands.
+  - **Bio changes.** How many times the bio changed, when it last changed,
+    and what it said before.
+  - **Name and @handle changes.** Counted separately, because a display-name
+    swap and a rename are different tells. Case-only differences are not
+    renames — a fake counter is worse than no counter.
+  - **Contract addresses posted.** Every CA the account has posted, dated by
+    the post itself, newest first, click to copy. A CA sitting in the bio
+    right now gets its own flag. Long posts are read past the 280-character
+    fold, which is exactly where the address usually is.
+  - **Smart Following.** The biggest accounts following this one, ranked by
+    follower count, with the ones you personally follow marked as such.
+- **Where the data comes from, exactly.** X-Ray reads the X app's own
+  responses for a fixed allowlist of operations (profile, that account's
+  posts, follower lists) as your browser receives them. Home timeline, DMs
+  and notifications are never parsed. What leaves the page is a digest —
+  dates, ids, addresses, follower counts — never the text of anyone's posts.
+  The ledger is `chrome.storage.local` on your machine. No server, no shared
+  database, no upload, no account of yours used to follow or interact with
+  anything. Zero new extension permissions.
+- **What it refuses to pretend.** Nobody can tell you a bio changed on a day
+  they never saw the bio. Products that imply otherwise are reading someone
+  else's surveillance database; PaperTrench does not have one and will not
+  fake one. So every change counter on the card carries the window it was
+  observed over — "no change seen · watching since Aug 5" — and CA history
+  and Smart Following say which posts and lists they were built from. A floor,
+  labeled as a floor, is worth more than a confident number that is wrong.
+  The watch window starts the first time you view an account, so the card
+  gets sharper the longer you use it.
+- **Deep scan (on with X-Ray, separately switchable).** Lets the page re-issue
+  a request it already made — the same one X fires when you scroll — to read a
+  few more pages of posts or the follower list. Throttled by minimum spacing,
+  a per-minute cap and a per-account cooldown; runs only while you are on that
+  account; uses your existing X session against x.com itself. The service
+  worker never contacts X. If X rotates its API, the deep scan quietly stops
+  and the passive layer keeps working — the card degrades, it does not break.
+- Suite: 749/749, including a hand-built DOM that drives the card end to end
+  (an intel card that throws is an intel card that is not there) and tests
+  pinning that a first sighting can never be reported as a change, that a
+  sparse user object embedded in a tweet cannot register as "bio cleared",
+  and that a forged page-world digest cannot write a fake contract address
+  into the ledger.
+
 ## v2.5.2 — 2026-08-05
 
 Three fixes straight from the maintainer taking a live trade.

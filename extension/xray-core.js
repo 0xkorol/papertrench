@@ -53,9 +53,25 @@
 
   const OP_RE = /\/i\/api\/graphql\/([^/?#]+)\/([A-Za-z0-9_]+)/;
 
+  // X's own API hosts. The path alone is not enough: any site can serve a
+  // path shaped like X's GraphQL route, and digesting a third party's
+  // response would be both wrong and a privacy hole.
+  const API_HOSTS = new Set([
+    'x.com', 'www.x.com', 'mobile.x.com', 'api.x.com',
+    'twitter.com', 'www.twitter.com', 'mobile.twitter.com', 'api.twitter.com',
+  ]);
+
   function interestingOp(url) {
-    const m = OP_RE.exec(String(url || ''));
+    const raw = String(url || '');
+    const m = OP_RE.exec(raw);
     if (!m || !OPS.has(m[2])) return null;
+    // X issues these as same-origin relative URLs; an absolute one has to
+    // prove it is X over https before anything is read from its response.
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) || raw.startsWith('//')) {
+      let parsed;
+      try { parsed = new URL(raw, 'https://x.com'); } catch (_) { return null; }
+      if (parsed.protocol !== 'https:' || !API_HOSTS.has(parsed.hostname.toLowerCase())) return null;
+    }
     return { queryId: m[1], op: m[2] };
   }
 
@@ -326,10 +342,16 @@
   /** Append `value` to a snapshot list if it differs from the latest entry.
    * Overflow drops the SECOND-oldest entry (the first sighting is part of the
    * honesty story and is never dropped) and bumps the overflow counter, so
-   * `list.length - 1 + dropped` is always the exact observed change count. */
-  function trackValue(list, value, at, keep) {
+   * `list.length - 1 + dropped` is always the exact observed change count.
+   *
+   * `eq` exists for @handle, which is compared case-insensitively: X returns
+   * screen_name in the case the owner typed, and a payload that differs only
+   * in case is the same handle. Counting that as a rename would print a
+   * fabricated "1 change seen" on an account that never changed anything. */
+  function trackValue(list, value, at, keep, eq) {
     const last = list[list.length - 1];
-    if (last && last.v === value) return 0;
+    const same = eq || ((a, b) => a === b);
+    if (last && same(last.v, value)) return 0;
     list.push({ v: value, at });
     if (list.length > keep) {
       list.splice(1, 1);
@@ -351,7 +373,8 @@
       if (r === 2) record.namesDropped += 1;
       changed = changed || r > 0;
     }
-    const r2 = trackValue(record.handles, user.handle, now, LIMITS.handleKeep);
+    const r2 = trackValue(record.handles, user.handle, now, LIMITS.handleKeep,
+      (a, b) => String(a).toLowerCase() === String(b).toLowerCase());
     if (r2 === 2) record.handlesDropped += 1;
     changed = changed || r2 > 0;
     record.handle = user.handle.toLowerCase();

@@ -44,6 +44,31 @@ token price, so P&L moves even when the chart is not displaying native SOL.
 | `content.js` | Shadow-DOM overlay and trading actions | no |
 | `background.js` | Service worker: AI proxy, recorder, frames, replays | no |
 | `dashboard.js` | Journal, rounds, replay, leaderboard, coach, settings | no |
+| `xray-core.js` | X-Ray: payload extractors, CA detection, ledger reducers | yes |
+| `xray-main.js` | MAIN-world hook into X's own GraphQL responses | no |
+| `xray-panel.js` | The X-Ray card on x.com profile and post pages | no |
+
+## X-Ray: what it may claim
+
+X-Ray reads the X app's own responses and keeps a local ledger about the
+accounts you look at. The design constraint is that two of its four headline
+facts *cannot* be known retroactively without someone else's surveillance
+database, and the product refuses to imply otherwise:
+
+- **Computable from real data:** contract addresses the account has posted
+  (from its public posts, with the posts' own dates) and its notable
+  followers (from follower lists, ranked by follower count).
+- **Observation-only:** bio, display-name and @handle history. The ledger
+  records the first value it ever sees and every change after that, so the
+  view model carries `firstSeenAt` and the card prints "watching since
+  <date>" beside every counter. "No change seen" over two days and over two
+  months are different statements, and the card always says which one it is
+  making.
+
+The split runs through the module boundary: `xray-core.js` decides
+(`assembleIntel` returns the labels), `xray-panel.js` only formats. The
+observation window can therefore never be dropped by a UI refactor without a
+test failing.
 
 ## Rendering discipline
 
