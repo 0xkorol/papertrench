@@ -86,6 +86,15 @@ const MATRIX = [
   ['https://pump.fun/coin/' + MINT, 'pumpfun', 'mint', MINT, 'coin route'],
   ['https://pump.fun/' + MINT, 'pumpfun', 'mint', MINT, 'legacy bare mint route'],
   ['https://pump.fun/board', 'pumpfun', null, null, 'board is not a token page'],
+  // Fomo (fomo.family) — multichain app, token pages at /tokens/<chain>/<address>
+  ['https://fomo.family/tokens/solana/' + MINT, 'fomo', 'mint', MINT, 'token route (solana chain slug + whole-mint address)'],
+  ['https://fomo.family/tokens/solana/' + MINT + '?ref=abc', 'fomo', 'mint', MINT, 'query strings do not change the route'],
+  ['https://fomo.family/tokens/base/' + EVM_B58ISH, 'fomo', null, null, 'EVM chain slugs must not reach the Solana resolver (O-11)'],
+  ['https://fomo.family/tokens/ethereum/' + MINT, 'fomo', null, null, 'a base58-shaped address under a non-solana slug is still not ours (O-11)'],
+  ['https://fomo.family/u/sometrader', 'fomo', null, null, 'profile routes must not mount (O-10)'],
+  ['https://fomo.family/profile/sometrader', 'fomo', null, null, 'profile routes must not mount (O-10)'],
+  ['https://fomo.family/prices/bonk', 'fomo', null, null, 'ticker-slug price pages carry no mint — never guess'],
+  ['https://fomo.family/', 'fomo', null, null, 'landing page is not a token page'],
 ];
 
 test('overlay presence matrix: every audited URL shape gates correctly', () => {
@@ -135,6 +144,8 @@ test('the manifest no longer injects into every page on the internet', () => {
   for (const script of trading) {
     assert.ok(script.matches.includes('https://pump.fun/*'),
       'pump.fun is a first-class supported site');
+    assert.ok(script.matches.includes('https://fomo.family/*'),
+      'fomo.family is a first-class supported site');
     assert.ok(!script.matches.some((m) => m.includes('x.com') || m.includes('twitter.com')),
       'the trading overlay must never run on X itself');
   }

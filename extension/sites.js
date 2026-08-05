@@ -224,6 +224,28 @@
       },
     },
     {
+      id: 'fomo',
+      name: 'Fomo',
+      tokenUrl: (mint) => 'https://fomo.family/tokens/solana/' + mint,
+      match: (h) => /(^|\.)fomo\.family$/.test(h),
+      // fomo.family/tokens/<chainSlug>/<tokenAddress>. The route shape comes
+      // from the site's own SPA route manifest and chain registry (verified
+      // 2026-08-05) — token pages are login-gated for anonymous visitors, so
+      // the URL, not the rendered DOM, is the contract here. Fomo is
+      // multichain (solana / base / monad / bnb / ethereum / hyperliquid /
+      // robinhood slugs): only the solana slug is ours, and the address must
+      // be a WHOLE base58 value — EVM addresses can contain base58-passing
+      // runs (DEFECT O-11). Profile and user routes (/u/<handle>,
+      // /profile/<handle>) and the ticker-slug /prices/ pages carry handles
+      // and tickers, not mints, and must never mount the panel (O-10).
+      detect: () => {
+        const m = location.pathname.match(/^\/tokens\/([a-z-]+)\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (!m || m[1] !== 'solana') return null;
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m[2])) return null;
+        return { kind: 'mint', address: m[2] };
+      },
+    },
+    {
       id: 'pumpfun',
       name: 'Pump.fun',
       tokenUrl: (mint) => 'https://pump.fun/coin/' + mint,

@@ -793,6 +793,7 @@ const WARM_PLATFORM_URLS = [
   'https://*.bullx.io/*', 'https://dexscreener.com/*', 'https://*.dexscreener.com/*',
   'https://birdeye.so/*', 'https://*.birdeye.so/*', 'https://jup.ag/*',
   'https://*.jup.ag/*', 'https://pump.fun/*', 'https://*.pump.fun/*',
+  'https://fomo.family/*', 'https://*.fomo.family/*',
 ];
 
 // One in-flight SPA request per viewer tab; a newer click supersedes the

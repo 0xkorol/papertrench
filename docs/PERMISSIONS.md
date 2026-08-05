@@ -16,7 +16,8 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
 
 - **Content scripts are narrow.** The trading overlay is injected ONLY into
   the supported trading sites (axiom.trade, padre.gg, tinyastro.io, gmgn.ai,
-  bullx.io, dexscreener.com, birdeye.so, jup.ag, pump.fun). (Earlier alphas
+  bullx.io, dexscreener.com, birdeye.so, jup.ag, pump.fun, fomo.family).
+  (Earlier alphas
   injected everywhere; fixed as DEFECTS.md O-09 and enforced by
   `scripts/preflight.sh` and a manifest test.)
 - **x.com / twitter.com (v2.4.0, warm links).** Two small bridge scripts load

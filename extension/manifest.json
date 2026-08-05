@@ -34,7 +34,9 @@
         "https://jup.ag/*",
         "https://*.jup.ag/*",
         "https://pump.fun/*",
-        "https://*.pump.fun/*"
+        "https://*.pump.fun/*",
+        "https://fomo.family/*",
+        "https://*.fomo.family/*"
       ],
       "js": [
         "xlinks.js",
@@ -61,7 +63,9 @@
         "https://jup.ag/*",
         "https://*.jup.ag/*",
         "https://pump.fun/*",
-        "https://*.pump.fun/*"
+        "https://*.pump.fun/*",
+        "https://fomo.family/*",
+        "https://*.fomo.family/*"
       ],
       "js": [
         "xlinks.js",
@@ -154,7 +158,8 @@
         "https://dexscreener.com/*",
         "https://birdeye.so/*",
         "https://jup.ag/*",
-        "https://pump.fun/*"
+        "https://pump.fun/*",
+        "https://fomo.family/*"
       ]
     }
   ],
