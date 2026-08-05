@@ -220,7 +220,7 @@ Any unknown-unit close in [1e-7, 1000) assumed USD → a 5e-7 SOL close gets div
 the rate twice (~200× wrong). `native` branch accepts anything < 1 SOL, no floor.
 
 **F-26 · S4 · patchPadreWidget polls every 1 s forever on every site, incl. those with no TradingView**
-`price-bridge.js:403,420,1853` · Photon, BullX, DexScreener… · confirmed · open
+`price-bridge.js:403,420,1853` · Photon, BullX, DexScreener… · confirmed · **fixed v1.3.0** (60 empty scans drop to slow cadence; revives on widget discovery or paper-axis)
 Re-runs `getRankedCharts()` every second and an 8000-fiber walk every 3 s; never stands
 down after N failures.
 
@@ -286,7 +286,7 @@ navigation. `fastDetectTimer` can't rescue (returns unless `token.pending`).
 ### S2 — silent death / resource leaks
 
 **O-03 · S2 · disableOverlay leaves chart markers, title observer, and onchain subscription alive**
-`content.js:3574-3586`, `stopOverlays` :3527-3533 · all sites · confirmed · open
+`content.js:3574-3586`, `stopOverlays` :3527-3533 · all sites · confirmed · **fixed v1.3.0** (disableOverlay tears down markers, title signal, onchain watch; clears native drawings; standdown)
 `stopOverlays` clears 5 timers but never calls `CM.destroyChartMarkers()`,
 `stopTitleSignal()`, or `R.onchainUnwatch()`. Overlay off in popup → SVG overlay + its
 observers + re-attach loop stay in the host chart; fallback strip stays on screen; the
@@ -294,7 +294,7 @@ host container's mutated `position: relative` is never reverted; background keep
 streaming pool state for the mint forever; `token` not nulled. (= C-18.)
 
 **O-04 · S2 · shutdown() (extension reload) leaves the same chart artifacts permanently**
-`content.js:158-170` · all sites · confirmed · open
+`content.js:158-170` · all sites · confirmed · **fixed v1.3.0** (chart markers registered for shutdown; bridge standdown + 5-min liveness watchdog)
 `CM` has no `onTeardown` registration anywhere — `destroyChartMarkers()` is only
 reachable from `setToken`. After extension reload/update the SVG overlay, fallback
 strip, observers, and the 500 ms scanTimer keep running ownerless until page reload.
@@ -302,7 +302,7 @@ strip, observers, and the 500 ms scanTimer keep running ownerless until page rel
 
 **O-05 · S2 · createUI early-return leaves `host` null → every settings write stacks another interval set**
 `content.js:2201-2202`, `3535-3572`, `watchStorage` :1130 · mechanism confirmed /
-trigger hypothesis · open
+trigger hypothesis · **fixed v1.3.0** (createUI adopts-or-replaces; enableOverlay idempotent)
 `createUI` returns without setting `host` if `#papertrench-host` already exists;
 `enableOverlay` then creates detect/fast/bar timers + resize listener anyway, and
 `watchStorage` calls `enableOverlay()` on EVERY settings write (incl. the extension's
@@ -310,18 +310,18 @@ own drag/resize persists). `els` stays `{}` → invisible overlay burning CPU + 
 traffic.
 
 **O-06 · S2 · onOverlayResizeEnd can latch `resizingOverlay = true` forever**
-`content.js:2530-2539`, guard :2487 · confirmed · open
+`content.js:2530-2539`, guard :2487 · confirmed · **fixed v1.3.0** (resizingOverlay clears before every early return)
 Early return on `!els.box` skips `resizingOverlay = false`; `applyOverlaySize()` is
 dead for the rest of the page — saved size never re-applied.
 
 **O-07 · S2/S5 · Raw timers bypassing managedInterval**
 `content.js:576` (priceTimer — has hand-written parity, but pattern risk), :2952
 (row-buy debounce fires one scan after teardown = O-29), :3545-3546, :3486, :794,
-:947 · confirmed · open
+:947 · confirmed · **fixed v1.3.0** (row-buy debounce tracked and cancelled; early timeouts mount-cleaned; remaining raw timers documented as self-limiting)
 
 **O-08 · S2 · MAIN-world bridge has no shutdown path at all — on every site on the web**
 `price-bridge.js:1475-1477,1573-1574,1586,1843,1849,1853`, `manifest.json:20-31` ·
-every website · confirmed · open
+every website · confirmed · **fixed v1.3.0 (partial by nature)** (manifest narrowed to trading sites; standdown + liveness watchdog silence the bridge; MAIN-world wrappers themselves are irremovable)
 Five capture-phase pointer/mouse listeners, capture scroll+resize, three permanent
 intervals, and a 10 ms boot probe — installed on `<all_urls>` at document_start,
 ungated on site, unremovable (MAIN world has no extension-context concept). (= F-24
@@ -373,37 +373,37 @@ headers get the hardcoded 210 px fallback over their nav.
 ### S4 — movability & friction
 
 **O-16 · S4 · Positions bar can be dragged somewhere it can never be dragged back from — and it persists**
-`content.js:2401-2417` (clamp :2409), grip :2210,:2430 · confirmed · open
+`content.js:2401-2417` (clamp :2409), grip :2210,:2430 · confirmed · **fixed v1.3.0** (both-bounds clamp keeps the grip on-screen; the escape hatch is deleted)
 Negative clamp `4 - rect.width` leaves only the bar's RIGHT edge visible but the drag
 grip is the LEFTMOST child — at the bound the grip is fully off-screen. No reset
 control; position persists across reloads. Bar permanently unreachable.
 
 **O-17 · S4 · Panel drag has no right/bottom clamp; off-screen position persists; mount clamp is wrong**
-`content.js:2364-2369,2379-2380,2270-2276` · confirmed · open
+`content.js:2364-2369,2379-2380,2270-2276` · confirmed · **fixed v1.3.0** (clampPanelPos during drag and at mount; whole panel stays on-screen)
 Only lower bounds during drag. Mount-time rescue clamp `min(panelRight, innerWidth-40)`
 puts the panel's right edge 40 px from the viewport's LEFT edge — still ~296 px
 off-screen with a 40 px sliver grabbable.
 
 **O-18 · S4 · Neither panel nor bar re-clamps on window resize — and positionBar re-asserts the off-screen coordinate**
-`content.js:2270-2276` (mount only), `:3258-3268,3547` · confirmed · open
+`content.js:2270-2276` (mount only), `:3258-3268,3547` · confirmed · **fixed v1.3.0** (per-mount resize handler re-clamps; positionBar clamps saved coords)
 
 **O-19 · S4 · `parseInt(x) || fallback` treats position 0 as "use default" — elements jump when re-dragged from an edge**
-`content.js:2362,2379-2380,2397-2398` · confirmed · open
+`content.js:2362,2379-2380,2397-2398` · confirmed · **fixed v1.3.0** (finitePx everywhere — 0 is a position, not a fallback trigger)
 `right: 0px` parses to falsy → snaps 18 px inward; bar at `left: 0` persists as 210.
 Needs Number.isFinite semantics.
 
 **O-20 · S4 · Minimized pill ignores the panel's saved position and is not draggable**
-`content.js:1924-1925,2548-2550` · confirmed · open
+`content.js:1924-1925,2548-2550` · confirmed · **fixed v1.3.0** (pill takes the live panel position, shown as flex, and is itself a drag handle)
 Panel dragged bottom-left + minimize → pill teleports to hardcoded top-right.
 
 **O-21 · S4 · The POSITIONS restore tab cannot be moved while collapsed**
-`content.js:2221,2174-2176,2430,2066,3053-3058` · confirmed · open
+`content.js:2221,2174-2176,2430,2066,3053-3058` · confirmed · **fixed v1.3.0** (collapsed tab drags through the shared bar spec)
 Tab mirrors `--pt-bar-*` vars, only writable via the grip — which is `display:none`
 while collapsed. Combined with O-16: stuck tab in a bad spot, unrecoverable.
 
 **O-22 · S4 · Screener row chips sit BELOW the panel in z-order — occluded and unclickable where they overlap**
 `content.css:16-21` (layer 2147482000) vs `content.js:1545` (panel 2147483647) · Axiom
-Pulse, Padre Trenches, GMGN Trenches · confirmed · open
+Pulse, Padre Trenches, GMGN Trenches · confirmed · **fixed v1.3.0** (chip placement self-culls under the overlay via an elementFromPoint probe; returns when panel moves)
 Chips anchor to row right edges — the same column band as the default panel position.
 
 **O-23 · S4 · Chart-marker fallback strip hardcoded to `top:140px; right:360px`, not draggable, not persisted, pointer-events:none**
@@ -414,28 +414,28 @@ anywhere. (= C-25.)
 **O-24 · S4 · content.css host-isolation rule is a dead selector — the page's CSS can break the whole overlay**
 `content.css:6-8` (`papertrench-host { all:initial }` — type selector) vs
 `content.js:2203-2204` (host is a `div` with that ID) · selector confirmed; downstream
-site-dependent · open
+site-dependent · **fixed v1.3.0** (#papertrench-host id selector; custom-property caveat documented)
 Needs `#papertrench-host`. Outer-document rules beat shadow `:host` per CSS Scoping; a
 host-page `body > div { transform: … }` re-parents our fixed-position children.
 
 **O-25 · S4 · No touch/pointer support on either drag handle**
-`content.js:2358,2364,2375,2393,2430-2432` · confirmed · open
+`content.js:2358,2364,2375,2393,2430-2432` · confirmed · **fixed v1.3.0** (pointer events + setPointerCapture everywhere; zero mouse listeners remain)
 Both drags are mousedown-only (resize handle correctly uses pointer events — three
 bespoke implementations, no shared helper).
 
 **O-26 · S4 · Both drags leak a window mousemove+mouseup pair per mount**
-`content.js:2364,2375,2431,2432` · confirmed · open
+`content.js:2364,2375,2431,2432` · confirmed · **fixed v1.3.0** (onMountCleanup registry; drag listeners die with the mount)
 Not teardown-registered; accumulate per overlay off→on cycle, survive shutdown().
 
 ### S5 — polish
 
 **O-27 · S5 · Minimized pill shown with `display:block` but styled as flex** —
-`content.js:2550` vs :1926; dot/label lose centering. confirmed · open
+`content.js:2550` vs :1926; dot/label lose centering. confirmed · **fixed v1.3.0** (pill shown as flex)
 **O-28 · S5 · Toasts overlap the panel header and recycle after 4** —
 `content.js:3477-3487`, CSS :1941-1942; toast top:74 vs panel top:84 same z; 5th toast
-within ~4 s stacks on the 1st; toasts don't follow a dragged panel. confirmed · open
+within ~4 s stacks on the 1st; toasts don't follow a dragged panel. confirmed · **fixed v1.3.0** (8 owned slots + bounded queue; stack follows the panel and clears the header)
 **O-29 · S5 · Row-buy debounce fires one scan after teardown** — `content.js:2950-2958`.
-confirmed · open
+confirmed · **fixed v1.3.0** (debounce cancelled in stopRowBuyObserver from both teardown paths)
 
 ### Movable-elements inventory (summary)
 
@@ -584,12 +584,12 @@ fill unmarked for the session.
 
 **C-17 · S3 · Nothing clears markers/lines on extension-context death — welded to the host chart, then duplicated**
 `content.js:158-170` (no CM teardown), `price-bridge.js:21-22` (one-shot guard),
-four unclearable intervals · all sites · confirmed · open
+four unclearable intervals · all sites · confirmed · **fixed v1.3.0** (shutdown destroys markers; bridge standdown wipes marks/levels/specs and silences the sweep)
 Extension reload: bridge keeps `paperMarks`/line specs and re-asserts a frozen level
 every second forever; fresh content script injects a SECOND SVG overlay → duplicated
 bubbles, one set frozen. (Companion of O-04/O-08.)
 
-**C-18 · S3 · Disabling the overlay leaves every marker and line painted on the chart** — see O-03. confirmed · open
+**C-18 · S3 · Disabling the overlay leaves every marker and line painted on the chart** — see O-03. confirmed · **fixed v1.3.0** (disableOverlay clears SVG and native drawings — see O-03)
 
 **C-19 · S3 · Photon/BullX/DexScreener forced down the broken SVG path even though the bridge's TradingView discovery is site-agnostic and already running there**
 `content.js:108-109` (`NATIVE_TV_SITES = {padre, axiom}`) vs `price-bridge.js:364-489`
@@ -598,11 +598,11 @@ These sites ship real TV widgets; the hardcoded two-element set routes them to
 C-02/03/04/11 instead. Potentially the single highest-leverage marker fix.
 
 **C-20 · S3 · GMGN mounts the SVG overlay it never uses — mutating the site's chart container + a continuous MutationObserver for nothing**
-`content.js:543-549`, `chart-markers.js:124,202-204,214-223` · GMGN · confirmed · open
+`content.js:543-549`, `chart-markers.js:124,202-204,214-223` · GMGN · confirmed · **fixed v1.3.0** (usesSvgMarkers predicate; GMGN never mounts the SVG overlay or mutates the host container)
 
 **C-21 · S3 · initChartMarkers can leak the previous scan interval (bounded race)** —
-`chart-markers.js:666-671` · confirmed · open
-**C-22 · S3 · destroyChartMarkers doesn't reset the render-skip memo — first render after re-init can be skipped** — `chart-markers.js:697-708` · confirmed · open
+`chart-markers.js:666-671` · confirmed · **fixed v1.3.0** (previous scan interval always retired first)
+**C-22 · S3 · destroyChartMarkers doesn't reset the render-skip memo — first render after re-init can be skipped** — `chart-markers.js:697-708` · confirmed · **fixed v1.3.0** (destroy resets the render-skip memo; locked behaviorally)
 
 ### S4/S5
 

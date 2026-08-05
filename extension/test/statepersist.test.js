@@ -413,19 +413,28 @@ test('a saved panel position never lands off-screen on a smaller window', async 
     'the panel header must stay vertically grabbable');
 });
 
-test('the panel drop handler persists the dragged position', () => {
-  // The window mouseup listener cannot be driven from this harness, so pin
-  // the contract in source: the drop must write BOTH coordinates to settings
-  // and then persist them — the exact shape the positions bar uses.
+test('the panel drop handler persists the dragged position (O-19: clamped, Number.isFinite)', () => {
+  // The pointer listeners cannot be driven from this harness, so pin the
+  // contract in source: the drop must clamp, then write BOTH coordinates to
+  // settings, then persist them — and it must NOT go through the old
+  // `parseInt(x) || fallback` parsing that turned a legitimate 0 into the
+  // default and made edge-parked panels jump when re-dragged (DEFECT O-19).
   const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
-  assert.match(content, /settings\.panelRight = parseInt\(boxStyle\.right\)/,
-    'the drop must record the horizontal position');
-  assert.match(content, /settings\.panelTop = parseInt\(boxStyle\.top\)/,
-    'the drop must record the vertical position');
-  const drop = content.indexOf('settings.panelRight = parseInt(');
+  assert.match(content, /settings\.panelRight = pos\.right/,
+    'the drop must record the clamped horizontal position');
+  assert.match(content, /settings\.panelTop = pos\.top/,
+    'the drop must record the clamped vertical position');
+  const drop = content.indexOf('settings.panelRight = pos.right');
   const persist = content.indexOf('store.set({ [E.STORAGE_KEYS.settings]: settings })', drop);
   assert.ok(drop !== -1 && persist !== -1 && persist - drop < 400,
     'the recorded position must be written to storage immediately after the drop');
+  // O-19: no position read anywhere may fall back through `parseInt(...) ||`.
+  assert.doesNotMatch(content, /parseInt\([^)]*\.(right|top|left)\)\s*\|\|/,
+    'position parsing must use Number.isFinite semantics, never parseInt-or-default');
+  assert.match(content, /function finitePx\(/,
+    'a shared Number.isFinite pixel parser must exist');
+  assert.match(content, /return Number\.isFinite\(n\) \? n : fallback;/,
+    'finitePx must fall back only on non-finite values, never on 0');
 });
 
 /* ---------------- requested: Axiom-style focus mode ----------------
@@ -574,4 +583,234 @@ test('restoreWallet lands the restored wallet ahead of every live writer', () =>
     'restore must read the live wallet seq before writing');
   assert.match(block, /Math\.max\(liveSeq, backupSeq\) \+ 1/,
     'the restored seq must land strictly greater than both the live and backup counters');
+});
+
+/* ==================== ONE drag system (Phase 3) ====================
+ *
+ * DEFECTS O-16..O-21, O-25, O-26, O-19. Panel, minimized pill, positions
+ * bar and the collapsed POSITIONS tab all drag through a single helper with
+ * pointer events, both-bounds clamping and per-mount listener teardown.
+ * The pointer stream cannot be driven end-to-end from this harness, so the
+ * drag mechanics are pinned in source; everything the harness can reach
+ * behaviorally (mount restore, pill state, toasts) is driven for real.
+ */
+
+const contentSrc = () => fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+test('O-25/O-26: one shared drag helper serves every floating element, on pointer events', () => {
+  const content = contentSrc();
+  assert.match(content, /function makeDraggable\(handle, spec\)/,
+    'the single shared drag helper must exist');
+  const uses = content.match(/makeDraggable\(/g) || [];
+  assert.ok(uses.length >= 5, // definition + panel header, pill, bar grip, bar tab
+    `panel header, pill, bar grip and POSITIONS tab must all use the helper; found ${uses.length - 1} uses`);
+  // O-25: pointer events with capture — no mouse-only drags anywhere.
+  assert.match(content, /handle\.addEventListener\('pointerdown', onDown\)/);
+  assert.match(content, /setPointerCapture/,
+    'pointer capture is what makes touch drags work');
+  assert.doesNotMatch(content, /addEventListener\('mousedown'/,
+    'no bespoke mouse-only drag may remain');
+  assert.doesNotMatch(content, /addEventListener\('mousemove'/,
+    'the leaked window mousemove listeners must be gone (O-26)');
+  // O-26: whatever the helper registers is torn down with the mount.
+  const helper = content.slice(content.indexOf('function makeDraggable'), content.indexOf('// Drag controllers'));
+  assert.match(helper, /onMountCleanup\(/,
+    'the helper must register its listeners for per-mount teardown');
+  assert.match(content, /function runMountCleanups\(\)/);
+  assert.match(content, /onTeardown\(runMountCleanups\)/,
+    'mount cleanups must also run at extension shutdown');
+  const disableBlock = content.slice(content.indexOf('function disableOverlay()'));
+  assert.match(disableBlock, /runMountCleanups\(\)/,
+    'disabling the overlay must tear down the per-mount listeners (O-26)');
+});
+
+test('O-16/O-17/O-18: both floating elements clamp on BOTH bounds and re-clamp on resize', () => {
+  const content = contentSrc();
+  // Panel: upper and lower bounds, header kept reachable.
+  const panelClamp = content.slice(content.indexOf('function clampPanelPos'), content.indexOf('function clampBarPos'));
+  assert.match(panelClamp, /Math\.max\(0, Math\.min\(finitePx\(right, 18\), vw - keep\)\)/,
+    'the panel must clamp right on both bounds (O-17)');
+  assert.match(panelClamp, /Math\.max\(0, Math\.min\(finitePx\(top, 84\), vh - 48\)\)/,
+    'the panel must clamp top so the header stays grabbable');
+  // Bar: the grip is the LEFTMOST child, so left >= 0 — the old 4-rect.width
+  // lower bound parked the grip off-screen and PERSISTED it (O-16).
+  const barClamp = content.slice(content.indexOf('function clampBarPos'), content.indexOf('function readPanelPos'));
+  assert.match(barClamp, /Math\.max\(0, Math\.min\(finitePx\(left, 210\), vw - DRAG_KEEP_PX\)\)/,
+    'the bar must clamp left on both bounds with the grip kept on screen');
+  assert.doesNotMatch(content, /4 - rect\.width/,
+    'the escape-hatch lower bound that let the grip leave the screen must be gone');
+  // O-18: one resize handler re-clamps BOTH elements, and positionBar itself
+  // clamps rather than re-asserting the saved coordinate.
+  assert.match(content, /const onWindowResize = \(\) => \{ positionBar\(\); reclampPanel\(\); \}/,
+    'window resize must re-clamp the bar AND the panel');
+  const positionBarFn = content.slice(content.indexOf('function positionBar()'), content.indexOf('function applyBarOffset'));
+  assert.match(positionBarFn, /clampBarPos\(/,
+    'positionBar must clamp the saved coordinate instead of re-asserting it (O-18)');
+});
+
+test('O-21: the collapsed POSITIONS tab is itself a drag handle sharing the bar position', () => {
+  const content = contentSrc();
+  const barDrag = content.slice(content.indexOf('function setupBarDrag()'), content.indexOf('function openDashboard'));
+  assert.match(barDrag, /makeDraggable\(els\.barGrip, barSpec\)/,
+    'the grip drags the bar');
+  assert.match(barDrag, /barTabDrag = makeDraggable\(els\.barTab, barSpec\)/,
+    'the collapsed tab must be movable through the same spec');
+  // A drop on the tab must not be mistaken for the expand tap.
+  assert.match(content, /if \(barTabDrag && barTabDrag\.justDragged\(\)\) return;/,
+    'a drag drop on the tab must not re-expand the bar');
+});
+
+test('O-19: a panel parked at 0 is restored at 0, never snapped to the default', async () => {
+  const ov = runOverlay([0.001], { initialSettings: { panelRight: 0, panelTop: 240 } });
+  await ov.advance(1200);
+  assert.equal(ov.shadowNodes['pt-box'].style.right, '0px',
+    'a legitimate 0 coordinate must survive the mount restore');
+  assert.equal(ov.shadowNodes['pt-box'].style.top, '240px');
+});
+
+test('O-20/O-27: the minimized pill takes the panel position and shows as a flex row', async () => {
+  const ov = runOverlay([0.001]);
+  await ov.advance(1200);
+
+  ov.clickById('pt-min');
+  const pill = ov.shadowNodes['pt-pill'];
+  assert.equal(pill.style.display, 'flex',
+    'the pill is styled as a flex row; display:block broke its centering (O-27)');
+  assert.match(String(pill.style.right), /px$/,
+    'the pill must be positioned where the panel is, not left at the CSS top-right (O-20)');
+  assert.match(String(pill.style.top), /px$/);
+  // And in source: the pill is a drag handle whose drop does not restore.
+  const content = contentSrc();
+  assert.match(content, /pillDrag = makeDraggable\(els\.pill, panelSpec\)/,
+    'the pill itself must be draggable through the shared helper');
+  assert.match(content, /if \(pillDrag && pillDrag\.justDragged\(\)\) return;/,
+    'a drag drop on the pill must not restore the panel');
+});
+
+/* ==================== toasts (DEFECT O-28) ==================== */
+
+test('O-28: toasts hold their slot for their lifetime and queue instead of overwriting', async () => {
+  const ov = runOverlay([0.001]);
+  await ov.advance(1200);
+
+  // Ten refusal toasts in one burst (the BUY button with no amount picked).
+  for (let i = 0; i < 10; i++) ov.clickById('pt-buy');
+  const root = ov.shadowNodes['pt-toast-root'];
+
+  assert.equal(root.children.length, 8,
+    'eight slots on screen; the overflow must QUEUE, not overprint slot 0');
+  const tops = new Set(root.children.map((c) => c.style.top));
+  assert.equal(tops.size, 8, 'no two visible toasts may share a slot');
+
+  // Once the first wave expires, the queued two take their slots.
+  await ov.advance(4400);
+  assert.equal(root.children.length, 2,
+    'queued toasts must appear after the visible ones expire');
+});
+
+test('O-28: the toast stack anchors to the panel side and clears its header', () => {
+  const content = contentSrc();
+  const base = content.slice(content.indexOf('function toastBase()'), content.indexOf('function toast(msg)'));
+  assert.match(base, /readPanelPos\(\)/,
+    'the stack must follow the panel: same right coordinate as the dragged panel');
+  assert.match(base, /pos\.top \+ \(panelH > 0 \? panelH \+ 10 : 48\)/,
+    'the stack must start below the panel (or clear the header band when hidden)');
+  assert.doesNotMatch(content, /toastN/,
+    'the 4-slot modulo counter that overprinted toasts must be gone');
+});
+
+/* ==================== lifecycle teardown (Phase 3) ==================== */
+
+test('O-03/C-18: disabling the overlay tears down chart, title, chain and bridge state', () => {
+  const content = contentSrc();
+  const start = content.indexOf('function disableOverlay()');
+  assert.ok(start !== -1);
+  const block = content.slice(start, content.indexOf('async function init()', start));
+  assert.match(block, /R\.onchainUnwatch\(token\.mint\)/,
+    'the background pool subscription must be released');
+  assert.match(block, /stopTitleSignal\(\)/,
+    'the title observer must stop');
+  assert.match(block, /CM\.destroyChartMarkers\(\)/,
+    'the SVG overlay, its observers and scan timer must be destroyed');
+  for (const msg of ['paper-marker-clear', 'paper-lines-clear', 'gmgn-lines-clear', 'standdown']) {
+    assert.ok(block.includes(`sendPadreMarker('${msg}')`),
+      `disableOverlay must send ${msg} so native chart drawings disappear`);
+  }
+  assert.match(block, /token = null;/,
+    'the token must be nulled so nothing keeps rendering it');
+});
+
+test('O-04/C-17: shutdown() destroys chart markers and stands the bridge down', () => {
+  const content = contentSrc();
+  const start = content.indexOf('function shutdown(reason)');
+  const block = content.slice(start, content.indexOf('\n  }', start) + 4);
+  assert.match(block, /CM\.destroyChartMarkers\(\)/,
+    'extension reload must remove the SVG overlay, observers and scan timer');
+  assert.match(block, /sendPadreMarker\('standdown'\)/,
+    'the MAIN-world bridge cannot see extension death — it must be told');
+});
+
+test('O-04/C-17: the overlay heartbeats the bridge so silence means death', () => {
+  const content = contentSrc();
+  assert.match(content, /bridgePingTimer = managedInterval\(\(\) => sendPadreMarker\('bridge-ping'\), 30_000\)/,
+    'an alive-but-quiet overlay must keep pinging or the bridge watchdog would trip');
+  const stops = content.slice(content.indexOf('function stopOverlays()'), content.indexOf('async function enableOverlay()'));
+  assert.match(stops, /bridgePingTimer/,
+    'the ping must stop with the overlay so a disabled overlay reads as silence');
+});
+
+test('O-05: createUI adopts-or-replaces a leftover host and enableOverlay is idempotent', () => {
+  const content = contentSrc();
+  const create = content.slice(content.indexOf('function createUI()'), content.indexOf('function bindUI()'));
+  assert.doesNotMatch(create, /if \(document\.getElementById\(HOST_ID\)\) return;/,
+    'the early return that left `host` null (and stacked timers forever) must be gone');
+  assert.match(create, /const existing = document\.getElementById\(HOST_ID\);/,
+    'an existing host node must be detected');
+  assert.match(create, /existing\.remove/,
+    'and removed so the rebuild always owns a fresh mount');
+  const enable = content.slice(content.indexOf('async function enableOverlay()'), content.indexOf('function disableOverlay()'));
+  assert.match(enable, /if \(host\) return;/,
+    'a live overlay must be a no-op — never a second timer set');
+});
+
+test('O-06: a bad resize end can never latch resizingOverlay forever', () => {
+  const content = contentSrc();
+  const start = content.indexOf('async function onOverlayResizeEnd()');
+  const block = content.slice(start, content.indexOf('\n  }', start) + 4);
+  const clearAt = block.indexOf('resizingOverlay = false;');
+  const guardAt = block.indexOf('if (!resizeStart || !els.box)');
+  assert.ok(clearAt !== -1 && guardAt !== -1 && clearAt < guardAt,
+    'the flag must clear BEFORE any early return, or applyOverlaySize dies for the page');
+});
+
+test('O-29/O-07: the row-buy debounce cannot fire into a torn-down overlay', () => {
+  const content = contentSrc();
+  const block = content.slice(content.indexOf('function startRowBuyObserver()'), content.indexOf('/** Paper-buy the first preset amount'));
+  assert.match(block, /if \(contextDead \|\| !host\) return;/,
+    'the debounced scan must check the overlay is still mounted');
+  assert.match(block, /clearTimeout\(rowBuyDebounce\)/,
+    'stopping the observer must also cancel a pending debounce');
+  const stops = content.slice(content.indexOf('function stopOverlays()'), content.indexOf('async function enableOverlay()'));
+  assert.match(stops, /stopRowBuyObserver\(\)/,
+    'the overlay teardown must go through the shared stop path');
+});
+
+test('C-20: GMGN never mounts the SVG overlay it cannot use', () => {
+  const content = contentSrc();
+  assert.match(content, /function usesSvgMarkers\(\)/,
+    'a single predicate must decide where the SVG overlay applies');
+  assert.match(content, /!\(site && site\.id === 'gmgn'\)/,
+    'GMGN is native-drawn and must be excluded from the SVG route');
+  assert.match(content, /if \(usesSvgMarkers\(\)\) CM\.initChartMarkers\(\);/,
+    'initChartMarkers must be gated on the predicate, so GMGN never mutates its chart container');
+  assert.doesNotMatch(content, /if \(CM && !usesNativeChart\(\)\) CM\.tickPrice/,
+    'price ticks must not feed an overlay that never renders on GMGN');
+});
+
+test('O-24: the host-isolation rule targets the real host element', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'content.css'), 'utf8');
+  assert.match(css, /#papertrench-host \{[\s\S]{0,40}all: initial;/,
+    'the ID selector must guard the host element');
+  assert.doesNotMatch(css, /(^|\n)papertrench-host\s*\{/,
+    'the dead TYPE selector (matched nothing; host is a div) must be gone');
 });

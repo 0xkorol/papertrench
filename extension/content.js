@@ -73,6 +73,9 @@
   let fastDetectTimer = null;
   let detectLoopTimer = null;
   let barScanTimer = null;
+  // Liveness ping to the MAIN-world bridge, so it can tell an alive
+  // extension from a dead one and stand its sweeps down (O-04/C-17).
+  let bridgePingTimer = null;
   let lastCmTickPrice = 0;
   // Sustained out-of-band tick rejections force an early anchor refresh
   // instead of waiting out the 30 s cadence (DEFECT F-10).
@@ -118,6 +121,17 @@
    */
   const NATIVE_TV_SITES = new Set(['padre', 'axiom']);
   function usesNativeChart() { return Boolean(site && NATIVE_TV_SITES.has(site.id)); }
+  /**
+   * True only where fills/lines actually render through the generic SVG
+   * overlay. GMGN draws natively through its React-held chart manager
+   * (gmgn-marker / gmgn-lines), so mounting the SVG overlay there only
+   * mutated the host chart container's style.position and burned a
+   * MutationObserver + scan timer for markers that never render (DEFECT
+   * C-20). Feeding it ticks would grow its price series for nothing.
+   */
+  function usesSvgMarkers() {
+    return Boolean(CM) && !usesNativeChart() && !(site && site.id === 'gmgn');
+  }
   const AT = window.PTAttest;       // tamper-evident fill chain
   const profitAlertLevels = new Map(); // mint -> highest threshold already handled
   // Positions bar: prices for tokens whose charts are NOT on screen.
@@ -160,6 +174,20 @@
   /** Register a cleanup action to run when the extension goes away. */
   function onTeardown(fn) { teardownFns.push(fn); }
 
+  /* Listeners and timers created per MOUNT (createUI/bindUI/enableOverlay)
+   * must die with that mount, not with the page: each overlay off→on cycle
+   * used to leak a window mousemove+mouseup pair that survived shutdown()
+   * (DEFECT O-26). disableOverlay() runs these; shutdown() runs them too via
+   * the onTeardown registration below. */
+  let mountCleanups = [];
+  function onMountCleanup(fn) { mountCleanups.push(fn); }
+  function runMountCleanups() {
+    for (const fn of mountCleanups.splice(0)) {
+      try { fn(); } catch (_) { /* keep cleaning */ }
+    }
+  }
+  onTeardown(runMountCleanups);
+
   /**
    * Stop everything and remove our UI from the page.
    *
@@ -172,6 +200,13 @@
     for (const fn of teardownFns.splice(0)) {
       try { fn(); } catch (_) { /* keep tearing down */ }
     }
+    // DEFECTS O-04/C-17: extension reload/update must not leave chart
+    // artifacts welded to the host page. destroyChartMarkers removes the SVG
+    // overlay, its observers and its scan timer; the best-effort 'standdown'
+    // tells the MAIN-world bridge — which cannot observe extension death
+    // itself — to clear native marks/lines and stop re-asserting them.
+    try { if (CM) CM.destroyChartMarkers(); } catch (_) {}
+    try { sendPadreMarker('standdown'); } catch (_) {}
     try { window.removeEventListener('message', onBridgeMessage); } catch (_) {}
     try { if (host && host.remove) host.remove(); } catch (_) {}
     host = null; shadow = null; els = {};
@@ -443,7 +478,7 @@
     if (series.length > SERIES_CAP) series.shift();
     E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
     maybeProfitAlert(token.mint);
-    if (CM && !usesNativeChart()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
+    if (usesSvgMarkers()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
     persistSoon();
     // Event-driven hot path: render in this same task, with no timer wait.
     renderHeader();
@@ -625,7 +660,10 @@
         // TradingView average lines, so clear those before reusing its chart.
         if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
         CM.clearMarkers();
-        CM.initChartMarkers();
+        // GMGN never renders through the SVG overlay — do not mount it there
+        // (it would mutate the chart container and observe it for nothing,
+        // DEFECT C-20). Its fills/lines go through gmgn-marker/gmgn-lines.
+        if (usesSvgMarkers()) CM.initChartMarkers();
       }
       startPriceLoop();
     }
@@ -680,7 +718,7 @@
       // Only feed chart markers if the price actually changed, to avoid
       // unnecessary SVG rebuilds on every 100ms heartbeat.
       const chartPrice = genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot;
-      if (CM && !usesNativeChart() && chartPrice > 0 && chartPrice !== lastCmTickPrice) {
+      if (usesSvgMarkers() && chartPrice > 0 && chartPrice !== lastCmTickPrice) {
         lastCmTickPrice = chartPrice;
         CM.tickPrice(chartPrice);
       }
@@ -771,7 +809,7 @@
       if (series.length > SERIES_CAP) series.shift();
       E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
       maybeProfitAlert(token.mint);
-      if (CM && !usesNativeChart()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
+      if (usesSvgMarkers()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
       persistSoon();
       renderHeader();
       renderPosition();
@@ -2322,8 +2360,190 @@
     }
   `;
 
+  /* -------------------- ONE drag system --------------------
+   *
+   * Panel, minimized pill, positions bar and the collapsed POSITIONS tab all
+   * drag through this single helper (DEFECTS O-16..O-21, O-25, O-26):
+   *
+   *  - pointer events + setPointerCapture, so touch drags work (O-25);
+   *  - BOTH-bounds viewport clamping DURING the drag, so the drag handle can
+   *    never leave the screen and persist there (O-16 bar, O-17 panel);
+   *  - Number.isFinite position parsing — `parseInt(x) || fallback` treated
+   *    a legitimate 0 as "use the default", so elements jumped when
+   *    re-dragged from a screen edge (O-19);
+   *  - window-level fallback listeners exist only while a drag is live and
+   *    are also torn down with the mount (O-26);
+   *  - both elements re-clamp on window resize (O-18).
+   */
+
+  /** Pixel-string → number with Number.isFinite semantics (DEFECT O-19). */
+  function finitePx(value, fallback) {
+    const n = typeof value === 'number' ? value : parseFloat(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  // Minimum sliver of a dragged element that must stay reachable on screen.
+  const DRAG_KEEP_PX = 40;
+
+  /**
+   * Clamp the panel's (and pill's) right/top so its header stays reachable.
+   * When the panel's width is measurable the WHOLE panel stays on screen;
+   * the old mount rescue clamped right to innerWidth-40, which parked all
+   * but a 40px sliver off the LEFT edge (DEFECT O-17).
+   */
+  function clampPanelPos(right, top) {
+    const vw = window.innerWidth || 800;
+    const vh = window.innerHeight || 600;
+    let w = 0;
+    try {
+      const rect = els.box && els.box.getBoundingClientRect && els.box.getBoundingClientRect();
+      w = (rect && Number(rect.width)) || 0;
+    } catch (_) { /* fall through to the sliver minimum */ }
+    if (!(w > 0) && Number(settings.overlayWidth) > 0) w = Number(settings.overlayWidth);
+    const keep = Math.max(DRAG_KEEP_PX, Math.min(w, vw));
+    return {
+      right: Math.max(0, Math.min(finitePx(right, 18), vw - keep)),
+      top: Math.max(0, Math.min(finitePx(top, 84), vh - 48)),
+    };
+  }
+
+  /**
+   * Clamp the positions bar's left/top so its grip stays reachable. The grip
+   * is the bar's LEFTMOST child, so left >= 0 keeps it on screen; the old
+   * lower bound (4 - width) let the grip leave the viewport entirely — and
+   * the position PERSISTED, leaving the bar unrecoverable (DEFECT O-16).
+   */
+  function clampBarPos(left, top) {
+    const vw = window.innerWidth || 800;
+    const vh = window.innerHeight || 600;
+    return {
+      left: Math.max(0, Math.min(finitePx(left, 210), vw - DRAG_KEEP_PX)),
+      top: Math.max(0, Math.min(finitePx(top, 7), vh - 20)),
+    };
+  }
+
+  /** The panel's current right/top, parsed with Number.isFinite semantics. */
+  function readPanelPos() {
+    let style = null;
+    try { style = els.box ? window.getComputedStyle(els.box) : null; } catch (_) {}
+    return {
+      right: finitePx(style && style.right, 18),
+      top: finitePx(style && style.top, 84),
+    };
+  }
+
+  /** Apply (and clamp) the panel position; the pill mirrors it (O-20). */
+  function applyPanelPos(right, top) {
+    if (!els.box) return null;
+    const pos = clampPanelPos(right, top);
+    els.box.style.right = pos.right + 'px';
+    els.box.style.top = pos.top + 'px';
+    els.box.style.left = 'auto';
+    if (els.pill) {
+      els.pill.style.right = pos.right + 'px';
+      els.pill.style.top = pos.top + 'px';
+      els.pill.style.left = 'auto';
+    }
+    return pos;
+  }
+
+  /** Re-clamp the panel into the current viewport (window resize, O-18). */
+  function reclampPanel() {
+    if (!els.box) return;
+    const pos = readPanelPos();
+    applyPanelPos(pos.right, pos.top);
+  }
+
+  /**
+   * Wire ONE drag handle. `spec` supplies the element-specific glue:
+   *   start()             position captured at pointerdown
+   *   move(start, dx, dy) apply the clamped position for this delta
+   *   drop()              persist the position
+   *   ignore(ev)          optional: true lets the event through untouched
+   * Returns { justDragged() } so a click handler on the same element can
+   * tell a drop from a tap (the pill and the POSITIONS tab are buttons).
+   */
+  function makeDraggable(handle, spec) {
+    if (!handle || !handle.addEventListener) return { justDragged: () => false };
+    let dragging = false;
+    let sx = 0, sy = 0;
+    let start = null;
+    let moved = false;
+    let droppedAt = 0;
+
+    const onMove = (e) => {
+      if (!dragging || !start) return;
+      const dx = (e.clientX || 0) - sx;
+      const dy = (e.clientY || 0) - sy;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+      if (e.cancelable && e.preventDefault) e.preventDefault();
+      spec.move(start, dx, dy);
+    };
+    const unbindWindow = () => {
+      try { window.removeEventListener('pointermove', onMove); } catch (_) {}
+      try { window.removeEventListener('pointerup', onUp); } catch (_) {}
+      try { window.removeEventListener('pointercancel', onUp); } catch (_) {}
+    };
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      start = null;
+      unbindWindow();
+      if (moved) droppedAt = Date.now();
+      spec.drop();
+    }
+    const onDown = (e) => {
+      if (spec.ignore && spec.ignore(e)) return;
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      dragging = true;
+      moved = false;
+      sx = e.clientX || 0;
+      sy = e.clientY || 0;
+      start = spec.start();
+      // Pointer capture keeps move/up flowing to the handle even when the
+      // pointer leaves it — and it is what makes touch drags work (O-25).
+      if (e.pointerId !== undefined && typeof handle.setPointerCapture === 'function') {
+        try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      // Window-level fallback for environments where capture fails. These
+      // exist only while THIS drag is live and die with the mount (O-26).
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      if (e.cancelable && e.preventDefault) e.preventDefault();
+    };
+
+    handle.addEventListener('pointerdown', onDown);
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+    onMountCleanup(() => {
+      dragging = false;
+      start = null;
+      unbindWindow();
+      if (handle.removeEventListener) {
+        try { handle.removeEventListener('pointerdown', onDown); } catch (_) {}
+        try { handle.removeEventListener('pointermove', onMove); } catch (_) {}
+        try { handle.removeEventListener('pointerup', onUp); } catch (_) {}
+        try { handle.removeEventListener('pointercancel', onUp); } catch (_) {}
+      }
+    });
+
+    return { justDragged: () => moved && Date.now() - droppedAt < 400 };
+  }
+
+  // Drag controllers whose justDragged() is consulted by click handlers.
+  let pillDrag = null;
+  let barTabDrag = null;
+
   function createUI() {
-    if (document.getElementById(HOST_ID)) return;
+    // Adopt-or-replace (DEFECT O-05): a leftover #papertrench-host — an
+    // earlier mount that was never torn down, or a page-authored imposter —
+    // used to cause an early return that left `host` null while
+    // enableOverlay kept stacking fresh timers on every settings write.
+    // Remove whatever is there and rebuild from scratch.
+    const existing = document.getElementById(HOST_ID);
+    if (existing && existing.remove) { try { existing.remove(); } catch (_) {} }
     host = document.createElement('div');
     host.id = HOST_ID;
     shadow = host.attachShadow({ mode: 'open' });
@@ -2389,14 +2609,14 @@
     els.box = shadow.getElementById('pt-box');
     // Restore the dragged position saved by the panel's drop handler.
     // Settings are already loaded (init awaits reloadState before
-    // enableOverlay), and the clamp keeps a position saved on a bigger
-    // monitor reachable on a smaller window — the header must stay grabbable.
-    if (typeof settings.panelRight === 'number' && Number.isFinite(settings.panelRight)) {
-      els.box.style.right = Math.max(0, Math.min(settings.panelRight, (window.innerWidth || 800) - 40)) + 'px';
-      els.box.style.left = 'auto';
-    }
-    if (typeof settings.panelTop === 'number' && Number.isFinite(settings.panelTop)) {
-      els.box.style.top = Math.max(0, Math.min(settings.panelTop, (window.innerHeight || 600) - 48)) + 'px';
+    // enableOverlay). clampPanelPos keeps a position saved on a bigger
+    // monitor fully reachable on a smaller window — the old rescue clamp
+    // (right ≤ innerWidth-40) left the panel almost entirely off the LEFT
+    // edge of the viewport (DEFECT O-17).
+    const savedRight = typeof settings.panelRight === 'number' && Number.isFinite(settings.panelRight);
+    const savedTop = typeof settings.panelTop === 'number' && Number.isFinite(settings.panelTop);
+    if (savedRight || savedTop) {
+      applyPanelPos(savedRight ? settings.panelRight : 18, savedTop ? settings.panelTop : 84);
     }
     els.pill = shadow.getElementById('pt-pill');
     els.tokenName = shadow.getElementById('pt-token-name');
@@ -2444,6 +2664,9 @@
       setPanelVisible(true);
     });
     els.pill.addEventListener('click', () => {
+      // A drop at the end of a pill drag also fires click; only a TAP
+      // restores the panel (O-20).
+      if (pillDrag && pillDrag.justDragged()) return;
       panelMinimized = false;
       setPanelVisible(true);
     });
@@ -2455,6 +2678,9 @@
       setBarHidden(true);
     });
     if (els.barTab) els.barTab.addEventListener('click', () => {
+      // Same drop-vs-tap distinction as the pill: the collapsed tab is now a
+      // drag handle too (O-21), and a drop must not re-expand the bar.
+      if (barTabDrag && barTabDrag.justDragged()) return;
       setBarHidden(false);
     });
     setupBarDrag();
@@ -2477,83 +2703,61 @@
       requestBuy(amt);
     });
 
-    const drag = shadow.getElementById('pt-drag');
-    let dragging = false, sx = 0, sy = 0, sr = 0, st = 0;
-    drag.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button')) return;
-      dragging = true; sx = e.clientX; sy = e.clientY;
-      const boxStyle = window.getComputedStyle(els.box);
-      sr = parseInt(boxStyle.right) || 18; st = parseInt(boxStyle.top) || 84;
-    });
-    window.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      els.box.style.right = Math.max(0, sr - (e.clientX - sx)) + 'px';
-      els.box.style.top = Math.max(0, st + (e.clientY - sy)) + 'px';
-      els.box.style.left = 'auto';
-    });
     // "Make it remember its place" (levv6x): the dragged position must
-    // survive page refreshes and new tabs. Persist it on drop, exactly the
-    // way the positions bar already does (setupBarDrag), and restore it in
-    // createUI. Without the write every new page fell back to the CSS
-    // default (top-right).
-    window.addEventListener('mouseup', () => {
-      if (!dragging) return;
-      dragging = false;
-      const boxStyle = window.getComputedStyle(els.box);
-      settings.panelRight = parseInt(boxStyle.right) || 18;
-      settings.panelTop = parseInt(boxStyle.top) || 84;
+    // survive page refreshes and new tabs. Persist it on drop and restore it
+    // in createUI. The header is the handle; buttons on it are exempt.
+    const drag = shadow.getElementById('pt-drag');
+    const persistPanelPos = () => {
+      const read = readPanelPos();
+      const pos = clampPanelPos(read.right, read.top);
+      // O-19: a legitimate 0 persists as 0 — never snapped to the default.
+      settings.panelRight = pos.right;
+      settings.panelTop = pos.top;
       try {
         store.set({ [E.STORAGE_KEYS.settings]: settings });
       } catch (_) {}
+    };
+    const panelSpec = {
+      start: readPanelPos,
+      move: (start, dx, dy) => applyPanelPos(start.right - dx, start.top + dy),
+      drop: persistPanelPos,
+    };
+    makeDraggable(drag, {
+      ...panelSpec,
+      ignore: (e) => Boolean(e.target && e.target.closest && e.target.closest('button')),
     });
+    // O-20: the minimized pill shares the panel's position and is a drag
+    // handle itself — dragging it moves (and persists) the shared spot.
+    pillDrag = makeDraggable(els.pill, panelSpec);
   }
 
-  /** Let the user drag the top positions bar out of the way of host nav. */
+  /** Let the user drag the positions bar (and its collapsed tab) anywhere. */
   function setupBarDrag() {
-    if (!els.barGrip) return;
-    let dragging = false, sx = 0, sy = 0, sl = 0, st = 0;
-    const start = (e) => {
-      // Left click or touch only.
-      if (e.type === 'mousedown' && e.button !== 0) return;
-      dragging = true;
-      sx = e.clientX; sy = e.clientY;
-      const style = window.getComputedStyle(els.bar);
-      sl = parseInt(style.left) || 210;
-      st = parseInt(style.top) || 7;
-      e.preventDefault();
-    };
-    const move = (e) => {
-      if (!dragging) return;
-      const viewportW = window.innerWidth || 800;
-      const viewportH = window.innerHeight || 600;
-      const rect = els.bar.getBoundingClientRect();
-      let left = sl + (e.clientX - sx);
-      let top = st + (e.clientY - sy);
-      // Keep a strip of the bar visible so the user can drag it back.
-      left = Math.max(4 - rect.width, Math.min(left, viewportW - 4));
-      top = Math.max(0, Math.min(top, viewportH - 20));
-      els.bar.style.setProperty('--pt-bar-left', left + 'px');
-      els.bar.style.setProperty('--pt-bar-top', top + 'px');
-      if (els.barTab) {
-        els.barTab.style.setProperty('--pt-bar-left', left + 'px');
-        els.barTab.style.setProperty('--pt-bar-top', top + 'px');
-      }
-    };
-    const stop = () => {
-      if (!dragging) return;
-      dragging = false;
-      const style = window.getComputedStyle(els.bar);
-      const left = parseInt(style.left) || 210;
-      const top = parseInt(style.top) || 7;
-      settings.positionsBarLeft = left;
-      settings.positionsBarTop = top;
+    const readBarPos = () => clampBarPos(
+      typeof barPos.left === 'number' ? barPos.left : settings.positionsBarLeft,
+      typeof barPos.top === 'number' ? barPos.top : settings.positionsBarTop
+    );
+    const persistBarPos = () => {
+      const pos = readBarPos();
+      settings.positionsBarLeft = pos.left;
+      settings.positionsBarTop = pos.top;
       try {
         store.set({ [E.STORAGE_KEYS.settings]: settings });
       } catch (_) {}
     };
-    els.barGrip.addEventListener('mousedown', start);
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', stop);
+    const barSpec = {
+      start: readBarPos,
+      move: (start, dx, dy) => {
+        const pos = clampBarPos(start.left + dx, start.top + dy);
+        setBarPosition(pos.left, pos.top);
+      },
+      drop: persistBarPos,
+    };
+    if (els.barGrip) makeDraggable(els.barGrip, barSpec);
+    // O-21: while the bar is collapsed its grip is not on screen — the
+    // restore tab is all there is, so the tab itself is a drag handle. It
+    // mirrors the same --pt-bar-* variables, so one position serves both.
+    if (els.barTab) barTabDrag = makeDraggable(els.barTab, barSpec);
   }
 
   function openDashboard() { sendMessage({ type: 'pt_open_dashboard' }); }
@@ -2653,8 +2857,11 @@
 
   async function onOverlayResizeEnd() {
     window.removeEventListener('pointermove', onOverlayResizeMove);
-    if (!resizeStart || !els.box) return;
+    // DEFECT O-06: the flag must clear on EVERY exit path. The old early
+    // return before it could latch resizingOverlay=true forever, permanently
+    // disabling applyOverlaySize() for the rest of the page.
     resizingOverlay = false;
+    if (!resizeStart || !els.box) { resizeStart = null; return; }
     const w = els.box.offsetWidth;
     const h = els.box.offsetHeight;
     resizeStart = null;
@@ -2670,8 +2877,16 @@
       return;
     }
     if (panelMinimized) {
+      // O-20: the pill appears where the panel is, not at a hardcoded
+      // top-right. Read the position BEFORE hiding the box.
+      const pos = readPanelPos();
       els.box.classList.add('pt-hidden');
-      els.pill.style.display = 'block';
+      els.pill.style.right = pos.right + 'px';
+      els.pill.style.top = pos.top + 'px';
+      els.pill.style.left = 'auto';
+      // O-27: the pill is styled as a flex row (dot + label); display:block
+      // broke its centering.
+      els.pill.style.display = 'flex';
     } else {
       els.box.classList.remove('pt-hidden');
       els.pill.style.display = 'none';
@@ -3078,18 +3293,28 @@
   // Rows stream in continuously (virtualized lists, infinite scroll). A light
   // observer makes chips appear with the row instead of on the next poll.
   let rowBuyObserver = null;
+  let rowBuyDebounce = null;
   function startRowBuyObserver() {
     if (rowBuyObserver || !document.body) return;
-    let debounce = null;
     rowBuyObserver = new MutationObserver(() => {
-      if (debounce) return;
-      debounce = setTimeout(() => { debounce = null; scanRowBuys(); }, 200);
+      if (rowBuyDebounce) return;
+      rowBuyDebounce = setTimeout(() => {
+        rowBuyDebounce = null;
+        // DEFECTS O-29/O-07: the debounce used to fire one scan after
+        // teardown, re-requesting chips into a page the overlay left.
+        if (contextDead || !host) return;
+        scanRowBuys();
+      }, 200);
     });
     rowBuyObserver.observe(document.body, { childList: true, subtree: true });
-    onTeardown(() => {
-      try { rowBuyObserver && rowBuyObserver.disconnect(); } catch (_) {}
+    onTeardown(stopRowBuyObserver);
+  }
+  function stopRowBuyObserver() {
+    if (rowBuyObserver) {
+      try { rowBuyObserver.disconnect(); } catch (_) {}
       rowBuyObserver = null;
-    });
+    }
+    if (rowBuyDebounce) { clearTimeout(rowBuyDebounce); rowBuyDebounce = null; }
   }
 
   /** Paper-buy the first preset amount of a screener row's token. */
@@ -3392,17 +3617,36 @@
     return DEFAULT_LEFT;
   }
 
-  /** Position the bar once the page has painted its own header. */
-  function positionBar() {
-    if (!els.bar) return;
-    const left = typeof settings.positionsBarLeft === 'number' ? settings.positionsBarLeft : measureBarLeft();
-    const top = typeof settings.positionsBarTop === 'number' ? settings.positionsBarTop : 7;
-    els.bar.style.setProperty('--pt-bar-left', left + 'px');
-    els.bar.style.setProperty('--pt-bar-top', top + 'px');
+  // Runtime source of truth for the bar's position (the computed style of a
+  // display:none bar is not reliably readable, and parseInt round trips are
+  // exactly what DEFECT O-19 removed).
+  let barPos = { left: null, top: null };
+
+  /** Write the bar/tab position variables and remember them. */
+  function setBarPosition(left, top) {
+    barPos = { left, top };
+    if (els.bar) {
+      els.bar.style.setProperty('--pt-bar-left', left + 'px');
+      els.bar.style.setProperty('--pt-bar-top', top + 'px');
+    }
     if (els.barTab) {
       els.barTab.style.setProperty('--pt-bar-left', left + 'px');
       els.barTab.style.setProperty('--pt-bar-top', top + 'px');
     }
+  }
+
+  /** Position the bar once the page has painted its own header. */
+  function positionBar() {
+    if (!els.bar) return;
+    const left = typeof settings.positionsBarLeft === 'number' && Number.isFinite(settings.positionsBarLeft)
+      ? settings.positionsBarLeft : measureBarLeft();
+    const top = typeof settings.positionsBarTop === 'number' && Number.isFinite(settings.positionsBarTop)
+      ? settings.positionsBarTop : 7;
+    // DEFECT O-18: a saved coordinate from a bigger window is pulled back on
+    // screen rather than re-asserted; the same path runs on window resize,
+    // so shrinking the window can never strand the bar off-screen.
+    const pos = clampBarPos(left, top);
+    setBarPosition(pos.left, pos.top);
   }
 
   /**
@@ -3611,17 +3855,65 @@
     });
   }
 
-  let toastN = 0;
+  /* Toasts (DEFECT O-28). The old stack sat at top:74 — ON the panel header
+   * (top:84) at the same z — and cycled 4 slots by modulo, so a 5th toast
+   * within ~4 s overprinted the 1st. Now:
+   *  - the stack anchors to the panel's CURRENT side of the screen (same
+   *    `right` coordinate) and starts below the panel, so it follows a
+   *    dragged panel and can never cover the header it is dragged by;
+   *  - each toast owns its slot until it expires; when all slots are busy
+   *    the message queues instead of overwriting one already on screen.
+   */
+  const TOAST_SLOT_COUNT = 8;
+  const TOAST_LIFE_MS = 4200;
+  const TOAST_STEP_PX = 52;
+  const toastSlotBusy = new Array(TOAST_SLOT_COUNT).fill(false);
+  const toastQueue = [];
+
+  /** Where slot 0 goes right now: under the panel, on the panel's side. */
+  function toastBase() {
+    const vh = window.innerHeight || 600;
+    let right = 18;
+    let top = 74;
+    if (els.box) {
+      const pos = readPanelPos();
+      right = pos.right;
+      let panelH = 0;
+      try {
+        const hidden = els.box.classList && els.box.classList.contains('pt-hidden');
+        const rect = !hidden && els.box.getBoundingClientRect ? els.box.getBoundingClientRect() : null;
+        panelH = (rect && Number(rect.height)) || 0;
+      } catch (_) { /* fall back to the header clearance */ }
+      // Visible panel: start under it. Hidden/minimized: its saved spot is
+      // free below the (absent) header, so only clear the header band.
+      top = pos.top + (panelH > 0 ? panelH + 10 : 48);
+    }
+    // However tall the panel, keep at least two slots on screen.
+    return { right, top: Math.max(8, Math.min(top, vh - 2 * TOAST_STEP_PX)) };
+  }
+
   function toast(msg) {
     const root = shadow && shadow.getElementById('pt-toast-root');
     if (!root) return;
+    const slot = toastSlotBusy.indexOf(false);
+    if (slot === -1) {
+      // Every slot is on screen: queue rather than overprint (O-28).
+      if (toastQueue.length < 16) toastQueue.push(msg);
+      return;
+    }
+    toastSlotBusy[slot] = true;
+    const base = toastBase();
     const d = document.createElement('div');
     d.className = 'pt-toast';
-    d.style.top = 74 + toastN * 52 + 'px';
-    toastN = (toastN + 1) % 4;
+    d.style.top = Math.round(base.top + slot * TOAST_STEP_PX) + 'px';
+    d.style.right = Math.round(base.right) + 'px';
     d.textContent = msg;
     root.appendChild(d);
-    setTimeout(() => d.remove(), 4200);
+    setTimeout(() => {
+      try { d.remove(); } catch (_) {}
+      toastSlotBusy[slot] = false;
+      if (toastQueue.length && !contextDead) toast(toastQueue.shift());
+    }, TOAST_LIFE_MS);
   }
 
   // Prices and market caps share one readable convention across the whole
@@ -3667,25 +3959,41 @@
     if (fastDetectTimer) { clearInterval(fastDetectTimer); fastDetectTimer = null; }
     if (detectLoopTimer) { clearInterval(detectLoopTimer); detectLoopTimer = null; }
     if (barScanTimer) { clearInterval(barScanTimer); barScanTimer = null; }
-    if (rowBuyObserver) { try { rowBuyObserver.disconnect(); } catch (_) {} rowBuyObserver = null; }
+    if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
+    stopRowBuyObserver();
   }
 
   async function enableOverlay() {
+    // Idempotent (DEFECT O-05): watchStorage calls this on EVERY settings
+    // write, including the overlay's own drag/resize persists. createUI now
+    // always sets `host` (adopt-or-replace), so a live overlay returns here
+    // and can never stack a second set of timers.
     if (host) return;
     createUI();
-    detectLoopTimer = managedInterval(detectLoop, DETECT_MS);
+    if (!detectLoopTimer) detectLoopTimer = managedInterval(detectLoop, DETECT_MS);
+
+    // The host header may render after us, and SPA route changes can resize it.
+    const earlyBarTimers = [
+      setTimeout(() => { if (contextAlive()) positionBar(); }, 400),
+      setTimeout(() => { if (contextAlive()) positionBar(); }, 1500),
+    ];
+    onMountCleanup(() => { for (const id of earlyBarTimers) clearTimeout(id); });
+    // O-18: shrinking the window re-clamps BOTH floating elements so neither
+    // can be stranded off-screen. Registered per mount, torn down with it.
+    const onWindowResize = () => { positionBar(); reclampPanel(); };
+    window.addEventListener('resize', onWindowResize);
+    onMountCleanup(() => { try { window.removeEventListener('resize', onWindowResize); } catch (_) {} });
+
+    // Cheap liveness heartbeat: the MAIN-world bridge stands its sweeps down
+    // after 5 minutes without ANY content-script message (O-04/C-17), so an
+    // alive-but-quiet overlay must keep speaking.
+    if (!bridgePingTimer) bridgePingTimer = managedInterval(() => sendPadreMarker('bridge-ping'), 30_000);
 
     // Sniping cadence: while an address is detected but not yet indexed by any
     // source, retry rapidly. This is the difference between being able to
     // paper-snipe a launch and watching it happen. It stops the moment the
     // token resolves, so steady-state cost is zero.
-    // The host header may render after us, and SPA route changes can resize it.
-    setTimeout(() => { if (contextAlive()) positionBar(); }, 400);
-    setTimeout(() => { if (contextAlive()) positionBar(); }, 1500);
-    window.addEventListener('resize', positionBar);
-    onTeardown(() => { try { window.removeEventListener('resize', positionBar); } catch (_) {} });
-
-    fastDetectTimer = managedInterval(() => {
+    if (!fastDetectTimer) fastDetectTimer = managedInterval(() => {
       if (!token || !token.pending || resolving) return;
       // Give up the rapid cadence after a while; the 800ms loop still retries.
       if (pendingSince && Date.now() - pendingSince > FAST_RETRY_WINDOW_MS) return;
@@ -3695,7 +4003,7 @@
     // The positions bar runs on its own cadence, independent of the price
     // heartbeat: it must keep working on pages where no token is detected at
     // all, which is exactly when the user is browsing for the next trade.
-    barScanTimer = managedInterval(() => {
+    if (!barScanTimer) barScanTimer = managedInterval(() => {
       pollPositionPrices();
       // Cheap no-op when nothing changed, so an idle bar does not churn the
       // DOM (and cannot fight the user's horizontal scroll or a live click).
@@ -3712,6 +4020,27 @@
   function disableOverlay() {
     if (!host) return;
     stopOverlays();
+    // O-26: listeners registered per mount (drag wiring, resize re-clamp,
+    // early positionBar timeouts) die with the mount, not with the page.
+    runMountCleanups();
+    // DEFECTS O-03/C-18: overlay OFF must erase everything the overlay put
+    // on the page and release every per-token resource — the SVG chart
+    // overlay with its observers and scan timer, native chart drawings in
+    // the MAIN world, the title observer, and the background's pool
+    // subscription for the token that was live.
+    if (token && token.mint) R.onchainUnwatch(token.mint);
+    onchainLive = false;
+    stopTitleSignal();
+    if (CM) CM.destroyChartMarkers();
+    sendPadreMarker('paper-marker-clear');
+    sendPadreMarker('paper-lines-clear');
+    sendPadreMarker('gmgn-lines-clear');
+    // One belt-and-braces message that clears every bridge artifact and
+    // stops its line re-assert sweep (see 'standdown' in price-bridge.js).
+    sendPadreMarker('standdown');
+    token = null;
+    armedBuy = null;
+    lastHref = '';
     try { host.remove(); } catch (_) {}
     host = null; shadow = null; els = {};
     // The cached position-card nodes belong to the shadow tree we just removed.

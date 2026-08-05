@@ -664,6 +664,11 @@
   }
 
   function initChartMarkers() {
+    // DEFECT C-21: retire any scan interval from a previous init FIRST.
+    // The early return below used to skip the clearInterval, so a re-init
+    // that found the container immediately leaked the old timer.
+    if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+
     // Try to find the chart container immediately
     if (ensureContainer()) {
       requestRender();
@@ -671,7 +676,6 @@
     }
 
     // Chart not found yet — set up aggressive polling to find it.
-    if (scanTimer) clearInterval(scanTimer);
     let attempts = 0;
     scanTimer = setInterval(() => {
       attempts++;
@@ -704,6 +708,11 @@
     averageLines = { avgBuyPrice: null, avgSellPrice: null, avgBuyLabel: null, avgSellLabel: null, currency: 'SOL' };
     series = [];
     priceRange = { min: 0, max: 0 };
+    // DEFECT C-22: the render-skip memo must reset with the state it
+    // memoizes, or the first render after a re-init can compare equal
+    // against the previous mount's values and silently skip drawing.
+    lastRenderedRange = { min: 0, max: 0 };
+    lastRenderedCount = -1;
     lastRenderedAvgCount = 0;
   }
 

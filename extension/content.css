@@ -3,7 +3,14 @@
  * guards the host element's own placement, plus the screener row quick-buy
  * chip, which lives in the page's own DOM by design.
  */
-papertrench-host {
+/* DEFECT O-24: this must be the ID selector. The host element is a DIV with
+ * id="papertrench-host"; the old bare `papertrench-host` type selector matched
+ * nothing, so any host-page rule (e.g. `body > div { transform: … }`) could
+ * re-parent or hide the whole overlay. `all: initial` deliberately does not
+ * touch custom properties, so the shadow `:host` rule's --pt-* tokens still
+ * apply to the shadow tree.
+ */
+#papertrench-host {
   all: initial;
 }
 

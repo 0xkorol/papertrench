@@ -100,6 +100,29 @@
   let gmgnLineSpec = null;
   let gmgnRetryTimer = null;
 
+  /* ---------------- content-script liveness (DEFECTS O-04/C-17) ----------
+   * The MAIN world cannot observe extension death, so the bridge watches for
+   * SILENCE instead: every content-script message refreshes this stamp (the
+   * overlay also sends a 30 s 'bridge-ping' while enabled). After 5 minutes
+   * without any message the 1 s sweep stops re-asserting lines/marks — a
+   * dead extension must not keep repainting a frozen level forever. An
+   * explicit 'standdown' message (overlay disabled, extension teardown)
+   * clears everything immediately and silences the sweep at once.
+   */
+  const CONTENT_SILENCE_LIMIT_MS = 5 * 60_000;
+  let lastContentMessageAt = Date.now();
+
+  /* DEFECT F-26: the widget sweep must not scan forever on sites that never
+   * mount a TradingView chart. After WIDGET_SWEEP_MISS_LIMIT consecutive
+   * empty scans (~1 minute at the 1 s cadence) it drops to a 10 s cadence;
+   * a discovered widget or a fresh paper-axis/paper-lines message returns it
+   * to the fast cadence.
+   */
+  const WIDGET_SWEEP_MISS_LIMIT = 60;
+  const WIDGET_SWEEP_SLOW_EVERY = 10;
+  let widgetSweepMisses = 0;
+  let lastWidgetScanFound = false;
+
   function emit(type, payload) {
     try {
       window.postMessage({ source: OUT_TAG, type, payload }, '*');
@@ -1367,6 +1390,7 @@
 
   function patchPadreWidget() {
     const widgets = findTradingViewWidgets();
+    lastWidgetScanFound = widgets.length > 0;
     if (!widgets.length) return false;
 
     // Axiom keeps more than one live widget (a visible chart plus a preload).
@@ -1412,6 +1436,32 @@
   function handleContentMessage(event) {
     if (event.source !== window || !event.data || event.data.source !== IN_TAG) return;
     const { type, payload } = event.data;
+
+    // ANY message from the content script proves the extension is alive
+    // (O-04/C-17); a token/chart signal also revives the fast widget sweep
+    // after an F-26 stand-down. A bare 'bridge-ping' refreshes liveness only.
+    lastContentMessageAt = Date.now();
+    if (type === 'paper-axis' || type === 'paper-lines') widgetSweepMisses = 0;
+
+    if (type === 'standdown') {
+      // The content script is going away (overlay disabled, or extension
+      // reload teardown): erase every native drawing this bridge owns and
+      // stop re-asserting it. Backdating the liveness stamp silences the
+      // sweep immediately; a future content script revives it by speaking.
+      paperLineSpec = null;
+      gmgnLineSpec = null;
+      paperMarks = [];
+      paperMarkLevels.clear();
+      shapeFallbackActive = false;
+      if (fallbackCheckTimer) { clearTimeout(fallbackCheckTimer); fallbackCheckTimer = null; }
+      clearShapeFallback();
+      clearPaperAverageLines();
+      clearGmgnAverageLines();
+      clearGmgnFillMarkers();
+      refreshPadreMarks();
+      lastContentMessageAt = Date.now() - CONTENT_SILENCE_LIMIT_MS;
+      return;
+    }
 
     if (type === 'paper-axis') {
       // The page's resolved token identity: ticks, exports and drawing are
@@ -1680,6 +1730,24 @@
       anchor = { x: rect.right - 6, y: rect.top + 6, align: 'right-top' };
     }
 
+    // DEFECT O-22: the chip layer sits BELOW the PaperTrench panel/bar by
+    // design (a chip must never cover the trade panel), so a chip whose spot
+    // the overlay covers would render invisible yet swallow no clicks — a
+    // dead control. Probe the chip's own anchor point: everything the
+    // overlay draws (panel, positions bar, pill, toasts) lives in the
+    // #papertrench-host shadow tree, and elementFromPoint retargets shadow
+    // content to its host, so one id check covers all of it. Occluded chips
+    // stand down; they return the moment the panel is dragged away.
+    const chipProbeX = Math.min(Math.max(anchor.x - 10, 1), (window.innerWidth || 1) - 1);
+    const chipProbeY = Math.min(Math.max(
+      anchor.y + (anchor.align === 'right-top' ? 8 : anchor.align === 'right-bottom' ? -8 : 0),
+      1), (window.innerHeight || 1) - 1);
+    const over = document.elementFromPoint(chipProbeX, chipProbeY);
+    if (over && over !== el && !el.contains(over) && over.id === 'papertrench-host') {
+      el.style.display = 'none';
+      return true;
+    }
+
     el.style.left = anchor.x + 'px';
     el.style.top = anchor.y + 'px';
     const size = Number(entry.size) > 0 ? entry.size : 1;
@@ -1927,6 +1995,10 @@
 
   function pollChartClose() {
     const now = Date.now();
+    // F-26: a page that has produced no TradingView widget for a minute has
+    // nothing to export — stand down with the widget sweep; the slow sweep
+    // resets the miss counter the moment a chart appears.
+    if (widgetSweepMisses >= WIDGET_SWEEP_MISS_LIMIT) return;
     if (exportStartedAt && now - exportStartedAt < EXPORT_STUCK_MS) return;
     if (now - lastLiveBarAt < 1500) return; // live bars own the peg
     try { if (document.hidden) return; } catch (_) {}
@@ -1995,16 +2067,31 @@
     fastChecks += 1;
     if (patchPadreWidget() || fastChecks >= 500) clearInterval(fastTimer);
   }, 10);
+  let sweepTicks = 0;
   setInterval(() => {
-    patchPadreWidget();
-    // GMGN's chart manager mounts late and is remounted on SPA navigation;
-    // recreate any average line that is expected but not on the chart yet.
+    sweepTicks += 1;
+    // O-04/C-17: a content script that has said NOTHING for 5+ minutes is
+    // dead (extension reloaded/removed) or deliberately stood down. Stop
+    // repainting lines/marks; the transport wrappers keep forwarding ticks,
+    // and any future content-script message revives the sweep instantly.
+    if (Date.now() - lastContentMessageAt > CONTENT_SILENCE_LIMIT_MS) return;
+
+    // GMGN recovery is driven by its own chart manager, not the TradingView
+    // widget scan, so it runs whenever specs/queues exist.
     if (gmgnLineSpec && gmgnLineSpec.enabled && !gmgnRetryTimer) {
       const buyMissing = Number(gmgnLineSpec.avgBuyMcap) > 0 && !gmgnBuySlot.adapter && !gmgnBuySlot.pending;
       const sellMissing = Number(gmgnLineSpec.avgSellMcap) > 0 && !gmgnSellSlot.adapter && !gmgnSellSlot.pending;
       if (buyMissing || sellMissing) syncGmgnAverageLines();
     }
     if (gmgnMarkerQueue.length && !gmgnMarkerTimer) scheduleGmgnMarkerDrain();
+
+    // F-26: after a minute of empty scans the widget sweep (fiber walks,
+    // iframe probes) drops to every 10th tick until a chart shows up or the
+    // content script announces one (paper-axis/paper-lines resets misses).
+    const standingDown = widgetSweepMisses >= WIDGET_SWEEP_MISS_LIMIT;
+    if (standingDown && sweepTicks % WIDGET_SWEEP_SLOW_EVERY !== 0) return;
+    patchPadreWidget();
+    widgetSweepMisses = lastWidgetScanFound ? 0 : widgetSweepMisses + 1;
     // Shape-mode fills that could not draw yet (chart still booting, or the
     // site swapped to a fresh chart instance) are retried here.
     if (shapeFallbackActive && paperMarks.length && fallbackShapeHandles.size < paperMarks.length) {

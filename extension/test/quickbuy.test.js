@@ -24,7 +24,7 @@ test('preset taps route through the shared buy path when instant is on', () => {
   // so arming for unresolved tokens and the in-flight guard apply to both.
   assert.match(content, /if \(instant\) requestBuy\(Number\(b\.dataset\.amt\)\)/,
     'a preset tap must fire the order when one-click quick buy is enabled');
-  assert.match(content, /requestBuy\(amt\);\s*\n\s*\}\);\n\s*\n\s*const drag/,
+  assert.match(content, /if \(!\(amt > 0\)\) return toast\('Pick a SOL amount first'\);\s*\n\s*requestBuy\(amt\);/,
     'the BUY button must use the same shared path');
   assert.match(content, /let buyInFlight = false;/,
     'rapid taps must be guarded against stacking fills');

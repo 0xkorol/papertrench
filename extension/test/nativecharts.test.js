@@ -178,12 +178,57 @@ function runBridge(opts = {}) {
     enumerable: true,
   });
   const axiomIframe = { id: 'tradingview_ab12', parentElement: axiomParent, contentWindow: null };
+  // The Axiom DOM can appear LATE (SPA mount) — F-26 stand-down tests flip
+  // this on mid-test via env.enableAxiom().
+  let axiomVisible = Boolean(opts.axiom);
+
+  // ---- optional screener-row DOM for the chip occlusion tests (O-22) ----
+  let panelOverChip = false;
+  let rowDomNodes = null;
+  function makeChipNode(tag) {
+    return {
+      tag, style: {}, isConnected: true, children: [],
+      classList: { add() {}, remove() {}, contains() { return false; } },
+      appendChild(c) { this.children.push(c); c.parentElement = this; return c; },
+      remove() { this.isConnected = false; },
+      contains(n) { return n === this; },
+      setAttribute() {}, getAttribute() { return null; },
+      getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }),
+    };
+  }
+  if (opts.rowDom) {
+    const anchor = makeChipNode('a');
+    anchor.getAttribute = (name) => (name === 'href' ? '/meme/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' : null);
+    const row = makeChipNode('div');
+    row.getBoundingClientRect = () => ({ top: 100, left: 10, right: 510, bottom: 180, width: 500, height: 80 });
+    anchor.parentElement = row;
+    const list = makeChipNode('div');
+    list.children.push(row);
+    row.parentElement = list;
+    const body = makeChipNode('body');
+    // What elementFromPoint reports where the PANEL sits: the shadow host.
+    const hostEl = { id: 'papertrench-host' };
+    rowDomNodes = { anchor, row, list, body, hostEl };
+  }
 
   const doc = {
     getElementById: (id) => (id === 'global-tv-overlay' && gmgnMounted ? gmgnHost : null),
-    querySelector: (sel) => (opts.axiom && String(sel).includes('iframe[id^="tradingview_"]') ? axiomIframe : null),
-    querySelectorAll: (sel) => (opts.axiom && String(sel).includes('iframe[id^="tradingview_"]') ? [axiomIframe] : []),
+    querySelector: (sel) => (axiomVisible && String(sel).includes('iframe[id^="tradingview_"]') ? axiomIframe : null),
+    querySelectorAll: (sel) => {
+      const s = String(sel);
+      if (axiomVisible && s.includes('iframe[id^="tradingview_"]')) return [axiomIframe];
+      if (rowDomNodes && s === 'a.testrow') return [rowDomNodes.anchor];
+      return [];
+    },
   };
+  if (rowDomNodes) {
+    doc.body = rowDomNodes.body;
+    doc.createElement = (t) => makeChipNode(t);
+    // Probes to the LEFT of the row's right edge hit the row itself; probes
+    // near the chip's right-edge anchor hit the PaperTrench shadow host
+    // while the fake panel "covers" that spot.
+    doc.elementFromPoint = (x) => (panelOverChip && x > 400 ? rowDomNodes.hostEl : rowDomNodes.row);
+  }
 
   function FakeWebSocket() {}
   FakeWebSocket.prototype.addEventListener = () => {};
@@ -205,6 +250,8 @@ function runBridge(opts = {}) {
     WebSocket: FakeWebSocket,
     SharedWorker: undefined,
     EventSource: undefined,
+    innerWidth: 1280,
+    innerHeight: 800,
     addEventListener(type, fn) { listeners[type] = fn; },
     postMessage(message) { emitted.push(message); },
   };
@@ -233,8 +280,11 @@ function runBridge(opts = {}) {
     location: { href, hostname: new URL(href).hostname },
     console, Date: TestDate, Math, Number, String, Array, Object, Boolean, RegExp,
     Error, Set, WeakSet, WeakMap, Map, Symbol, JSON, Promise, isFinite,
+    MutationObserver: function () { this.observe = () => {}; this.disconnect = () => {}; },
     setInterval(fn) { timers.push(fn); return timers.length; },
-    clearInterval() {},
+    // Functional: the bridge's boot prober clears itself once it succeeds
+    // (or gives up), and the stand-down tests depend on that being real.
+    clearInterval(id) { if (timers[id - 1]) timers[id - 1] = () => {}; },
     setTimeout(fn) { timeouts.set(++timeoutSeq, fn); return timeoutSeq; },
     clearTimeout(id) { timeouts.delete(id); },
   };
@@ -252,6 +302,9 @@ function runBridge(opts = {}) {
     win,
     timers,
     mountGmgn: () => { gmgnMounted = true; },
+    enableAxiom: () => { axiomVisible = true; },
+    setPanelOverChip: (on) => { panelOverChip = Boolean(on); },
+    rowDebug: () => (typeof win.__ptRowChipDebug === 'function' ? win.__ptRowChipDebug() : []),
     axiomRealtime: () => axiomRealtime,
     axiomGetMarksCalls: () => axiomGetMarksCalls,
     axiomDatafeed,
@@ -1024,4 +1077,164 @@ test('a frame with no token identifier still emits an unattributed tick for anch
   const tick = env.emitted.find((m) => m.type === 'tick');
   assert.ok(tick, 'identifier-less frames must still tick — downstream banding validates them');
   assert.equal(tick.payload.mint, null);
+});
+
+/* ------------------------------------------------------------------ *
+ * 6. Lifecycle stand-down protocol (DEFECTS O-03/C-18, O-04/C-17)
+ *
+ * The MAIN-world bridge cannot observe extension death. Two mechanisms
+ * cover it: an explicit 'standdown' message (overlay disabled, extension
+ * teardown) that erases every native drawing at once, and a liveness
+ * watchdog — after 5 minutes without ANY content-script message the 1 s
+ * sweep stops re-asserting lines. The content script keeps a 30 s
+ * 'bridge-ping' heartbeat while enabled, so an alive-but-quiet overlay
+ * never trips the watchdog.
+ * ------------------------------------------------------------------ */
+
+test('O-03/C-18: standdown erases native lines, marks and GMGN artifacts at once', async () => {
+  const env = runBridge({ gmgnMounted: true, axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+  const ts = Date.now();
+
+  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.0021 });
+  env.send('gmgn-lines', { enabled: true, avgBuyMcap: 250_000_000, avgSellMcap: 300_000_000 });
+  env.send('gmgn-marker', { ts, mcap: 250_000_000, side: 'buy', text: 'PT Buy $250M' });
+  env.send('paper-marker', {
+    ts, side: 'buy', priceNative: 0.00001, priceUsd: 0.0021, mcap: 2_100_000, solAmount: 0.5, symbol: 'AX',
+  });
+  await microtasks();
+  assert.ok(env.orderLines.some((l) => !l.removed), 'lines exist before the standdown');
+  assert.ok(env.execShapes.some((s) => !s.removed), 'shapes exist before the standdown');
+
+  const linesBefore = env.orderLines.length;
+  env.send('standdown', null);
+  await microtasks();
+
+  assert.ok(env.orderLines.every((l) => l.removed), 'every native average line must be removed');
+  assert.ok(env.execShapes.every((s) => s.removed), 'every native execution shape must be removed');
+  let marks = null;
+  env.axiomDatafeed.getMarks({}, 0, Math.floor(ts / 1000) + 600, (r) => { marks = r; });
+  assert.ok(marks.every((m) => !String(m.id).startsWith('papertrench-')),
+    'no paper mark may be served after a standdown');
+
+  // The sweep is silenced immediately — it must not recreate anything.
+  env.runTimers();
+  env.runTimers();
+  await microtasks();
+  assert.equal(env.orderLines.length, linesBefore, 'a stood-down bridge must not draw new lines');
+});
+
+test('O-04/C-17: 5 minutes of content silence stops the line re-assert sweep; any message revives it', async () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers(); // boot prober patches the widget and retires itself
+
+  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.0021 });
+  await microtasks();
+  const line = env.orderLines.find((l) => l.values.setPrice === 0.0021);
+  assert.ok(line, 'the line must exist before silence');
+
+  env.runTimers(); // an alive bridge re-asserts the line every sweep
+  const aliveCalls = line.calls.length;
+  assert.ok(aliveCalls > 0, 'the sweep must have touched the line while alive');
+
+  env.advance(6 * 60_000); // no content-script message for 6 minutes
+  env.runTimers();
+  env.runTimers();
+  assert.equal(line.calls.length, aliveCalls,
+    'a silent content script means a dead extension — the sweep must stop repainting');
+
+  env.send('bridge-ping', null); // the 30 s heartbeat (or any message) lands
+  env.runTimers();
+  assert.ok(line.calls.length > aliveCalls,
+    'one content-script message must revive the sweep');
+});
+
+/* ------------------------------------------------------------------ *
+ * 7. DEFECT F-26: widget sweep stands down on chartless pages
+ * ------------------------------------------------------------------ */
+
+test('F-26: after a minute of empty scans the widget sweep drops to a slow cadence', () => {
+  const env = runBridge({}); // page with no TradingView widget at all
+  const original = env.axiomDatafeed.subscribeBars;
+
+  // Exhaust the 10 ms boot prober (self-clears after 500 empty checks) and
+  // push the 1 s sweep far past its miss limit. Time is NOT advanced, so the
+  // content-silence watchdog stays out of the picture.
+  for (let i = 0; i < 500; i++) env.runTimers();
+
+  // A widget appears while the sweep is standing down: off-cadence ticks
+  // must NOT scan for it, the every-10th tick must find it. (The fiber-scan
+  // cache holds results for 3 s; step past it so the next real scan is
+  // fresh — well inside the 5-minute liveness window.)
+  env.enableAxiom();
+  env.advance(3200);
+  let patchedAt = null;
+  for (let i = 1; i <= 10 && patchedAt === null; i++) {
+    env.runTimers();
+    if (env.axiomDatafeed.subscribeBars !== original) patchedAt = i;
+  }
+  assert.ok(patchedAt !== null, 'the slow cadence must still discover the chart within 10 ticks');
+  assert.ok(patchedAt > 1, 'during stand-down the sweep must not scan on every tick');
+
+  // The export poll is gated on the same miss counter (source contract —
+  // there is nothing to export on a page that has no widget).
+  const bridgeSrc = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
+  const pollAt = bridgeSrc.indexOf('function pollChartClose()');
+  const gateAt = bridgeSrc.indexOf('widgetSweepMisses >= WIDGET_SWEEP_MISS_LIMIT) return;', pollAt);
+  assert.ok(pollAt !== -1 && gateAt !== -1 && gateAt - pollAt < 600,
+    'pollChartClose must stand down with the widget sweep');
+});
+
+test('F-26: a paper-axis message returns the stood-down sweep to the fast cadence', () => {
+  const env = runBridge({});
+  const original = env.axiomDatafeed.subscribeBars;
+  for (let i = 0; i < 500; i++) env.runTimers(); // stand the sweep down
+
+  env.send('paper-axis', { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' });
+  env.enableAxiom();
+  env.advance(3200); // step past the fiber-scan cache
+  env.runTimers(); // FIRST tick after the message must scan again
+  assert.notEqual(env.axiomDatafeed.subscribeBars, original,
+    'a token announcement must restore the fast sweep immediately');
+});
+
+/* ------------------------------------------------------------------ *
+ * 8. DEFECT O-22: chips occluded by the PaperTrench overlay stand down
+ *
+ * The chip layer deliberately sits BELOW the panel/bar in z-order (a chip
+ * must never cover the trade panel), so a chip under the panel would be
+ * invisible yet unclickable — a dead control. The placement logic probes
+ * the chip's own anchor point with elementFromPoint; everything the
+ * overlay draws retargets to the #papertrench-host shadow host, so one id
+ * check covers panel, bar, pill and toasts.
+ * ------------------------------------------------------------------ */
+
+test('O-22: a chip whose spot the overlay covers is hidden, and returns when it moves away', () => {
+  const env = runBridge({ rowDom: true, href: 'https://axiom.trade/pulse' });
+  const spec = {
+    amount: 0.1, size: 1,
+    linkSelectors: ['a.testrow'],
+    placement: 'float',
+    buyButtonPattern: null,
+    containerMode: 'heuristic',
+  };
+
+  env.send('row-scan', spec);
+  let chips = env.rowDebug();
+  assert.equal(chips.length, 1, 'the screener row must get its chip');
+  assert.notEqual(chips[0].display, 'none', 'an unobstructed chip is visible');
+
+  // The panel now covers the chip's anchor: the periodic sweep must stand
+  // the chip down rather than leave a dead control under the panel.
+  env.setPanelOverChip(true);
+  env.runTimers();
+  chips = env.rowDebug();
+  assert.equal(chips.length, 1, 'the chip entry survives while occluded');
+  assert.equal(chips[0].display, 'none', 'an occluded chip must be hidden');
+
+  // The user drags the panel away: the next sweep restores the chip.
+  env.setPanelOverChip(false);
+  env.runTimers();
+  chips = env.rowDebug();
+  assert.notEqual(chips[0].display, 'none', 'the chip must return when the overlay moves');
 });
