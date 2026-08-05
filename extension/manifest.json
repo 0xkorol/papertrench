@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PaperTrench",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "Paper-trade Solana memecoins with live P&L, native chart fills, session replay, AI coaching, and a verifiable track record.",
   "permissions": [
     "storage",
@@ -90,6 +90,21 @@
         "https://*.twitter.com/*"
       ],
       "js": [
+        "xray-core.js",
+        "xray-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://*.x.com/*",
+        "https://twitter.com/*",
+        "https://*.twitter.com/*"
+      ],
+      "js": [
         "xwarm-main.js"
       ],
       "run_at": "document_idle",
@@ -104,7 +119,8 @@
         "https://*.twitter.com/*"
       ],
       "js": [
-        "xwarm-relay.js"
+        "xwarm-relay.js",
+        "xray-panel.js"
       ],
       "run_at": "document_idle",
       "world": "ISOLATED",

@@ -9,12 +9,13 @@
 
 
 if (typeof importScripts === 'function') {
-  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'xlinks.js');
+  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'xlinks.js', 'xray-core.js');
 }
 const RP = self.PTReplay;
 const R = self.PaperTrenchResolver;
 const FEED = self.PTOnchainFeed;
 const XL = self.PTXLinks;
+const XR = self.PTXRay;
 
 const DEFAULTS = {
   appEnabled: true,
@@ -42,6 +43,8 @@ const DEFAULTS = {
   warmXLinksEnabled: false,
   warmHoverCardsEnabled: false,
   warmHoverRowEnabled: false,
+  xrayEnabled: false,
+  xrayDeepScanEnabled: true,
   settingsRevision: 6,
   aiEndpoint: '',
   aiModel: '',
@@ -947,6 +950,298 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   });
 });
 
+/* -------------------- X-Ray (account intel ledger) --------------------
+ *
+ * Opt-in (xrayEnabled, default off). The x.com MAIN world digests the page's
+ * OWN GraphQL responses into derived facts; this worker is the ledger that
+ * remembers them across visits and the arbiter that decides whether a deep
+ * scan may spend a request.
+ *
+ * Three properties this section is responsible for:
+ *
+ *  - REVALIDATION. A digest arrives from a page-adjacent world, so every
+ *    field is re-checked here before it can touch stored state. A hostile
+ *    page can, at worst, write plausible-looking entries about accounts into
+ *    a local ledger — no request is issued on its say-so beyond the budget
+ *    below, and nothing leaves the device.
+ *  - BUDGET. Deep scans are bounded per account (cooldown) and globally
+ *    (a rolling per-minute cap) and are only ever executed by the page
+ *    itself, with its own session, against its own origin. This worker never
+ *    issues an X request — X-Ray adds no network call to the service worker.
+ *  - HONEST STORAGE. Watch-window history is what THIS device saw, and the
+ *    first sighting timestamp is never overwritten, so the panel can always
+ *    say how long "no change seen" has actually been true for.
+ */
+
+const XRAY_STORAGE_KEY = 'pt_xray';
+const XRAY_SCAN_COOLDOWN_MS = 6 * 60 * 60 * 1000; // per account, per op
+const XRAY_SCAN_PER_MINUTE = 10;
+const XRAY_TWEET_PAGES = 4; // deep-scan paging depth per profile visit
+const xrayScanStamps = [];
+const xrayPending = new Map(); // requestId -> { restId, op, plannedAt }
+
+function xrayFeatureOn(settings) {
+  return settings.appEnabled !== false && settings.xrayEnabled === true;
+}
+
+let xrayChain = Promise.resolve();
+function xraySerial(fn) {
+  const next = xrayChain.catch(() => {}).then(fn);
+  xrayChain = next.catch(() => {});
+  return next;
+}
+
+function readLedger() {
+  return new Promise((resolve) => chrome.storage.local.get([XRAY_STORAGE_KEY], (value) => {
+    if (chrome.runtime && chrome.runtime.lastError) { resolve(XR.emptyLedger()); return; }
+    const stored = value[XRAY_STORAGE_KEY];
+    if (!stored || typeof stored !== 'object') { resolve(XR.emptyLedger()); return; }
+    resolve({
+      accounts: stored.accounts && typeof stored.accounts === 'object' ? stored.accounts : {},
+      handleIdx: stored.handleIdx && typeof stored.handleIdx === 'object' ? stored.handleIdx : {},
+      order: Array.isArray(stored.order) ? stored.order : [],
+      ops: stored.ops && typeof stored.ops === 'object' ? stored.ops : {},
+    });
+  }));
+}
+
+function writeLedger(ledger) {
+  return new Promise((resolve) => chrome.storage.local.set({ [XRAY_STORAGE_KEY]: ledger }, () => resolve()));
+}
+
+/* ---- revalidation of page-adjacent input ---- */
+
+const XRAY_HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
+const XRAY_ID_RE = /^\d{1,25}$/;
+
+function xrayCleanUser(u) {
+  if (!u || typeof u !== 'object') return null;
+  if (!XRAY_ID_RE.test(String(u.restId)) || !XRAY_HANDLE_RE.test(String(u.handle))) return null;
+  const text = (v, cap) => (typeof v === 'string' ? v.slice(0, cap) : null);
+  const count = (v) => (Number.isFinite(v) && v >= 0 && v < 1e10 ? Math.floor(v) : null);
+  const stamp = (v) => (Number.isFinite(v) && v > 0 && v < 4102444800000 ? v : null);
+  const avatar = typeof u.avatar === 'string' && /^https:\/\//.test(u.avatar) ? u.avatar.slice(0, 300) : null;
+  return {
+    restId: String(u.restId),
+    handle: String(u.handle),
+    name: text(u.name, XR.LIMITS.nameChars),
+    bio: text(u.bio, XR.LIMITS.bioChars),
+    urls: Array.isArray(u.urls) ? u.urls.filter((x) => typeof x === 'string').slice(0, 12).map((x) => x.slice(0, 600)) : [],
+    avatar,
+    createdAt: stamp(u.createdAt),
+    followers: count(u.followers),
+    following: count(u.following),
+    verified: u.verified === true,
+  };
+}
+
+function xrayCleanTweet(t) {
+  if (!t || typeof t !== 'object') return null;
+  if (!XRAY_ID_RE.test(String(t.id))) return null;
+  const cas = Array.isArray(t.cas)
+    ? t.cas.filter((c) => isSolanaAddress(c)).slice(0, 12)
+    : [];
+  return {
+    id: String(t.id),
+    authorId: XRAY_ID_RE.test(String(t.authorId)) ? String(t.authorId) : null,
+    createdAt: Number.isFinite(t.createdAt) && t.createdAt > 0 && t.createdAt < 4102444800000 ? t.createdAt : null,
+    cas,
+  };
+}
+
+function xrayCleanDigest(digest) {
+  if (!digest || typeof digest !== 'object') return null;
+  if (typeof digest.op !== 'string' || !XR.OPS.has(digest.op)) return null;
+  const users = (Array.isArray(digest.users) ? digest.users : [])
+    .slice(0, XR.LIMITS.maxUsersPerDigest).map(xrayCleanUser).filter(Boolean);
+  const tweets = (Array.isArray(digest.tweets) ? digest.tweets : [])
+    .slice(0, XR.LIMITS.maxTweetsPerDigest).map(xrayCleanTweet).filter(Boolean);
+  let opShape = null;
+  if (digest.opShape && typeof digest.opShape === 'object'
+      && typeof digest.opShape.op === 'string' && XR.REPLAY_OPS.has(digest.opShape.op)
+      && typeof digest.opShape.url === 'string'
+      && digest.opShape.headers && typeof digest.opShape.headers === 'object') {
+    let sameOrigin = false;
+    try { sameOrigin = XL.isXHost(new URL(digest.opShape.url).hostname); } catch (_) { sameOrigin = false; }
+    if (sameOrigin) {
+      const headers = {};
+      for (const k of Object.keys(digest.opShape.headers).slice(0, 8)) {
+        const v = digest.opShape.headers[k];
+        if (typeof v === 'string') headers[String(k).toLowerCase().slice(0, 40)] = v.slice(0, 400);
+      }
+      opShape = { op: digest.opShape.op, url: digest.opShape.url.slice(0, 2000), headers };
+    }
+  }
+  return {
+    op: digest.op,
+    users,
+    tweets,
+    cursor: typeof digest.cursor === 'string' ? digest.cursor.slice(0, 400) : null,
+    subjectRestId: XRAY_ID_RE.test(String(digest.subjectRestId)) ? String(digest.subjectRestId) : null,
+    followersTarget: XRAY_ID_RE.test(String(digest.followersTarget)) ? String(digest.followersTarget) : null,
+    scan: digest.scan && typeof digest.scan === 'object' && typeof digest.scan.requestId === 'string'
+      ? { requestId: digest.scan.requestId.slice(0, 80), status: digest.scan.status }
+      : null,
+    opShape,
+  };
+}
+
+/** The account a digest is about, resolved against the route the panel says
+ * it is on. Route handle wins where the payload is ambiguous — a follower
+ * list contains a hundred users and only one of them is the subject. */
+function xraySubjectId(ledger, digest, routeHandle) {
+  if (digest.subjectRestId) return digest.subjectRestId;
+  if (digest.followersTarget) return digest.followersTarget;
+  if (routeHandle && XRAY_HANDLE_RE.test(routeHandle)) {
+    const known = ledger.handleIdx[routeHandle.toLowerCase()];
+    if (known) return known;
+    const hit = digest.users.find((u) => u.handle.toLowerCase() === routeHandle.toLowerCase());
+    if (hit) return hit.restId;
+  }
+  return null;
+}
+
+function xrayRecordFor(ledger, user, now) {
+  const existing = ledger.accounts[user.restId] || null;
+  const { record, changed } = XR.observeUser(existing, user, now);
+  ledger.accounts[user.restId] = record;
+  ledger.handleIdx[record.handle] = record.restId;
+  XR.touchAccount(ledger, record.restId);
+  return { record, changed };
+}
+
+async function xrayObserve(message, settings) {
+  if (!xrayFeatureOn(settings)) return { ok: false };
+  const digest = xrayCleanDigest(message.digest);
+  if (!digest) return { ok: false };
+  const routeHandle = typeof message.handle === 'string' && XRAY_HANDLE_RE.test(message.handle)
+    ? message.handle.toLowerCase() : null;
+
+  return xraySerial(async () => {
+    const now = Date.now();
+    const ledger = await readLedger();
+
+    if (digest.opShape) {
+      ledger.ops[digest.opShape.op] = {
+        url: digest.opShape.url, headers: digest.opShape.headers, at: now,
+      };
+    }
+    if (digest.scan) {
+      const pending = xrayPending.get(digest.scan.requestId);
+      if (pending) {
+        xrayPending.delete(digest.scan.requestId);
+        const failed = digest.scan.status !== 200;
+        const record = ledger.accounts[pending.restId];
+        if (record) record.lastDeepScanAt = now;
+        if (failed && (digest.scan.status === 'no_shape' || Number(digest.scan.status) >= 400)) {
+          // The remembered shape no longer works (X rotated its query id, or
+          // rate-limited us). Forget it rather than retry it every visit.
+          delete ledger.ops[pending.op];
+        }
+      }
+    }
+
+    // Every user in the payload gets its own record — that is what makes a
+    // notable follower's own history available the moment you click through.
+    for (const user of digest.users) xrayRecordFor(ledger, user, now);
+
+    const subjectId = xraySubjectId(ledger, digest, routeHandle);
+    let intel = null;
+    let scanAgain = false;
+
+    if (subjectId && ledger.accounts[subjectId]) {
+      const record = ledger.accounts[subjectId];
+      XR.observeTweets(record, digest.tweets, now);
+
+      if (XR.FOLLOWER_OPS.has(digest.op) && digest.followersTarget === subjectId) {
+        const source = digest.op === 'FollowersYouKnow' ? 'you_follow' : 'followers';
+        const others = digest.users.filter((u) => u.restId !== subjectId && u.followers !== null);
+        if (others.length) XR.mergeSmart(record, others, source, now);
+      }
+      if (digest.cursor && (digest.op === 'UserTweets' || digest.op === 'UserTweetsAndReplies')) {
+        record.scanCursor = digest.cursor;
+      }
+      XR.touchAccount(ledger, subjectId);
+      intel = XR.assembleIntel(record, now);
+      scanAgain = digest.scan !== null && digest.scan.status === 200;
+    }
+
+    await writeLedger(ledger);
+    return { ok: true, intel, scanAgain };
+  });
+}
+
+async function xrayGet(message, settings) {
+  if (!xrayFeatureOn(settings)) return { ok: false };
+  const handle = typeof message.handle === 'string' && XRAY_HANDLE_RE.test(message.handle)
+    ? message.handle.toLowerCase() : null;
+  if (!handle) return { ok: false };
+  const ledger = await readLedger();
+  const restId = ledger.handleIdx[handle];
+  const record = restId ? ledger.accounts[restId] : null;
+  if (!record) return { ok: true, intel: null };
+  return { ok: true, intel: XR.assembleIntel(record, Date.now()) };
+}
+
+/** Decide the ONE request (if any) worth spending on this account right now.
+ * Preference order: tweet history first (CA history is the highest-value
+ * missing piece and needs paging), then the followers-you-know edge, then a
+ * follower page. Returns null when the budget says no — the passive layer
+ * keeps working regardless. */
+async function xrayPlan(message, settings) {
+  if (!xrayFeatureOn(settings)) return { ok: false };
+  if (settings.xrayDeepScanEnabled === false) return { ok: true, scan: null };
+  if (!XRAY_ID_RE.test(String(message.restId))) return { ok: false };
+
+  const now = Date.now();
+  while (xrayScanStamps.length && now - xrayScanStamps[0] > 60_000) xrayScanStamps.shift();
+  if (xrayScanStamps.length >= XRAY_SCAN_PER_MINUTE) return { ok: true, scan: null };
+  for (const [id, pending] of xrayPending) {
+    if (now - pending.plannedAt > 30_000) xrayPending.delete(id);
+  }
+  if (xrayPending.size >= 2) return { ok: true, scan: null };
+
+  return xraySerial(async () => {
+    const ledger = await readLedger();
+    const record = ledger.accounts[String(message.restId)];
+    if (!record) return { ok: true, scan: null };
+
+    let op = null;
+    let cursor = null;
+    const pagesLeft = (record.tweetRing.length / 20) < XRAY_TWEET_PAGES;
+    if (record.scanCursor && pagesLeft && ledger.ops.UserTweets) {
+      op = 'UserTweets';
+      cursor = record.scanCursor;
+    } else if (now - (record.lastDeepScanAt || 0) > XRAY_SCAN_COOLDOWN_MS) {
+      if (!record.smartAt && ledger.ops.FollowersYouKnow) op = 'FollowersYouKnow';
+      else if (!record.smartAt && ledger.ops.BlueVerifiedFollowers) op = 'BlueVerifiedFollowers';
+      else if (!record.tweetRing.length && ledger.ops.UserTweets) op = 'UserTweets';
+    }
+    if (!op) return { ok: true, scan: null };
+
+    const shape = ledger.ops[op];
+    if (!shape) return { ok: true, scan: null };
+    const requestId = 'ptx-' + now.toString(36) + '-' + Math.floor(Math.random() * 1e9).toString(36);
+    xrayPending.set(requestId, { restId: String(message.restId), op, plannedAt: now });
+    xrayScanStamps.push(now);
+    record.lastDeepScanAt = now;
+    if (op === 'UserTweets' && cursor) record.scanCursor = null; // consumed
+    await writeLedger(ledger);
+
+    return {
+      ok: true,
+      scan: {
+        requestId,
+        op,
+        userId: String(message.restId),
+        cursor,
+        count: op === 'UserTweets' ? 40 : 20,
+        shape: { url: shape.url, headers: shape.headers },
+      },
+    };
+  });
+}
+
 /* -------------------- message routing -------------------- */
 
 const BASE58_RE = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
@@ -1059,6 +1354,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         warmSpaResult(message, sender);
         sendResponse({ ok: true });
         break;
+
+      case 'pt_xray_observe':
+        sendResponse(await xrayObserve(message, settings));
+        break;
+
+      case 'pt_xray_get':
+        sendResponse(await xrayGet(message, settings));
+        break;
+
+      case 'pt_xray_plan':
+        sendResponse(await xrayPlan(message, settings));
+        break;
+
+      case 'pt_open_share': {
+        // The overlay's Flex button: open the dashboard straight into the
+        // share composer for this mint (newest round, or the open position).
+        const mint = typeof message.mint === 'string' ? message.mint : '';
+        chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html#flex=' + encodeURIComponent(mint)) });
+        sendResponse({ ok: true });
+        break;
+      }
 
       case 'pt_clear_recordings':
         // The popup's reset promises recordings go too, but the popup is

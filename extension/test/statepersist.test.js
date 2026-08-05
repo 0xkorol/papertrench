@@ -815,8 +815,10 @@ test('O-06: a bad resize end can never latch resizingOverlay forever', () => {
   const content = contentSrc();
   const start = content.indexOf('async function onOverlayResizeEnd()');
   const block = content.slice(start, content.indexOf('\n  }', start) + 4);
+  // Updated with the four-corner/capture rework: the guard now reads the
+  // captured snapshot (start), and the flag still clears BEFORE it.
   const clearAt = block.indexOf('resizingOverlay = false;');
-  const guardAt = block.indexOf('if (!resizeStart || !els.box)');
+  const guardAt = block.indexOf('if (!start || !els.box)');
   assert.ok(clearAt !== -1 && guardAt !== -1 && clearAt < guardAt,
     'the flag must clear BEFORE any early return, or applyOverlaySize dies for the page');
 });

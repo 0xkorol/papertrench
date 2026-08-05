@@ -590,3 +590,46 @@ test("the dashboard offers Share on live open positions", () => {
   assert.match(block, /Number\.isFinite\(lastUsd\) && lastUsd > 0 \? qty \* lastUsd : null/,
     "USD value only from a genuinely recorded mark — no fabricated conversion");
 });
+
+/* ------------- maintainer trade report: resize + closed-card fixes ------- */
+
+test("resize: every corner grips, capture guarantees un-stick, top corners keep the bottom planted", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const content = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+
+  // Four grips exist and share one start handler with a corner argument.
+  for (const c of ["br", "tl", "tr", "bl"]) {
+    assert.ok(content.includes(`data-corner="${c}"`), `corner ${c} must be a grip`);
+  }
+  const start = content.slice(content.indexOf("function onOverlayResizeStart("), content.indexOf("function onOverlayResizeMove("));
+  assert.match(start, /setPointerCapture\(e\.pointerId\)/,
+    "capture is the un-stick fix — a cancelled gesture must still end the drag");
+  assert.match(start, /addEventListener\(.pointercancel., onOverlayResizeEnd\)/,
+    "pointercancel must end the drag like pointerup");
+  const end = content.slice(content.indexOf("async function onOverlayResizeEnd("), content.indexOf("function setPanelVisible("));
+  assert.match(end, /releasePointerCapture/, "capture is released on every exit");
+  assert.match(end, /removeEventListener\(.pointercancel./, "cancel listener removed on end");
+  const move = content.slice(content.indexOf("function onOverlayResizeMove("), content.indexOf("async function onOverlayResizeEnd("));
+  assert.match(move, /resizeStart\.top \+ \(resizeStart\.h - h\)/,
+    "top-corner drags move top with the clamped height so the bottom edge stays planted");
+});
+
+test("the closed P&L card renders once per close (no blink) and carries Flex", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const content = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const fn = content.slice(content.indexOf("function renderClosedPnl("), content.indexOf("function closedAgo("));
+
+  assert.match(fn, /key === closedRenderKey/,
+    "an unchanged close must only update the ago-text — rebuilding re-ran the entry animation (the blink)");
+  assert.match(fn, /pt-flex-btn/, "the card must carry the Flex button");
+  assert.match(fn, /losses also/, "losses are flexable by design — the intent is documented");
+  assert.match(fn, /pt_open_share/, "Flex routes through the background to the dashboard composer");
+
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  assert.match(bg, /case .pt_open_share.:/, "background must open the composer deep link");
+  const dash = fs.readFileSync(path.join(__dirname, "..", "dashboard.js"), "utf8");
+  assert.match(dash, /\[#&\]flex=/, "the dashboard must route the #flex deep link");
+  assert.match(dash, /openShareCardForPosition\(mint\)/, "an open position (partial exit) cards as OPEN");
+});

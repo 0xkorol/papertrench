@@ -3,6 +3,26 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.5.2 — 2026-08-05
+
+Three fixes straight from the maintainer taking a live trade.
+
+- **The resize grip can never stick again.** A cancelled gesture (misclick,
+  drag out of the window, context menu) used to leave the drag latched — the
+  panel kept resizing with every mouse move. Pointer capture now guarantees
+  a terminal event, and pointercancel ends the drag like pointerup.
+- **Resize from any corner.** All four corners are grips. The panel is
+  right/top-anchored, so left corners grow it leftward from the planted
+  right edge, and top corners grow it upward while the bottom edge stays
+  planted.
+- **Flex it — wins AND losses.** The Closed P&L card in the overlay now has
+  a Flex button that opens the share composer for that exact result (the
+  newest round, or the open position after a partial exit). Losses are
+  flexable by design; the PAPER watermark rides along either way.
+- **The Closed P&L card stopped blinking.** It was being rebuilt on every
+  heartbeat, re-running its entry animation each time. It now renders once
+  per close; only the how-long-ago text updates in place.
+
 ## v2.5.1 — 2026-08-05
 
 Spotted in the maintainer stream footage: the real terminals card an OPEN

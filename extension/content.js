@@ -1907,6 +1907,27 @@
       cursor: nwse-resize; pointer-events: auto;
       transition: color 0.12s;
     }
+    /* Corner grips: every corner resizes. The three extra grips are
+       invisible hit areas; the panel is right/top-anchored so width always
+       grows leftward from the planted right edge, and top-corner drags move
+       the top offset with the clamped height so the bottom edge stays
+       planted. */
+    .pt-rz-tl, .pt-rz-tr, .pt-rz-bl {
+      position: absolute; z-index: 6; width: 14px; height: 14px;
+      pointer-events: auto; background: transparent;
+    }
+    .pt-rz-tl { left: 0; top: 0; cursor: nwse-resize; }
+    .pt-rz-tr { right: 0; top: 0; cursor: nesw-resize; }
+    .pt-rz-bl { left: 0; bottom: 0; cursor: nesw-resize; }
+    .pt-flex-btn {
+      margin-left: 6px; padding: 2px 9px; border-radius: 999px; cursor: pointer;
+      background: rgba(144, 168, 250, 0.14); border: 1px solid rgba(144, 168, 250, 0.35);
+      color: #B9C8FF; font-size: 8.5px; font-weight: 800; letter-spacing: 0.6px;
+      font-family: inherit; text-transform: uppercase;
+      transition: background 0.12s;
+    }
+    .pt-flex-btn:hover { background: rgba(144, 168, 250, 0.26);
+    }
     .pt-resize:hover { color: var(--pt-amber); }
     .pt-resize:active { color: #fff; }
 
@@ -2777,7 +2798,10 @@
             <span id="pt-site"></span>
             <span><a id="pt-reset">Reset wallet</a> · <a id="pt-settings">Settings</a></span>
           </div>
-          <div class="pt-resize" id="pt-resize" title="Resize">${ICONS.resize}</div>
+          <div class="pt-resize" id="pt-resize" data-corner="br" title="Resize">${ICONS.resize}</div>
+          <div class="pt-rz-tl" data-corner="tl" title="Resize"></div>
+          <div class="pt-rz-tr" data-corner="tr" title="Resize"></div>
+          <div class="pt-rz-bl" data-corner="bl" title="Resize"></div>
         </div>
         <button class="pt-minipill" id="pt-pill"><span class="pt-dot on"></span><span id="pt-pill-text">PAPER</span></button>
         <div id="pt-toast-root"></div>
@@ -2840,7 +2864,10 @@
     if (els.visibility) els.visibility.addEventListener('click', toggleOverlayAutoHide);
     const quickReset = shadow.getElementById('pt-quickreset');
     if (quickReset) quickReset.addEventListener('click', () => onQuickResetTap(quickReset));
-    if (els.resize) els.resize.addEventListener('pointerdown', onOverlayResizeStart);
+    // Every corner is a resize grip (reported: "should be able to be resized
+    // from all four corners").
+    shadow.querySelectorAll('[data-corner]').forEach((grip) =>
+      grip.addEventListener('pointerdown', (e) => onOverlayResizeStart(e, grip.dataset.corner)));
     shadow.getElementById('pt-min').addEventListener('click', () => {
       panelMinimized = true;
       setPanelVisible(true);
@@ -3013,7 +3040,7 @@
     };
   }
 
-  function onOverlayResizeStart(e) {
+  function onOverlayResizeStart(e, corner) {
     if (!els.box) return;
     e.preventDefault();
     resizingOverlay = true;
@@ -3022,32 +3049,66 @@
       y: e.clientY,
       w: els.box.offsetWidth,
       h: els.box.offsetHeight,
+      top: readPanelPos().top,
+      corner: corner || 'br',
+      pointerId: e.pointerId,
+      grip: e.currentTarget,
     };
+    // Pointer CAPTURE is the un-stick fix (reported: a misclick "doesn't
+    // actually unclick"): the old window-listener-only pattern waited for a
+    // pointerup that never came when the gesture was cancelled (drag out of
+    // window, context menu, touch cancel), leaving the drag latched on every
+    // later mouse move. Capture guarantees a terminal event fires.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
     window.addEventListener('pointermove', onOverlayResizeMove, { passive: false });
-    window.addEventListener('pointerup', onOverlayResizeEnd, { once: true });
+    window.addEventListener('pointerup', onOverlayResizeEnd);
+    window.addEventListener('pointercancel', onOverlayResizeEnd);
   }
 
   function onOverlayResizeMove(e) {
     if (!resizingOverlay || !resizeStart || !els.box) return;
     e.preventDefault();
-    const nextW = resizeStart.w + (e.clientX - resizeStart.x);
-    const nextH = resizeStart.h + (e.clientY - resizeStart.y);
-    const { w, h } = clampOverlaySize(nextW, nextH);
+    const dx = e.clientX - resizeStart.x;
+    const dy = e.clientY - resizeStart.y;
+    const c = resizeStart.corner;
+    // Right/top-anchored panel: width always adjusts the LEFT edge (the
+    // right edge is planted), so left-corner drags invert dx. Top-corner
+    // drags grow upward: `top` follows the clamped height so the bottom
+    // edge stays planted.
+    const wantW = (c === 'br' || c === 'tr') ? resizeStart.w + dx : resizeStart.w - dx;
+    const wantH = (c === 'br' || c === 'bl') ? resizeStart.h + dy : resizeStart.h - dy;
+    const { w, h } = clampOverlaySize(wantW, wantH);
     els.box.style.width = `${w}px`;
     els.box.style.height = `${h}px`;
+    if (c === 'tr' || c === 'tl') {
+      els.box.style.top = `${Math.max(0, resizeStart.top + (resizeStart.h - h))}px`;
+    }
   }
 
   async function onOverlayResizeEnd() {
     window.removeEventListener('pointermove', onOverlayResizeMove);
+    window.removeEventListener('pointerup', onOverlayResizeEnd);
+    window.removeEventListener('pointercancel', onOverlayResizeEnd);
+    const start = resizeStart;
+    if (start && start.grip && start.pointerId !== undefined) {
+      try { start.grip.releasePointerCapture(start.pointerId); } catch (_) {}
+    }
     // DEFECT O-06: the flag must clear on EVERY exit path. The old early
     // return before it could latch resizingOverlay=true forever, permanently
     // disabling applyOverlaySize() for the rest of the page.
     resizingOverlay = false;
-    if (!resizeStart || !els.box) { resizeStart = null; return; }
-    const w = els.box.offsetWidth;
-    const h = els.box.offsetHeight;
     resizeStart = null;
-    settings = { ...settings, overlayWidth: w, overlayHeight: h };
+    if (!start || !els.box) return;
+    const next = {
+      ...settings,
+      overlayWidth: els.box.offsetWidth,
+      overlayHeight: els.box.offsetHeight,
+    };
+    if (start.corner === 'tr' || start.corner === 'tl') {
+      const top = parseInt(els.box.style.top, 10);
+      next.panelTop = Number.isFinite(top) ? Math.max(0, top) : start.top;
+    }
+    settings = next;
     await store.set({ [E.STORAGE_KEYS.settings]: settings });
   }
 
@@ -4033,13 +4094,27 @@
    * Keep the newest realized result visible after a sell. Full exits show the
    * complete round-trip result; partial exits show the realized slice.
    */
+  let closedRenderKey = null;
+
   function renderClosedPnl() {
     if (!els.closed) return;
     const closed = token && E.latestClosedPnl(state, token.mint);
     if (!closed) {
+      closedRenderKey = null;
       if (els.closed.childNodes.length) els.closed.textContent = '';
       return;
     }
+
+    // Rebuilding the card on every heartbeat re-ran its entry animation —
+    // the reported "blinking". Same result: only the ago-text updates,
+    // in place; the card itself renders ONCE per close.
+    const key = `${closed.kind}·${closed.closedAt}·${closed.pnlSol}`;
+    if (key === closedRenderKey && els.closed.childNodes.length) {
+      const agoMeta = els.closed.querySelector('.pt-closed-meta');
+      if (agoMeta) agoMeta.textContent = `Returned ${E.fmt(closed.returnedSol, 4)} SOL · ${closedAgo(closed.closedAt)}`;
+      return;
+    }
+    closedRenderKey = key;
 
     const sign = closed.pnlSol >= 0 ? '+' : '';
     const pctSign = closed.pnlPct >= 0 ? '+' : '';
@@ -4054,11 +4129,27 @@
     const title = document.createElement('span');
     title.className = 'pt-closed-title';
     title.textContent = 'Closed P&L';
+    const right = document.createElement('span');
+    right.style.display = 'inline-flex';
+    right.style.alignItems = 'center';
     const status = document.createElement('span');
     status.className = 'pt-closed-badge';
     status.textContent = badge;
+    // Flex the result — wins AND losses ("people might wanna flex their
+    // losses also"). Opens the share composer for this exact outcome: the
+    // dashboard cards the newest round for the mint, or the open position
+    // after a partial exit.
+    const flex = document.createElement('button');
+    flex.className = 'pt-flex-btn';
+    flex.textContent = 'Flex';
+    flex.title = 'Open the share card for this result';
+    flex.addEventListener('click', () => {
+      if (token && token.mint) sendMessage({ type: 'pt_open_share', mint: token.mint });
+    });
+    right.appendChild(status);
+    right.appendChild(flex);
     head.appendChild(title);
-    head.appendChild(status);
+    head.appendChild(right);
 
     const pnl = document.createElement('div');
     pnl.className = `pt-closed-pnl ${closed.pnlSol >= 0 ? 'pt-green' : 'pt-red'}`;

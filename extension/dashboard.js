@@ -214,6 +214,22 @@ async function init() {
   // sidebar equity) update IN PLACE after each change check — they never
   // rebuild a section, so scroll and hover survive the 800 ms heartbeat.
   setInterval(() => { refreshIfChanged().then(refreshLiveDerived).catch(() => {}); }, 4000);
+
+  // The overlay's Flex button lands here: #flex=<mint> opens the share
+  // composer for that coin — the open position if one exists (the partial-
+  // exit case), else the newest round. One-shot: the hash is cleared so a
+  // reload of this tab is just the dashboard.
+  const flexMatch = /[#&]flex=([^&]+)/.exec(location.hash || '');
+  if (flexMatch) {
+    const mint = decodeURIComponent(flexMatch[1]);
+    try { history.replaceState(null, '', location.pathname); } catch (_) {}
+    if ((state.positions || {})[mint]) {
+      openShareCardForPosition(mint);
+    } else {
+      const round = (state.rounds || []).find((r) => r.mint === mint);
+      if (round) openShareCard(round.id);
+    }
+  }
 }
 
 /**
