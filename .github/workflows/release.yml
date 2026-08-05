@@ -12,6 +12,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Guard against a mid-batch tag
+        # 2026-08-05: a v* tag was pushed pointing several commits BEHIND the
+        # main tip that landed in the same push, and CI published an
+        # incomplete zip that had to be superseded (v2.7.0 -> v2.7.1).
+        # Releases here are always cut from the tip of main, so a tag that
+        # does not match origin/main's head is a mistake by construction —
+        # fail before anything is published (published releases are
+        # immutable; users verify hashes). If a release must ever be cut
+        # from an older commit, build and upload it manually.
+        run: |
+          git fetch --quiet origin main
+          MAIN_TIP="$(git rev-parse origin/main)"
+          if [ "$GITHUB_SHA" != "$MAIN_TIP" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, but origin/main is at ${MAIN_TIP}."
+            echo "::error::Mid-batch tag? Nothing was published. Delete the tag, finish the batch, re-tag the tip."
+            exit 1
+          fi
+      - name: Verify the manifest agrees with the tag
+        # The tag name is the single source of the zip's version string; a
+        # tag whose manifest disagrees would publish a zip that lies about
+        # itself.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST="$(python3 -c "import json; print(json.load(open('extension/manifest.json'))['version'])")"
+          if [ "$VERSION" != "$MANIFEST" ]; then
+            echo "::error::Tag says ${VERSION} but manifest.json says ${MANIFEST}. Nothing was published."
+            exit 1
+          fi
       - name: Package extension
         # Zip the *contents* of extension/ so manifest.json sits at the zip
         # root. Chrome's "Load unpacked" needs manifest.json at the top level
