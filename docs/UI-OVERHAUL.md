@@ -21,6 +21,17 @@ rule, generalized).
 
 ### Wave 1 — the clean-up (quick wins, both audits)
 
+Landed: overlay 1–9 (one honesty cue; focus CSS bugs; touch-action + grab
+cursors + 5px threshold; honest cost chips; one feed-health element;
+restore/resize re-clamp with measure-or-don't-move; composite close toast;
+no pre-selected preset; mint copies; trench flag gaming-only; footer reset
+gone — two-tap ⟲ everywhere) · dashboard 13–14, 16–21 (bug pair; dead
+replay CSS; warm terminal links in Settings; Total-return tile dropped;
+receipts heading demoted; ranking prose behind details; X-Ray paragraph;
+one slider spec). Open: overlay 12 (radii/color tokenize — folds into Wave
+2's token pass), dashboard 15 (renames + their pinned tests) and 22 (stack
+rule — folds into Wave 2).
+
 Overlay (content.js):
 1. PAPER stated once per surface: keep the banner; delete the watermark div
    and the buy button "(PAPER)" suffix; bar brand only when the panel is

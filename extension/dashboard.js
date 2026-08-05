@@ -953,9 +953,7 @@ function renderOverview(el) {
   // and every value carries an explicit sign — the old Worst tile dropped it.
   el.innerHTML = `
     ${renderOnboarding()}
-    <div class="grid3" style="margin-bottom:16px">
-      ${statTile('Total return', `${stats.equityVsStart >= 0 ? '+' : ''}${fmt(stats.equityVsStart, 3)} SOL`, stats.equityVsStart >= 0 ? 'green' : 'red',
-        settings.balanceStartSol ? `${stats.equityVsStart >= 0 ? '+' : ''}${((stats.equityVsStart / settings.balanceStartSol) * 100).toFixed(1)}% on ${fmt(settings.balanceStartSol, 2)} SOL` : '')}
+    <div class="grid2" style="margin-bottom:16px">
       ${statTile('Best round', best ? `${best.pnlSol >= 0 ? '+' : ''}${fmt(best.pnlSol, 3)} SOL` : '—', best && best.pnlSol < 0 ? 'red' : 'green', best ? `${best.symbol} · ${best.pnlPct >= 0 ? '+' : ''}${best.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
       ${statTile('Worst round', worst ? `${worst.pnlSol >= 0 ? '+' : ''}${fmt(worst.pnlSol, 3)} SOL` : '—', worst && worst.pnlSol >= 0 ? 'green' : 'red', worst ? `${worst.symbol} · ${worst.pnlPct >= 0 ? '+' : ''}${worst.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
     </div>
@@ -3153,8 +3151,9 @@ function renderLeaderboard(el) {
     </div>
 
     <div class="card" style="margin-top:16px">
-      <h3>How ranking is kept honest</h3>
-      <ul style="margin:0;padding-left:18px;color:var(--dim);font-size:12.5px;line-height:1.65">
+      <details>
+      <summary>How ranking is kept honest</summary>
+      <ul style="margin:8px 0 0;padding-left:18px;color:var(--dim);font-size:12.5px;line-height:1.65">
         <li><strong>Ordering is provable.</strong> Each fill commits to the hash of the one before it, so a trade cannot be inserted, removed, or reordered afterwards.</li>
         <li><strong>Entries are pre-committed.</strong> A fill is hashed when it is made, before the outcome is known, so a winning entry cannot be backdated.</li>
         <li><strong>Prices are re-checkable.</strong> Every fill records mint, price and timestamp, so a verifier can re-fetch real price history and reject fills at prices that never existed.</li>
@@ -3162,6 +3161,7 @@ function renderLeaderboard(el) {
         <li><strong>Bankroll travels with the record.</strong> Your declared starting balance is part of the committed data, so results are compared by return on bankroll — not by absolute SOL, which a bigger deposit would inflate for free.</li>
         <li><strong>Stated plainly:</strong> this is evidence, not proof. Anyone can run modified code locally, so final standings must be recomputed server-side from the chain — never from the number this app displays.</li>
       </ul>
+      </details>
     </div>`;
 }
 
@@ -3626,7 +3626,7 @@ function renderTurboCard() {
         <p class="dim" style="margin-top:0;font-size:12px;line-height:1.55">Measured on this machine, stored locally, never sent anywhere. Speed claims get receipts or they do not get made.</p>
         ${routes.length ? routeRows : '<div class="dim" style="font-size:12px;padding:3px 0">No warm opens recorded yet — Instant X links and terminal hops will record here as you use them.</div>'}
         <div class="field" style="margin:10px 0 0"><label></label><small><strong>What the number is:</strong> background routing latency — the time from your click reaching PaperTrench to the warm tab being told where to go. It is NOT page-ready time: the page still draws itself after routing. Median over the last 50 samples per route.</small></div>
-        <h3 style="margin-top:16px">Main-thread stalls</h3>
+        <div class="lab" style="margin-top:16px;font-size:9.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:var(--faint)">Main-thread stalls</div>
         ${jank.length ? jankLines : '<div class="dim" style="font-size:12px;padding:3px 0">No pages watched long enough yet — at least 30 seconds of visible time on a trading site is needed before a rate is shown.</div>'}
         <div class="field" style="margin:10px 0 0"><label></label><small><strong>What the number is:</strong> the browser's own "long task" measure — any main-thread task over 50 ms — counted only while the page is visible and flushed at most once a minute. PaperTrench does not claim credit for this number in either direction; "earlier → lately" is your before/after context: change one thing (a PaperTrench toggle, a site setting), trade a while, compare.</small></div>
       </div>`;
@@ -3722,6 +3722,7 @@ function renderSettings(el) {
       <div class="card">
         <h3>Instant X links</h3>
         <div class="field field-check"><label><input type="checkbox" id="set-warm-x" ${settings.warmXLinksEnabled === true ? 'checked' : ''}> Instant X links</label><small>X posts, profiles, communities, and CA searches clicked on a trading site open in a kept-warm viewer tab (~0.5s instead of ~3.5s), with hover prefetch. Keeps one muted background x.com tab while on. Ctrl/Cmd/middle-click always opens normal tabs.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-warm-everywhere" ${settings.warmEverywhereEnabled === true ? 'checked' : ''}> Instant terminal links</label><small>The same warm-viewer treatment for pump.fun, Solscan and cross-terminal links. Close a warm tab and it stays closed until you actually click that destination again.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-warm-cards" ${settings.warmHoverCardsEnabled === true ? 'checked' : ''}> Tweet preview card on hover</label><small>Hover an X link and a large readable preview of the post renders right on the page — the card itself is the click target, so no aiming at a 14px icon. Deleted posts say so before you click. Uses X's public oEmbed endpoint (no login, no tracking — see docs/PERMISSIONS.md).</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-warm-row" ${settings.warmHoverRowEnabled === true ? 'checked' : ''}> Preview from anywhere on the row</label><small>Rest the cursor about a third of a second anywhere on a token row and its X preview appears — no need to find the icon at all. Needs Instant X links on.</small></div>
       </div>
@@ -3729,7 +3730,7 @@ function renderSettings(el) {
         <h3>X-Ray</h3>
         <div class="field field-check"><label><input type="checkbox" id="set-xray" ${settings.xrayEnabled === true ? 'checked' : ''}> X-Ray account intel on x.com</label><small>On any X profile or post, a card appears immediately with account age, follower counts, bio / display-name / @handle changes, contract addresses the account has posted, and Smart Following (its biggest followers). Built from the data the X page itself loads — no third-party service, no account of yours is used to follow anyone, nothing leaves this device.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-xray-deep" ${settings.xrayDeepScanEnabled !== false ? 'checked' : ''}> Deep scan (read further back)</label><small>Lets X-Ray ask X for a few more pages of the account's posts and its follower list — the same requests the page makes when you scroll, throttled hard and only while you are looking at that account. Off means X-Ray only uses what the page loads on its own.</small></div>
-        <div class="field field-check"><label><small><strong>Honest limits:</strong> change history starts the first time this device sees an account — X-Ray cannot know a bio it never saw, and the card always states the date it started watching. CA history and Smart Following come from posts and follower lists actually read, so they are a floor, never a complete record.</small></label></div>
+        <p class="dim" style="font-size:11.5px;line-height:1.6;margin:8px 0 0"><strong>Honest limits:</strong> change history starts the first time this device sees an account — X-Ray cannot know a bio it never saw, and the card always states the date it started watching. CA history and Smart Following come from posts and follower lists actually read, so they are a floor, never a complete record.</p>
       </div>
       ${renderTurboCard()}
     </div>
@@ -3984,6 +3985,7 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     panelFocusMode: document.getElementById('set-focus-mode').checked,
     gamingModeEnabled: document.getElementById('set-gaming-mode').checked,
     warmXLinksEnabled: document.getElementById('set-warm-x').checked,
+    warmEverywhereEnabled: document.getElementById('set-warm-everywhere').checked,
     warmHoverCardsEnabled: document.getElementById('set-warm-cards').checked,
     warmHoverRowEnabled: document.getElementById('set-warm-row').checked,
     xrayEnabled: document.getElementById('set-xray').checked,
