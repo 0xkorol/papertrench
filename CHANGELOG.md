@@ -10,7 +10,9 @@ Update from v2.8.0 — it matters this time.
 - **v2.8.0 shipped with attestation-chain recording broken.** The release
   accidentally carried half of an in-flight migration: fills asked for the
   new segmented chain store, which was not aboard, so every paper fill made
-  on v2.8.0 silently failed to append to your local attestation chain.
+  on v2.8.0 failed to append to your local attestation chain (the honest
+  "could not be added to the verification chain" toast fired each time —
+  the failure was visible, the chain simply could not record).
   Your wallet, balances and P&L were never affected — the chain is the
   tamper-evidence layer used by leaderboard verification. On v2.8.1 the
   chain records again; fills made during the v2.8.0 window are simply
