@@ -50,6 +50,18 @@ video evidence doing the heavy lifting.
   card math now lives in one shared derivation (pnlcard.js) used by both
   composers, so a card can never show different numbers depending on where
   you opened it. The PAPER watermark rides along, as always.
+- **Instant pump.fun & Solscan links (opt-in).** The Instant X viewer idea,
+  generalized: with the new toggle on, pump.fun and Solscan links from your
+  terminal open into up to two muted background viewer tabs — already warm
+  when you get there, with hover prefetch. Ctrl/click bypasses the viewer
+  and opens a normal tab. Off by default; the toggle says what it costs.
+- **PaperTrench off costs the page nothing.** The feed-demand gate: when no
+  consumer exists for price frames (overlay disabled, wrong page, chips
+  off), the bridge drops them before the body copy and the JSON parse —
+  zero parsing donated to the host site.
+- **Chips stopped fighting the page for layout.** Chip positioning now runs
+  in read/write phases with diffed style writes, so screener chips no
+  longer thrash layout at volume peaks.
 
 ## v2.6.0 — 2026-08-05
 
