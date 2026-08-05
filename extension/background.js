@@ -642,6 +642,38 @@ function buildRoundReviewPrompt(round, trades) {
   ];
 }
 
+/* -------------------- Turbo receipts (local route timings) -----------------
+ *
+ * Speed claims get receipts or they do not get made. Every warm route
+ * records how long the background took from receiving the click to
+ * dispatching the navigation / revealing the viewer — measured on THIS
+ * machine, stored locally under one key, shown in the popup as medians.
+ * That is exactly what the number is and all it is: background routing
+ * latency, not page-ready time. No telemetry; nothing ever leaves the
+ * device; the ring holds the last 50 samples per route.
+ */
+const TURBO_STATS_KEY = 'pt_turbo_stats';
+const TURBO_RING_MAX = 50;
+let turboChain = Promise.resolve();
+function turboNote(route, ms) {
+  turboChain = turboChain.catch(() => {}).then(() => new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([TURBO_STATS_KEY], (value) => {
+        if (chrome.runtime && chrome.runtime.lastError) { resolve(); return; }
+        const stats = (value && value[TURBO_STATS_KEY]) || {};
+        const entry = stats[route] || { count: 0, ring: [] };
+        entry.count += 1;
+        if (Number.isFinite(ms)) {
+          entry.ring.push(Math.round(ms));
+          if (entry.ring.length > TURBO_RING_MAX) entry.ring.splice(0, entry.ring.length - TURBO_RING_MAX);
+        }
+        stats[route] = entry;
+        chrome.storage.local.set({ [TURBO_STATS_KEY]: stats }, () => resolve());
+      });
+    } catch (_) { resolve(); }
+  }));
+}
+
 /* -------------------- warm X links (instant post opens) --------------------
  *
  * Opt-in (warmXLinksEnabled, default off). One muted background tab is kept
@@ -931,6 +963,7 @@ async function warmOpen(rawUrl, sender, settings) {
       const tab = await warmCreateViewer(target.url, sender);
       await writeWarmTab({ tabId: tab.id, used: true, createdAt: Date.now() });
       console.debug('PaperTrench warm links: route=cold_tab (no viewer yet; this tab is now the viewer)');
+      turboNote('x:cold_tab', Date.now() - startedAt);
       return { ok: true, route: 'cold_tab' };
     }
 
@@ -942,6 +975,7 @@ async function warmOpen(rawUrl, sender, settings) {
       await warmReveal(tab);
       await writeWarmTab({ ...state, used: true });
       console.debug('PaperTrench warm links: route=already_open');
+      turboNote('x:already_open', Date.now() - startedAt);
       return { ok: true, route: 'already_open' };
     }
 
@@ -952,6 +986,7 @@ async function warmOpen(rawUrl, sender, settings) {
       await warmReveal(tab, target.url);
       await writeWarmTab({ ...state, used: true });
       console.debug('PaperTrench warm links: route=warm_reload (viewer was discarded)');
+      turboNote('x:warm_reload', Date.now() - startedAt);
       return { ok: true, route: 'warm_reload' };
     }
 
@@ -980,10 +1015,12 @@ async function warmOpen(rawUrl, sender, settings) {
       warmSupersede(tab.id);
       try { await chrome.tabs.update(tab.id, { url: target.url }); } catch (_) {}
       console.debug('PaperTrench warm links: route=warm_reload (no relay in viewer)');
+      turboNote('x:warm_reload', Date.now() - startedAt);
       return { ok: true, route: 'warm_reload' };
     }
 
     console.debug('PaperTrench warm links: SPA route dispatched in ' + (Date.now() - startedAt) + 'ms');
+    turboNote('x:spa', Date.now() - startedAt);
     return { ok: true, route: 'spa' };
   });
 }
@@ -1250,6 +1287,7 @@ async function warmDestOpen(rawUrl, sender, settings) {
         await writeWarmDestTab(target.family, { tabId: tab.id, used: true, createdAt: Date.now() });
       }
       console.debug('PaperTrench warm dest: route=cold_tab (' + target.family + ')');
+      turboNote('dest:cold_tab', Date.now() - startedAt);
       return { ok: true, route: 'cold_tab' };
     }
 
@@ -1261,6 +1299,7 @@ async function warmDestOpen(rawUrl, sender, settings) {
     await writeWarmDestTab(target.family, { ...state, used: true });
     console.debug('PaperTrench warm dest: route=' + (already ? 'already_open' : 'warm_nav')
       + ' (' + target.family + ') in ' + (Date.now() - startedAt) + 'ms');
+    turboNote(already ? 'dest:already_open' : 'dest:warm_nav', Date.now() - startedAt);
     return { ok: true, route: already ? 'already_open' : 'warm_nav' };
   });
 }

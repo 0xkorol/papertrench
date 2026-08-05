@@ -77,10 +77,36 @@ function computeStats(state, settings) {
   };
 }
 
+/* Turbo receipts: measured on THIS machine, stored locally, no telemetry.
+ * The number is the background's routing latency (click message → navigation
+ * dispatched / viewer revealed) — stated as exactly that, never dressed up as
+ * page-ready time. Counts are the headline because they are unambiguous:
+ * how many opens took a warm route instead of a cold tab. */
+function renderTurboReceipts(stats) {
+  const el = $('turbo-receipts');
+  if (!el) return;
+  const s = stats || {};
+  const warmRoutes = ['x:spa', 'x:already_open', 'x:warm_reload', 'dest:warm_nav', 'dest:already_open'];
+  const coldRoutes = ['x:cold_tab', 'dest:cold_tab'];
+  const count = (keys) => keys.reduce((n, k) => n + ((s[k] && s[k].count) || 0), 0);
+  const warm = count(warmRoutes);
+  const cold = count(coldRoutes);
+  if (!warm && !cold) { el.style.display = 'none'; return; }
+  const ring = warmRoutes.flatMap((k) => (s[k] && s[k].ring) || []).sort((a, b) => a - b);
+  const median = ring.length ? ring[Math.floor(ring.length / 2)] : null;
+  el.style.display = 'block';
+  el.textContent = `⚡ Receipts: ${warm} warm open${warm === 1 ? '' : 's'} · ${cold} cold`
+    + (median !== null ? ` · median routing ${median}ms` : '');
+  el.title = 'Measured on this machine, stored locally, never sent anywhere. '
+    + '"Routing" is the time from your click reaching PaperTrench to the warm tab being told where to go — '
+    + 'the page itself then hydrates on top of an already-warm session.';
+}
+
 async function load() {
   try {
-    const stored = await chrome.storage.local.get(['pt_state', 'pt_settings']);
+    const stored = await chrome.storage.local.get(['pt_state', 'pt_settings', 'pt_turbo_stats']);
     const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+    renderTurboReceipts(stored.pt_turbo_stats);
     const state = stored.pt_state || freshState(settings);
     const stats = computeStats(state, settings);
 

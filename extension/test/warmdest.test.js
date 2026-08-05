@@ -375,3 +375,45 @@ test('closing a viewer clears its registration and does NOT respawn it', async (
   assert.equal(worker.calls.created.length, 0,
     'destination viewers do not respawn — a closed viewer stays closed until the next click');
 });
+
+/* ---------------- Turbo receipts (local route timings) ---------------- */
+
+test('every routed open leaves a local receipt: route count + bounded timing ring', async () => {
+  const worker = destWorker({ settings: { warmXLinksEnabled: true } });
+
+  // Destination cold open → dest:cold_tab receipt.
+  await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
+  await worker.settle();
+  // X cold open (no viewer, no adoptable tab) → x:cold_tab receipt.
+  await send(worker.listener, { type: 'pt_warm_open', url: 'https://x.com/degen/status/1' });
+  await worker.settle();
+  // Warm follow-up on the registered pumpfun viewer → dest:warm_nav receipt.
+  await send(worker.listener, { type: 'pt_warmdest_open', url: TOKEN.replace('token', 'account') === TOKEN ? TOKEN : COIN + '?fresh=1' });
+  await worker.settle();
+
+  const stats = worker.values.pt_turbo_stats || {};
+  assert.equal(stats['dest:cold_tab'] && stats['dest:cold_tab'].count, 1,
+    'the first destination open records its cold route');
+  assert.equal(stats['x:cold_tab'] && stats['x:cold_tab'].count, 1,
+    'the X cold route records too');
+  assert.equal(stats['dest:warm_nav'] && stats['dest:warm_nav'].count, 1,
+    'the warm follow-up records as warm_nav');
+  for (const key of Object.keys(stats)) {
+    assert.ok(Array.isArray(stats[key].ring), `${key} must carry a timing ring`);
+    assert.ok(stats[key].ring.every((v) => Number.isFinite(v)), `${key} ring holds numbers only`);
+  }
+});
+
+test('receipts stay local and bounded (source contract)', () => {
+  const background = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  assert.match(background, /TURBO_RING_MAX = 50/, 'the ring is bounded');
+  assert.match(background, /entry\.ring\.splice\(0, entry\.ring\.length - TURBO_RING_MAX\)/,
+    'oldest samples are dropped, never the newest');
+  // The stats key is only ever written via chrome.storage.local — no fetch,
+  // no external sink may ever touch it.
+  const turboBlock = background.slice(
+    background.indexOf('const TURBO_STATS_KEY'),
+    background.indexOf('warm X links (instant post opens)'),
+  );
+  assert.doesNotMatch(turboBlock, /fetch\(/, 'receipts never leave the device');
+});
