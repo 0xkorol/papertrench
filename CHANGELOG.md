@@ -3,6 +3,20 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.9.1 — 2026-08-05
+
+The average line tells the truth again.
+
+- **Average fill/exit lines no longer jump to absurd levels on mcap
+  charts.** If you ran a multichart layout (or flipped a chart between
+  price and market-cap mode), the line could land a supply-factor off and
+  stick there — the level math trusted whichever data series ticked last,
+  even when it was the same token in a different unit. Level math now vets
+  every close by unit before using it, and draws no line at all rather
+  than a wrong one until the right-unit data arrives.
+- **DCA moves the line immediately.** Averaging in while the line was
+  still being created no longer leaves it at the old average.
+
 ## v2.9.0 — 2026-08-05
 
 Lev round two — the quick fixes now live where he meant them.

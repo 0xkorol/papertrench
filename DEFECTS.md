@@ -375,6 +375,33 @@ end-to-end feed prewatch test (bare curve address → watched mint → primed
 quote → reserve account remembered), bootstrap acceptance/ambiguity tests,
 and the existing armed-buy suite.
 
+**F-35 · S1 · The average line landed a supply-factor off whenever the SAME token streamed in two chart units at once — the token gate can't see units**
+`price-bridge.js` lastBarClose (single global), lineLevelFor mcap branches,
+shapeLevelFor ratio fallback, syncLineSlot async-create closure · Padre/Axiom
+mcap-axis charts · maintainer report "lines and pricing are just wrong a lot"
+(2026-08-05) · **fixed v2.9.1**
+C-14's gate keeps other TOKENS out of the global close, but the same token
+can legitimately stream in two UNITS at once: a price-mode and an mcap-mode
+chart in a multichart layout, or the old series lingering across a mode
+toggle. Those closes differ by the supply factor (~1e6–1e9). The mcap level
+math (close × avg/current) took whichever series ticked LAST, and the F-32
+freeze then locked the poisoned level until the next spec — intermittent,
+huge-magnitude, and invisible to every single-feed harness (the F-32
+postmortem smell). Three fixes: (1) closes are tracked per subscription
+(`barCloseLedger`, 15 s freshness) and mcap-axis math only accepts a close
+that CANNOT be a plain price tick — anything within 4× of the current USD or
+SOL price is excluded; among survivors a close agreeing with the resolver's
+cap is preferred but disagreement alone never disqualifies (the F-31
+lesson). With only price-unit closes available the line is not drawn at all
+(C-07 doctrine: no line beats a wrong one). (2) The same vetting applies to
+the fill-shape ratio fallback on declared mcap axes. (3) An async
+createOrderLine now configures itself from the slot's NEWEST requested
+level on resolve, not the closure-captured one — a DCA that moved the
+average mid-creation used to draw at the old level until a later sweep.
+Locked by three behavioral tests (two-series poisoning, price-only refusal,
+pending-creation DCA) proven failing against the pre-fix bridge, plus the
+updated F-29/F-31 source contracts.
+
 ## O — Overlay lifecycle & movability (audit: 2026-08-05, verified against source)
 
 Community reports covered: "overlay on pages it doesn't need to be on", "can't move

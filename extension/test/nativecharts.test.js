@@ -1701,7 +1701,7 @@ test('F-29: source contract — host-callback preambles are contained', () => {
   const sub = bridge.slice(bridge.indexOf('function subscribeBars('), bridge.indexOf('function patchPadreMarks'));
   assert.match(sub, /try\s*\{[^}]*noteResolution\(resolution\);\s*\n?\s*\} catch/,
     'the subscribe-time resolution note must be contained');
-  assert.match(sub, /try\s*\{[^}]*emitPadreBar\(bar, resolution\);\s*\n?\s*\} catch/,
+  assert.match(sub, /try\s*\{[^}]*emitPadreBar\(bar, resolution, subscriberUID\);\s*\n?\s*\} catch/,
     'the per-bar preamble must be contained so onRealtimeCallback always runs');
   const marksFn = bridge.slice(bridge.indexOf('function getMarks('), bridge.indexOf('function frameVisible'));
   assert.match(marksFn, /try \{ ours = marksInRange\(from, to\); \} catch/,
@@ -1767,8 +1767,10 @@ test("F-31: fill shapes use the same close-corrected level math as the avg lines
   const fnStart = bridge.indexOf("function shapeLevelFor(");
   assert.ok(fnStart !== -1, "a shared shape-level function must exist");
   const block = bridge.slice(fnStart, bridge.indexOf("\n  }", fnStart) + 4);
-  assert.match(block, /lastBarClose \* \(levels\.native \/ currentNative\)/,
+  assert.match(block, /close \* \(levels\.native \/ currentNative\)/,
     "the universal formula: close x price ratio — supply cancels, the chart own cap definition wins");
+  assert.match(block, /vettedMcapClose\(spec\)/,
+    "F-35: on a declared mcap axis the ratio close must be unit-vetted, never whichever series ticked last");
   const drawStart = bridge.indexOf("function drawShapeFallback(");
   const drawBlock = bridge.slice(drawStart, bridge.indexOf("\n  }", drawStart) + 4);
   assert.match(drawBlock, /shapeLevelFor\(levels\)/,
@@ -1966,4 +1968,112 @@ test('Turbo source contract: the chip sweep separates reads from writes', () => 
   );
   assert.match(sweep, /Phase R/, 'the sweep must document its read phase');
   assert.match(sweep, /applyRowChip/, 'writes must route through the diffed applier');
+});
+
+/* ------------------------------------------------------------------ *
+ * F-35: per-series unit vetting for average-line level math
+ * ------------------------------------------------------------------ */
+
+test('F-35: a price-mode series ticking last cannot poison the mcap line level', async () => {
+  // Padre multichart: the SAME token streams in mcap mode on one chart and
+  // price mode on another. Both pass the C-14 token gate, so whichever
+  // series ticked last owned the single global close — and the frozen level
+  // multiplied avg/current into a PRICE-unit close, landing the line ~1e9
+  // off, locked there by the F-32 freeze until the next spec.
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 'subMcap', () => {});
+  const mcapSeries = env.axiomRealtime();
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 'subPrice', () => {});
+  const priceSeries = env.axiomRealtime();
+
+  mcapSeries({ time: Date.now(), close: 100_000 });      // mcap-unit close
+  priceSeries({ time: Date.now(), close: 0.00021 });     // price-unit close, ticks LAST
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.00021,
+    avgBuyUsd: 0.000441, // entry at 2.1x current => entry cap 210,000
+  });
+  await microtasks();
+
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the line must be created');
+  assert.ok(Math.abs(line.values.setPrice - 210_000) < 0.01,
+    'the mcap level must come from the mcap-unit series even when the price-unit series ticked last');
+});
+
+test('F-35: with only price-unit closes on an mcap axis, draw NO line rather than a wrong one', async () => {
+  // Mode toggle: the user flips the chart from price to mcap. Until the
+  // first mcap-unit bar lands, the only closes available are price-unit —
+  // scaling one by avg/current produces a price-magnitude level on an mcap
+  // axis. The honest output is no line at all (C-07 doctrine).
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 'subPrice', () => {});
+  env.axiomRealtime()({ time: Date.now(), close: 0.00021 }); // price-unit only
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.00021,
+    avgBuyUsd: 0.000441,
+  });
+  await microtasks();
+
+  assert.equal(env.orderLines.filter((l) => l.values.setPrice !== undefined).length, 0,
+    'no line may be drawn from a price-unit close on an mcap axis');
+
+  // The first mcap-unit bar plus the next spec re-post produce the true level.
+  env.axiomRealtime()({ time: Date.now(), close: 100_000 });
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.00021,
+    avgBuyUsd: 0.000441,
+  });
+  await microtasks();
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the line must appear once an mcap-unit close exists');
+  assert.ok(Math.abs(line.values.setPrice - 210_000) < 0.01);
+});
+
+test('F-35: a spec arriving while the line is still being created wins over the stale captured level', async () => {
+  // createOrderLine is async on Axiom/GMGN. The creation closure captured
+  // the level at issue time; a DCA that moved the average while the promise
+  // was in flight configured the line at the OLD average until some later
+  // sweep happened to re-assert it.
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 'subMcap', () => {});
+  env.axiomRealtime()({ time: Date.now(), close: 100_000 });
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.00021,
+    avgBuyUsd: 0.000441, // level 210,000
+  });
+  // No microtask flush yet: the DCA spec lands while creation is pending.
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.00021,
+    avgBuyUsd: 0.00063, // level 300,000
+  });
+  await microtasks();
+
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the line must be created');
+  assert.ok(Math.abs(line.values.setPrice - 300_000) < 0.01,
+    'the resolved line must carry the newest level, not the one captured at issue time');
 });

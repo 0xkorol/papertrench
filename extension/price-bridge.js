@@ -46,6 +46,14 @@
   // sites plot either token USD price or market cap; the bar close tells us
   // which magnitude the Y axis lives at, so lines and shapes land on it.
   let lastBarClose = 0;
+  // F-35: closes tracked PER live subscription. The C-14 token gate keeps
+  // other tokens out of lastBarClose, but the SAME token can stream in two
+  // units at once (price-mode and mcap-mode charts in a Padre multichart
+  // layout, or across a mode toggle) — and those closes differ by the supply
+  // factor. Level math must pick a close in the axis's own unit, never
+  // "whichever series ticked last".
+  const barCloseLedger = new Map(); // subscriberUID -> { close, atMs }
+  const BAR_CLOSE_FRESH_MS = 15_000;
   // Chart time (seconds) of the newest live bar — paper shapes/marks clamp to
   // it so a fill can never render ahead of the final candle (F-31).
   let lastBarTimeSec = 0;
@@ -96,7 +104,7 @@
     // and the export dedupe must forget the old token's close, or the first
     // poll on the new token can be swallowed as "unchanged" (DEFECT F-19).
     // The GMGN candle close is the same class of per-token evidence (C-08).
-    if (changed) { lastBarClose = 0; lastBarTimeSec = 0; lastExportedClose = 0; gmgnLastCandleClose = 0; }
+    if (changed) { lastBarClose = 0; lastBarTimeSec = 0; lastExportedClose = 0; gmgnLastCandleClose = 0; barCloseLedger.clear(); }
   }
   // GMGN runs a private TradingView widget inside a same-origin blob iframe.
   // Its live React chart manager exposes `getActiveChart().createOrderLine()`.
@@ -724,11 +732,22 @@
 
   let lastLiveBarAt = 0; // newest live bar through the subscribeBars hook
 
-  function emitPadreBar(bar, resolution) {
+  function emitPadreBar(bar, resolution, subscriberUID) {
     if (!bar || typeof bar !== 'object') return;
     const close = numberValue(bar.close);
     if (!(close > 0)) return;
     lastBarClose = close;
+    // F-35: remember which subscription produced this close so line/shape
+    // level math can vet closes by unit instead of taking the newest global.
+    if (subscriberUID != null) {
+      barCloseLedger.set(String(subscriberUID), { close, atMs: Date.now() });
+      if (barCloseLedger.size > 32) {
+        const cutoff = Date.now() - BAR_CLOSE_FRESH_MS;
+        for (const [uid, entry] of barCloseLedger) {
+          if (entry.atMs < cutoff) barCloseLedger.delete(uid);
+        }
+      }
+    }
     lastLiveBarAt = Date.now();
     // F-31: remember the newest bar's chart time so paper shapes/marks can be
     // clamped to it — a fill stamped milliseconds ahead of the last bar (feed
@@ -775,7 +794,7 @@
         // preamble does — a poisoned bar object or a future bug in
         // emitPadreBar must never kill the site's own chart feed.
         try {
-          if (barSymbolMatches(symbolInfo)) emitPadreBar(bar, resolution);
+          if (barSymbolMatches(symbolInfo)) emitPadreBar(bar, resolution, subscriberUID);
         } catch (_) { /* our problem, never the host's */ }
         return onRealtimeCallback(bar);
       };
@@ -1098,6 +1117,11 @@
    */
   function syncLineSlot(slot, chart, price, label, color) {
     if (!(Number(price) > 0)) { clearLineSlot(slot); return true; }
+    // F-35: the slot always remembers the newest requested appearance. An
+    // async createOrderLine that is still in flight configures itself from
+    // HERE on resolve — not from the values captured when it was issued, or
+    // a DCA that moved the average mid-creation drew at the old level.
+    slot.want = { price: Number(price), label, color };
     // The adapter belongs to one chart. If the site promoted a different
     // chart to the foreground (Axiom preload swap), recreate the line there.
     if (slot.adapter && slot.chart && slot.chart !== chart) clearLineSlot(slot);
@@ -1133,7 +1157,10 @@
         slot.pending = false;
         slot.pendingAt = 0;
         try {
-          configureAverageLine(line, price, label, color);
+          // F-35: configure from the slot's newest request, not the values
+          // this closure captured at issue time.
+          const want = slot.want || { price, label, color };
+          configureAverageLine(line, want.price, want.label, want.color);
           slot.adapter = line;
           slot.chart = chart;
         } catch (_) {
@@ -1248,6 +1275,56 @@
     return lastBarClose * (Number(avgPrice) / Number(currentPrice));
   }
 
+  /** A close within [1/4, 4]x of `current` is a plain price tick in that
+   *  unit. Cap closes differ from price closes by the supply factor (1e6+),
+   *  and USD from SOL by the SOL rate (~1e2), so the band cannot confuse
+   *  families; it only needs to absorb feed skew between close and current. */
+  function closeWithinBand(close, current) {
+    const c = Number(current);
+    if (!(c > 0)) return false;
+    const ratio = close / c;
+    return ratio > 0.25 && ratio < 4;
+  }
+
+  /**
+   * F-35: the freshest ledger close that is eligible for MCAP-axis level
+   * math. A close that looks like a plain price tick (either unit) is the
+   * same token's price-mode series — scaling it by avg/current would land
+   * the line a supply-factor off, so it is excluded outright. Among the
+   * survivors, a close agreeing with the resolver's current mcap is
+   * preferred; disagreement alone does not disqualify (Axiom Final Stretch
+   * caps legitimately differ from the resolver's — the F-31 lesson).
+   */
+  function vettedMcapClose(spec) {
+    const now = Date.now();
+    let preferred = null;
+    let survivor = null;
+    for (const entry of barCloseLedger.values()) {
+      if (!(entry.close > 0) || now - entry.atMs > BAR_CLOSE_FRESH_MS) continue;
+      if (closeWithinBand(entry.close, spec.currentPriceUsd)) continue;
+      if (closeWithinBand(entry.close, spec.currentPriceNative)) continue;
+      if (!survivor || entry.atMs > survivor.atMs) survivor = entry;
+      if (closeWithinBand(entry.close, spec.currentMcap)
+        && (!preferred || entry.atMs > preferred.atMs)) preferred = entry;
+    }
+    const pick = preferred || survivor;
+    if (pick) return pick.close;
+    // No subscription-tracked bars at all (export-only charts): the single
+    // global close is all there is — still refuse it when it is price-like.
+    if (barCloseLedger.size) return null;
+    if (!(lastBarClose > 0)) return null;
+    if (closeWithinBand(lastBarClose, spec.currentPriceUsd)) return null;
+    if (closeWithinBand(lastBarClose, spec.currentPriceNative)) return null;
+    return lastBarClose;
+  }
+
+  /** mcapLevelFromClose, but the close must have passed F-35 unit vetting. */
+  function vettedMcapLevel(spec, avgPrice, currentPrice) {
+    const close = vettedMcapClose(spec);
+    if (!(close > 0) || !(Number(avgPrice) > 0) || !(Number(currentPrice) > 0)) return null;
+    return close * (Number(avgPrice) / Number(currentPrice));
+  }
+
   /**
    * The level for one average line. When the content script knows the chart's
    * axis unit (learned from which band accepted the live chart ticks), the
@@ -1286,19 +1363,21 @@
         return null;
       }
       if (basis === 'mcap') {
+        // F-35: the close is unit-vetted — a price-mode series of the same
+        // token can never price an mcap line, even when it ticked last.
         const avg = Number(spec['avg' + side + 'Usd']);
-        const computed = mcapLevelFromClose(avg, currentUsd);
+        const computed = vettedMcapLevel(spec, avg, currentUsd);
         if (computed > 0) return computed;
         // C-07: no USD average — the native price RATIO carries the same
         // information (close x avgNative/currentNative is the same level).
-        const viaNative = mcapLevelFromClose(Number(spec['avg' + side + 'Native']), currentNative);
+        const viaNative = vettedMcapLevel(spec, Number(spec['avg' + side + 'Native']), currentNative);
         if (viaNative > 0) return viaNative;
         const explicit = Number(spec['avg' + side + 'Mcap']);
         return explicit > 0 ? explicit : null;
       }
       if (basis === 'native-mcap') {
         const avg = Number(spec['avg' + side + 'Native']);
-        const computed = mcapLevelFromClose(avg, currentNative);
+        const computed = vettedMcapLevel(spec, avg, currentNative);
         if (computed > 0) return computed;
         const explicit = Number(spec['avg' + side + 'McapNative']);
         return explicit > 0 ? explicit : null;
@@ -1402,8 +1481,14 @@
     if (basis === 'usd' && levels.usd > 0) return levels.usd;
     if (basis === 'native' && levels.native > 0) return levels.native;
     const currentNative = Number(spec.currentPriceNative);
-    if (lastBarClose > 0 && levels.native > 0 && currentNative > 0) {
-      return lastBarClose * (levels.native / currentNative);
+    // F-35: on a declared mcap axis the ratio-scaled close must be a cap
+    // close, not a price-mode series that happened to tick last. An unknown
+    // basis keeps the historical global-close behavior.
+    const close = (basis === 'mcap' || basis === 'native-mcap')
+      ? vettedMcapClose(spec)
+      : lastBarClose;
+    if (close > 0 && levels.native > 0 && currentNative > 0) {
+      return close * (levels.native / currentNative);
     }
     return pickAxisLevel(levels.usd, levels.mcap, levels.native, levels.nativeMcap);
   }
