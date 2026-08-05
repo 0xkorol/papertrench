@@ -176,9 +176,11 @@
     }
     if (!latestByMint.size) return true;
     lastActivityTickAt = now;
+    // Emit the mint the user is actually looking at FIRST: under high volume a
+    // batch carries many mints, and Map iteration order offers no guarantee
+    // the watched coin makes the cut. Then top up with any others.
     let emitted = 0;
-    for (const [mint, priceUsd] of latestByMint) {
-      if (emitted++ >= 4) break;
+    const emitTick = (mint, priceUsd) => {
       emit('tick', {
         candidates: [{ value: priceUsd, unit: 'usd', key: 'tokenActivityPriceUsd' }],
         mcap: null,
@@ -187,6 +189,15 @@
         name: null,
         source: 'gmgn-ws-trade',
       });
+    };
+    if (currentSymbolInfo.mint && latestByMint.has(currentSymbolInfo.mint)) {
+      emitTick(currentSymbolInfo.mint, latestByMint.get(currentSymbolInfo.mint));
+      emitted++;
+    }
+    for (const [mint, priceUsd] of latestByMint) {
+      if (mint === currentSymbolInfo.mint) continue;
+      if (emitted++ >= 4) break;
+      emitTick(mint, priceUsd);
     }
     return true;
   }
@@ -194,8 +205,21 @@
   function forwardJson(raw, source, url) {
     let parsed = raw;
     if (typeof raw === 'string') {
-      if (raw.length > 500_000) return;
       const trimmed = raw.trimStart();
+      // GMGN's realtime trade batches grow past the parse guard exactly when
+      // volume is high (reported: "tech doesn't work when volume is high" on
+      // GMGN). The size limit exists to keep the generic collector walk from
+      // chewing pathological frames — it must NOT blind the token_activity
+      // fast path, which is the whole live feed on GMGN. Route those frames
+      // before the guard; the walk keeps its guard. The probe is tolerant of
+      // serializer whitespace (`"channel": "token_activity"` matches too);
+      // forwardTokenActivity still validates the parsed shape.
+      if (trimmed.length > 15 && trimmed.slice(0, 120).indexOf('"token_activity"') !== -1) {
+        try { parsed = JSON.parse(raw); } catch (_) { return; }
+        forwardTokenActivity(parsed);
+        return;
+      }
+      if (raw.length > 500_000) return;
       if (trimmed[0] !== '{' && trimmed[0] !== '[') return;
       try { parsed = JSON.parse(raw); } catch (_) { return; }
     }

@@ -750,3 +750,89 @@ test('GMGN token_activity trades become mint-tagged USD ticks', async () => {
   assert.equal(tick.payload.candidates[0].unit, 'usd');
   assert.ok(Math.abs(tick.payload.candidates[0].value - 0.000002888483390364) < 1e-18);
 });
+
+/* ------------------------------------------------------------------ *
+ * 3b. Reported from GMGN: "tech doesn't work when volume is high"
+ * ------------------------------------------------------------------ */
+
+/** Drive a token_activity frame through the patched transport layer. */
+function injectActivityFrame(env, frame, url) {
+  const XHR = env.win.XMLHttpRequest;
+  const xhr = new XHR();
+  const loadListeners = [];
+  xhr.addEventListener = (type, fn) => { if (type === 'load') loadListeners.push(fn); };
+  xhr.responseType = '';
+  xhr.responseText = frame;
+  xhr.responseURL = url || 'wss://ws.gmgn.ai/stream';
+  xhr.send();
+  for (const fn of loadListeners) fn.call(xhr);
+}
+
+test('GMGN high-volume frames past the size guard still feed the live price', () => {
+  // Under high volume GMGN's token_activity batches grow past the 500KB
+  // parse guard that protects the generic collector walk. The guard used to
+  // drop those frames BEFORE the token_activity fast path could see them,
+  // which killed the live feed exactly when volume peaked — the reported bug.
+  const env = runBridge({ gmgnMounted: true });
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  const data = [];
+  for (let i = 0; i < 2400; i++) {
+    data.push({
+      a: WATCHED,
+      pu: String(0.0000028 + i * 1e-11),
+      e: i % 2 ? 'buy' : 'sell',
+      ca: 'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo',
+      m: 'MfDuWeqSHEqTFVYZ7LoexgAK9dxk7cy4DFJWjWMGVWa',
+      h: '5' + String(i).padStart(63, '0'),
+    });
+  }
+  const frame = JSON.stringify({ channel: 'token_activity', data });
+  assert.ok(frame.length > 500_000, 'the test frame must outgrow the parse guard');
+
+  env.emitted.length = 0;
+  injectActivityFrame(env, frame);
+
+  const tick = env.emitted.find((m) => m.type === 'tick' && m.payload?.source === 'gmgn-ws-trade');
+  assert.ok(tick, 'an oversized token_activity frame must still produce a live tick');
+  assert.equal(tick.payload.mint, WATCHED);
+  assert.ok(Math.abs(tick.payload.candidates[0].value - (0.0000028 + 2399e-11)) < 1e-15,
+    'the tick must carry the LATEST trade price in the batch');
+});
+
+test('the size guard still protects the generic collector walk', () => {
+  // The fast path must not become a bypass for arbitrary huge frames: a
+  // non-token_activity payload past the guard is still dropped.
+  const env = runBridge({ gmgnMounted: true });
+  const huge = JSON.stringify({ channel: 'something_else', data: new Array(60000).fill({ price: 1 }) });
+  assert.ok(huge.length > 500_000);
+  env.emitted.length = 0;
+  injectActivityFrame(env, huge);
+  assert.equal(env.emitted.filter((m) => m.type === 'tick').length, 0,
+    'oversized non-activity frames must stay dropped');
+});
+
+test('the watched mint is never crowded out of a high-volume batch', () => {
+  // A hot batch carries trades for many mints; the emit cap plus Map
+  // iteration order gave no guarantee the token on screen made the cut. The
+  // watched mint must always be emitted first.
+  const env = runBridge({ gmgnMounted: true });
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.send('paper-axis', { mint: WATCHED, symbol: 'BONK' });
+
+  const data = [];
+  const filler = 'abcdefghj'; // valid base58 letters, distinct from the watched mint
+  for (let i = 0; i < 9; i++) {
+    // Filler mints inserted BEFORE the watched one in batch order.
+    data.push({ a: ('Mint' + filler[i]).padEnd(34, '1'), pu: String(0.001 + i * 0.0001), e: 'buy' });
+  }
+  data.push({ a: WATCHED, pu: '0.000002888483390364', e: 'buy' }); // inserted LAST
+
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({ channel: 'token_activity', data }));
+
+  const ticks = env.emitted.filter((m) => m.type === 'tick' && m.payload?.source === 'gmgn-ws-trade');
+  assert.ok(ticks.length >= 1, 'the batch must emit ticks');
+  assert.equal(ticks[0].payload.mint, WATCHED,
+    'the token the user is watching must be the FIRST tick, whatever the batch order');
+  assert.equal(ticks[0].payload.symbol, 'BONK', 'the watched tick carries the symbol');
+});
