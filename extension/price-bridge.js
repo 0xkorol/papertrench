@@ -189,7 +189,10 @@
   // Subtrees that describe the USER'S OWN holdings, not the market. Prices
   // inside them are historical facts about the user (entry averages, cost
   // bases, unrealized P&L) and must never become market-price candidates.
-  const POSITION_SUBTREE_KEY = /^(positions?|holdings?|portfolio|userPositions?|myPositions?|openOrders?)$/i;
+  // "hodlers" is fomo's own spelling; holder lists and balance sheets are
+  // positions-of-SOMEONE either way, and prices inside them are entries,
+  // not the market.
+  const POSITION_SUBTREE_KEY = /^(positions?|holdings?|portfolio|userPositions?|myPositions?|openOrders?|hodlers?|holders?|topHolders?|balances?)$/i;
   const MCAP_KEY = /^(marketCap|marketCapInUsd|mcap|mcapInUsd|fdv|fullyDilutedValuation)$/i;
   // A record that IS a trade event — an id-carrying or user-attributed
   // swap/trade object (fomo's social feed, tx-hash trade tapes). Its price
@@ -204,9 +207,25 @@
     const hasEventId = typeof node.tradeId === 'string' || typeof node.txId === 'string'
       || typeof node.txHash === 'string' || typeof node.signature === 'string'
       || typeof node.transactionHash === 'string';
+    // Attribution can be flat (userId on the row) or NESTED — fomo's holder
+    // rows carry a whole `user` object; either way the record is about a
+    // PERSON's trade, and its prices are that person's history.
     const attributed = typeof node.userId === 'string' || typeof node.userHandle === 'string'
-      || typeof node.displayName === 'string' || typeof node.maker === 'string';
+      || typeof node.displayName === 'string' || typeof node.maker === 'string'
+      || (node.user !== null && typeof node.user === 'object');
     return (typed && (hasEventId || attributed)) || (hasEventId && attributed);
+  }
+
+  /** A POSITION record by shape, whatever key it hides under: cost bases,
+   * entry averages and per-position P&L only ever describe someone's
+   * holding. A `price` beside them is the ENTRY price (fomo /hodlers rows,
+   * captured live 2026-08-05) — F-30's "the user's own average is not a
+   * market price", extended to everyone else's averages too. */
+  function looksLikePositionRecord(node) {
+    return node.costBasis !== undefined || node.averageEntryPrice !== undefined
+      || node.avgEntryPrice !== undefined || node.unrealizedPnl !== undefined
+      || node.realizedPnl !== undefined
+      || (node.pnl !== undefined && node.value !== undefined && node.price !== undefined);
   }
   const MINT_KEY = /^(mint|tokenMint|tokenAddress|baseMint|address|contract|ca)$/i;
   const SYMBOL_KEY = /^(symbol|ticker|tokenSymbol|baseSymbol)$/i;
@@ -265,9 +284,11 @@
       if (budget-- <= 0) return;
       seen.add(node);
 
-      // Trade EVENTS taint their whole subtree exactly like position
-      // subtrees do: identity fields still flow, prices and caps do not.
-      if (!tainted && !Array.isArray(node) && looksLikeTradeEvent(node)) tainted = true;
+      // Trade EVENTS and POSITION records taint their whole subtree exactly
+      // like position subtrees do: identity fields still flow, prices and
+      // caps do not.
+      if (!tainted && !Array.isArray(node)
+        && (looksLikeTradeEvent(node) || looksLikePositionRecord(node))) tainted = true;
 
       let target = ctx;
       if (!Array.isArray(node)) {

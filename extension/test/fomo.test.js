@@ -515,6 +515,73 @@ test('fomo: historical social-feed trades never become price candidates', async 
     JSON.stringify(polluted[0] || null));
 });
 
+// Shaped exactly like the live /hodlers/top response (captured 2026-08-05):
+// per-token objects tagged with tokenAddress (the CURRENT mint), holding
+// topHolders[] rows that each carry tradeId, a NESTED user object, and the
+// holder's ENTRY `price` plus pnl/costBasis/averageEntryPrice. Entry prices
+// near the live price pass the accept band — they ticked the P&L.
+const HODLERS_FIXTURE = JSON.stringify({
+  success: true,
+  message: 'Successfully fetched top hodlers',
+  responseObject: [{
+    tokenAddress: FOMO_MINT,
+    networkId: 1399811149,
+    topHolders: [
+      {
+        user: { id: 'aaaa-1', handle: 'holderone', displayName: 'holder one' },
+        tradeId: '11111111-2222-3333-4444-555555555555',
+        humanAmount: 16100000,
+        price: 0.00121, // entry price, hours old, inside the 3x band of 0.0014
+        value: 3947.36,
+        pnl: -1030.54,
+        unrealizedPnl: -1030.54,
+        realizedPnl: 0,
+        costBasis: 4977.9,
+        averageEntryPrice: 0.00121,
+        comment: null,
+        numReplies: 3,
+        showComment: true,
+        averageHoldTimeSeconds: 60180,
+      },
+      {
+        user: { id: 'aaaa-2', handle: 'holdertwo', displayName: 'holder two' },
+        tradeId: '61111111-2222-3333-4444-555555555555',
+        humanAmount: 11500000,
+        price: 0.00187,
+        value: 2827.4,
+        pnl: 5149.9,
+        unrealizedPnl: 5149.9,
+        realizedPnl: 0,
+        costBasis: 1200.1,
+        averageEntryPrice: 0.00187,
+        comment: null,
+        numReplies: 1,
+        showComment: true,
+        averageHoldTimeSeconds: 93720,
+      },
+    ],
+    totalHolders: 768,
+  }],
+  statusCode: 200,
+});
+
+test('fomo: holder ENTRY prices never tick the live price, even mint-tagged', async () => {
+  const env = runFomoBridge({
+    fetchResponse: () => jsonResponse(HODLERS_FIXTURE),
+  });
+  announceToken(env);
+
+  await env.win.fetch(`https://prod-api.fomo.family/hodlers/top?tokens=${FOMO_MINT}`);
+  await microtasks(10);
+
+  const stale = [0.00121, 0.00187];
+  const polluted = env.statuses('tick').filter((t) => t
+    && Array.isArray(t.candidates) && t.candidates.some((c) => stale.includes(c.value)));
+  assert.equal(polluted.length, 0,
+    'a holder record (tradeId + nested user + costBasis/pnl) is someone\'s POSITION, '
+    + 'not the market — F-30, one shape out: ' + JSON.stringify(polluted[0] || null));
+});
+
 test('fomo: a genuine market snapshot still ticks, mint-tagged (guard must not over-reach)', async () => {
   const env = runFomoBridge({
     fetchResponse: () => jsonResponse(SNAPSHOT_FIXTURE),
