@@ -199,6 +199,18 @@ test('cardModel derives trench display strings and the flag hides them (absent =
 test('the Game tab is wired: nav button, section container, dispatch branch, soft-guarded renderer', () => {
   assert.match(html, /<button data-section="game">Game<\/button>/, 'the sidebar must offer the tab');
   assert.match(html, /<section id="game" class="section hidden"><\/section>/, 'the section container must exist');
+  // D-55: visibility is driven by the hardcoded SECTIONS array (bindNav
+  // toggles .hidden over it). A tab missing from it renders into an
+  // INVISIBLE section — button present, dispatch present, screen empty.
+  // Pin the generic contract: every nav data-section id is in SECTIONS.
+  const sectionsLine = dashJs.match(/const SECTIONS = \[([^\]]+)\]/);
+  assert.ok(sectionsLine, 'SECTIONS must exist');
+  const sections = sectionsLine[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
+  const navIds = [...html.matchAll(/data-section="([a-z-]+)"/g)].map((m) => m[1]);
+  for (const id of navIds) {
+    assert.ok(sections.includes(id),
+      `nav tab "${id}" must be in SECTIONS or it toggles every section hidden and shows nothing`);
+  }
   const dispatch = fnBlock(dashJs, 'function renderSection(id)');
   assert.match(dispatch, /else if \(id === 'game'\) renderGame\(staged\);/, 'the dispatch must route to renderGame');
   const game = fnBlock(dashJs, 'function renderGame(el)');

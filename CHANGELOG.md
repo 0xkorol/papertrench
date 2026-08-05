@@ -3,6 +3,14 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.11.1 — 2026-08-05
+
+- **The Game tab actually shows up now.** v2.11.0 wired the tab's button,
+  content, and renderer — but not the one hardcoded list that controls
+  section visibility, so the tab rendered into an invisible container and
+  the screen stayed empty. One line, plus a generic test so no future tab
+  can repeat it.
+
 ## v2.11.0 — 2026-08-05
 
 The Game tab — and a round of community fixes.

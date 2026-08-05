@@ -992,6 +992,20 @@ sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · con
 **D-53 · S5** dashboard.js loaded before #card-modal — currently safe only by accident of async init — `dashboard.html:643-644`.
 **fixed v2.0.0** — the modal now precedes the dashboard.js script tag for real.
 
+**D-55 · S1 · The Game tab rendered into an INVISIBLE section — every nav toggle hid all sections and showed nothing**
+`dashboard.js` SECTIONS (197) vs bindNav (614) · dashboard, v2.11.0 ·
+maintainer report "game tab is empty" (2026-08-05) · **fixed v2.11.1**
+Section visibility is driven by the hardcoded SECTIONS array: bindNav
+toggles `.hidden` over SECTIONS, not over the nav's data-section buttons.
+v2.11.0 added the Game button, container, and dispatch branch — but not the
+SECTIONS entry, so clicking Game hid every listed section and never unhid
+#game: the renderer produced a full card tree (verified: 6.5k chars even on
+an empty profile) into a display-none node. The wiring test checked button,
+container, and dispatch — the three visible halves — and missed the fourth,
+invisible one. Fixed by adding 'game' to SECTIONS; locked GENERICALLY: every
+nav data-section id must appear in SECTIONS, proven failing against the
+v2.11.0 tag in a temp worktree.
+
 **D-54 · S2 · The graduation thesis criterion could never pass — coverage counted only legacy STRING theses while the engine stores objects**
 `mastery.js` thesisCoverage · dashboard graduation bar, all users ·
 found building the gamification rank ladder on top of the criterion

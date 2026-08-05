@@ -194,7 +194,7 @@ const store = {
 // overwrites the real one.
 let storageReadFailed = false;
 
-const SECTIONS = ['overview', 'calendar', 'journal', 'rounds', 'replay', 'leaderboard', 'coach', 'settings'];
+const SECTIONS = ['overview', 'game', 'calendar', 'journal', 'rounds', 'replay', 'leaderboard', 'coach', 'settings'];
 let currentSection = 'overview';
 
 async function init() {
