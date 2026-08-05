@@ -24,7 +24,7 @@ Real prices. Fake money. A record you can actually learn from.
 
 ## What it is
 
-PaperTrench is a Chrome extension that overlays a paper-trading terminal on **Axiom, Padre, Photon, GMGN, BullX, Dexscreener, Birdeye, and Jupiter**. You trade the real chart, at the real live price, with money that isn't real — then review exactly what you did and why.
+PaperTrench is a Chrome extension that overlays a paper-trading terminal on **Axiom, Padre, Photon, GMGN, BullX, Dexscreener, Birdeye, Jupiter, and Pump.fun**. You trade the real chart, at the real live price, with money that isn't real — then review exactly what you did and why.
 
 It exists because the usual way people learn this market is to lose money finding out that they chase, oversize, and round-trip their winners. This tells you that in an afternoon instead.
 
@@ -125,7 +125,7 @@ in the corner. A screenshot of a simulated trade should never be passable as a r
 - **Network calls are only:** the public Dexscreener and Jupiter price APIs, and — only if *you* configure it — your own AI endpoint.
 - **Recordings never leave your machine.** They're stored in IndexedDB and saved to your downloads folder.
 
-The permissions in `manifest.json` are the minimum needed: storage for your wallet, `tabs`/`activeTab` for chart frames, and `offscreen` for the optional recorder.
+The permissions in `manifest.json` are the minimum needed: storage for your wallet, `tabs`/`activeTab` for chart frames, and `offscreen` for the optional recorder. Content scripts run **only** on the supported trading sites — never anywhere else. The full permission-by-permission audit lives in [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md).
 
 ---
 
@@ -163,6 +163,19 @@ extension/
 The decision logic is deliberately kept in pure functions (`quote.js`, `engine.js`, `attest.js`) so it can be tested without a browser — and so the code that runs in the page is the same code the tests exercise.
 
 Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/LEADERBOARD.md`](docs/LEADERBOARD.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md)
+
+## Transparency
+
+Development runs against a public, ranked defect register: [`DEFECTS.md`](DEFECTS.md)
+(139 findings from a full four-track code audit, severity-weighted so "a number is
+wrong" outranks everything). The road out of alpha is [`ROADMAP.md`](ROADMAP.md);
+every release checks off entries with a regression test per fix. If you find a bug,
+[the report form](.github/ISSUE_TEMPLATE/bug_report.yml) asks for exactly what we
+need to reproduce it.
+
+**Thinking about going from paper to real money?** Read
+[`docs/GRADUATION.md`](docs/GRADUATION.md) first — it is the honest version of
+"am I ready?", and the product considers it a success when the answer is "not yet."
 
 ---
 
