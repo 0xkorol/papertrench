@@ -1296,8 +1296,23 @@
       return true;
     }
 
-    const buyLevel = lineLevelFor(paperLineSpec, 'Buy');
-    const sellLevel = lineLevelFor(paperLineSpec, 'Sell');
+    // F-32 (lev's video, post-C-01): an average line is a CONSTANT level in
+    // axis units. The ratio math (close x avg/current) exists only to convert
+    // the average into the chart's unit — recomputing it on every sweep from
+    // a MOVING close meant any staleness anywhere (a missed spec re-post, a
+    // frozen current) made the line ride the candle at ratio ~= 1. The level
+    // is therefore computed ONCE per spec arrival (or on the first sweep
+    // where a bar close exists) and FROZEN; sweeps re-assert the same number.
+    // A fresh spec — the content script re-posts within 2 s of any move —
+    // recomputes it, so accuracy is unchanged while the failure class dies.
+    if (paperLineSpec.frozenBuyLevel === undefined || paperLineSpec.frozenBuyLevel === null) {
+      paperLineSpec.frozenBuyLevel = lineLevelFor(paperLineSpec, 'Buy');
+    }
+    if (paperLineSpec.frozenSellLevel === undefined || paperLineSpec.frozenSellLevel === null) {
+      paperLineSpec.frozenSellLevel = lineLevelFor(paperLineSpec, 'Sell');
+    }
+    const buyLevel = paperLineSpec.frozenBuyLevel;
+    const sellLevel = paperLineSpec.frozenSellLevel;
     // The best-ranked chart can still refuse (Axiom's preload chart throws
     // "Value is null" until a series loads); fall through the ranking — but
     // ONLY past charts that refused everything. DEFECT C-15: requiring

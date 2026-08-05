@@ -302,6 +302,20 @@ time (reset per token). (3) The header sub-line "MC · $0.0₄21" read as "the
 MC IS $0.0₄21" when it meant "headline is the MC; this is the unit price" —
 now labeled "Price …". Locked by three tests.
 
+**F-32 · S1 · The average line STILL rode the candle for a community user after C-01 — design flaw in the per-sweep ratio recompute**
+`price-bridge.js` syncPaperAverageLines · Padre, video evidence from lev
+(entry $4.4K, line hugging the $6.2K close, ratio ~= 0.98) · **fixed v2.3.0**
+C-01 made the spec re-post as prices move, and every harness reproduction of
+the re-post path passes — but SOME real-world link still left the spec stale
+for this user, and the sweep recomputed close x (avg/current) from a MOVING
+close every second, so any staleness anywhere manifests as riding. The deep
+fix removes the class: an average line is a CONSTANT level in axis units, so
+the level is computed once per spec arrival and FROZEN; sweeps re-assert the
+same number. A stale spec now yields a stable line at the last correct level
+instead of a lie that tracks the price. Locked by a behavioral test proving
+the level holds through moving closes without a fresh spec, and that honest
+fresh specs recompute to the same invariant entry level.
+
 ## O — Overlay lifecycle & movability (audit: 2026-08-05, verified against source)
 
 Community reports covered: "overlay on pages it doesn't need to be on", "can't move

@@ -3,6 +3,25 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.3.0 — 2026-08-05
+
+Community feedback batch (thanks lev) — all four items, same day.
+
+- **The average line can never ride the candle again — by construction.**
+  After one user still saw the drift post-fix, the recompute-per-second
+  design was replaced outright: the line level is computed once per spec
+  and FROZEN (an average is a constant level in axis units). If any data
+  link ever goes stale again, the line holds at its last correct level
+  instead of chasing the price.
+- **Focus mode is now genuinely compact**: the position-detail rows
+  (size / avg entry / value) hide — unrealized P&L and quick sell stay —
+  and the whole panel tightens toward the size of the site terminal.
+- **Quick reset in focus mode, no popup**: a ⟲ button in the panel header
+  (focus mode only). Tap once to arm — it turns into "Sure?" for three
+  seconds — tap again to reset. Streams keep their focus; fat fingers
+  keep their journal. Resets clear recordings and chart drawings like
+  every other reset path.
+
 ## v2.2.0 — 2026-08-05
 
 Requested by the maintainer: make paper fills cost what real fills cost.

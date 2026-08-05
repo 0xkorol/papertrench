@@ -1916,6 +1916,25 @@
     .pt-box.pt-focus #pt-thesis,
     .pt-box.pt-focus #pt-closed { display: none; }
     .pt-box.pt-focus .pt-body { padding-top: 8px; }
+    /* Community (lev): focus mode should be genuinely COMPACT — hide the
+       position-detail rows (P&L + quick sell carry the signal while
+       streaming) and tighten the whole panel toward the size of the site's
+       own terminal. */
+    .pt-box.pt-focus .pt-pos .pt-detail { display: none; }
+    .pt-box.pt-focus { font-size: 12px; }
+    .pt-box.pt-focus .pt-body { padding: 8px 10px 10px; }
+    .pt-box.pt-focus .pt-preset { padding: 5px 8px; font-size: 11px; }
+    .pt-box.pt-focus .pt-buy-btn { padding: 9px 0; font-size: 12.5px; }
+    .pt-box.pt-focus .pt-custom input, .pt-box.pt-focus .pt-custom { font-size: 11.5px; }
+    .pt-box.pt-focus .pt-sell-row button { padding: 5px 0; font-size: 11px; }
+    .pt-box.pt-focus .pt-label { margin-top: 6px; font-size: 9px; }
+    .pt-box.pt-focus .pt-balance { padding: 7px 9px; }
+    /* Quick reset lives in the header ONLY in focus mode (lev streams fresh
+       runs per coin). Two-step inline confirm instead of a popup: first tap
+       arms it for 3 s, second tap resets. */
+    #pt-quickreset { display: none; }
+    .pt-box.pt-focus #pt-quickreset { display: inline-flex; }
+    #pt-quickreset.armed { color: #FF5F56; font-weight: 800; }
 
     .pt-watermark {
       position: absolute; top: 50%; left: 50%;
@@ -2726,6 +2745,7 @@
             <div class="pt-icon">P</div>
             <div class="pt-title">PaperTrench<span class="sub" id="pt-subtitle">Quick paper buy box</span></div>
             <span class="pt-grow"></span>
+            <button class="pt-hbtn" id="pt-quickreset" title="Reset paper wallet (tap twice)" aria-label="Quick reset">⟲</button>
             <button class="pt-hbtn" id="pt-visibility" title="Toggle auto-hide when no token" aria-label="Toggle visibility">${ICONS.eye}</button>
             <button class="pt-hbtn" id="pt-dash" title="Open dashboard">${ICONS.chart}</button>
             <button class="pt-hbtn" id="pt-min" title="Minimize">${ICONS.minimize}</button>
@@ -2814,6 +2834,8 @@
     els.box.addEventListener('pointerdown', primeAudio);
 
     if (els.visibility) els.visibility.addEventListener('click', toggleOverlayAutoHide);
+    const quickReset = shadow.getElementById('pt-quickreset');
+    if (quickReset) quickReset.addEventListener('click', () => onQuickResetTap(quickReset));
     if (els.resize) els.resize.addEventListener('pointerdown', onOverlayResizeStart);
     shadow.getElementById('pt-min').addEventListener('click', () => {
       panelMinimized = true;
@@ -3120,6 +3142,58 @@
   function applyFocusMode() {
     if (!els.box || !els.box.classList) return;
     els.box.classList.toggle('pt-focus', settings.panelFocusMode === true);
+  }
+
+  /* Quick reset (focus mode): no popup — popups steal stream focus — but
+   * never one accidental tap either. First tap arms for 3 s, second resets. */
+  let quickResetArmedAt = 0;
+  let quickResetTimer = null;
+
+  function onQuickResetTap(btn) {
+    const now = Date.now();
+    if (now - quickResetArmedAt <= 3000 && quickResetArmedAt > 0) {
+      quickResetArmedAt = 0;
+      if (quickResetTimer) { clearTimeout(quickResetTimer); quickResetTimer = null; }
+      btn.classList.remove('armed');
+      btn.textContent = '⟲';
+      quickResetWallet();
+      return;
+    }
+    quickResetArmedAt = now;
+    btn.classList.add('armed');
+    btn.textContent = 'Sure?';
+    if (quickResetTimer) clearTimeout(quickResetTimer);
+    quickResetTimer = setTimeout(() => {
+      quickResetArmedAt = 0;
+      quickResetTimer = null;
+      if (btn.isConnected) { btn.classList.remove('armed'); btn.textContent = '⟲'; }
+    }, 3000);
+  }
+
+  async function quickResetWallet() {
+    // Same semantics as the dashboard reset: the engine owns the seq bump so
+    // an open tab elsewhere adopts the fresh wallet instead of resurrecting
+    // the old one.
+    const fresh = E.resetState(settings, state.seq);
+    fresh.updatedAt = Date.now();
+    state = fresh;
+    livePositionPrices = {};
+    posEls = null;
+    await store.set({
+      [E.STORAGE_KEYS.state]: fresh,
+      [E.STORAGE_KEYS.frames]: [],
+      [E.STORAGE_KEYS.replays]: [],
+    });
+    sendMessage({ type: 'pt_clear_recordings' });
+    sendMessage({ type: 'pt_settings_changed' });
+    // Chart drawings belong to the old wallet.
+    sendPadreMarker('paper-marker-clear');
+    sendPadreMarker('paper-lines-clear');
+    if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
+    if (CM && usesSvgMarkers()) { CM.clearMarkers(); CM.clearAverageLines(); }
+    marks = [];
+    renderAll();
+    toast(`Paper wallet reset — fresh ${E.fmt(settings.balanceStartSol, 2)} SOL`);
   }
 
   function renderSiteStatus() {
@@ -4017,9 +4091,9 @@
     const card = document.createElement('div');
     card.className = 'pt-pos';
     card.innerHTML = `
-      <div class="row"><span class="k">Position size</span><span class="v big" data-f="qty"></span></div>
-      <div class="row"><span class="k">Avg entry</span><span class="v" data-f="entry"></span></div>
-      <div class="row"><span class="k">Value</span><span class="v" data-f="value"></span></div>
+      <div class="row pt-detail"><span class="k">Position size</span><span class="v big" data-f="qty"></span></div>
+      <div class="row pt-detail"><span class="k">Avg entry</span><span class="v" data-f="entry"></span></div>
+      <div class="row pt-detail"><span class="k">Value</span><span class="v" data-f="value"></span></div>
       <div class="row row-pnl"><span class="k">Unrealized P&amp;L</span><span class="v pnl" data-f="pnl"></span></div>
       <div class="pt-label" style="margin-top:10px">Quick sell</div>
       <div class="pt-sell-row" data-f="sell"></div>

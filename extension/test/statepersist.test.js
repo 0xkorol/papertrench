@@ -1002,3 +1002,59 @@ test("F-31: the mcap-headline sub-line says what its number IS", () => {
   assert.match(content, /`Price \$\{f\.priceUsdText/,
     "the sub-line labels the unit price as a price");
 });
+
+test("F-32 DIAGNOSTIC: mcap-band ticks (real Padre MCap mode) must re-post the spec", async () => {
+  const ov = runOverlay([0.001]);
+  await ov.advance(1200);
+  assert.ok(ov.openPaperPosition(1), "position open");
+  await ov.advance(600);
+  const linePosts = () => ov.posted.filter((m) => m.type === "paper-lines");
+  assert.ok(linePosts().length >= 1, "initial spec posted");
+
+  // Real Padre in MCap mode: close arrives as BOTH an unknown candidate and
+  // tick.mcap — validating via the MCAP band (basis mcap), not the native
+  // band the existing C-01 test drives. Resolver anchor: mcap 1e8 at
+  // priceNative 0.001. Drive the cap +50% across several ticks.
+  let stale = null;
+  for (let i = 1; i <= 5; i++) {
+    ov.posted.length = 0;
+    await ov.advance(2500);
+    const cap = 1e8 * (1 + i * 0.1);
+    ov.dispatchBridge("tick", {
+      source: "padre-chart-bar",
+      candidates: [{ value: cap, unit: "unknown", key: "padreChartClose" }],
+      mcap: cap, mint: null, symbol: null,
+    });
+    const posts = linePosts();
+    if (!posts.length) { stale = `tick ${i} (cap ${cap}) produced NO re-post`; break; }
+    const cur = posts[posts.length - 1].payload.currentPriceNative;
+    const expected = 0.001 * (1 + i * 0.1);
+    if (Math.abs(cur / expected - 1) > 0.02) { stale = `tick ${i}: spec current ${cur} vs expected ${expected}`; break; }
+  }
+  assert.equal(stale, null, stale || "ok");
+});
+
+test("focus mode is compact and carries the two-step quick reset (community: lev)", () => {
+  const content = fs.readFileSync(path.join(ROOT, "content.js"), "utf8");
+  // The position-detail rows hide in focus; P&L and quick sell stay.
+  assert.match(content, /\.pt-box\.pt-focus \.pt-pos \.pt-detail \{ display: none; \}/);
+  assert.match(content, /class="row pt-detail"><span class="k">Position size/);
+  assert.doesNotMatch(content, /class="row pt-detail"[^\n]*Unrealized/,
+    "unrealized P&L must STAY visible in focus mode");
+  // Compact density rules exist.
+  assert.match(content, /\.pt-box\.pt-focus \{ font-size: 12px; \}/);
+  // Quick reset: focus-only visibility, two-step inline confirm, no popup.
+  assert.match(content, /#pt-quickreset \{ display: none; \}/);
+  assert.match(content, /\.pt-box\.pt-focus #pt-quickreset \{ display: inline-flex; \}/);
+  const fnStart = content.indexOf("function onQuickResetTap(");
+  const block = content.slice(fnStart, content.indexOf("\n  }", fnStart) + 4);
+  assert.match(block, /3000/, "the armed window is bounded");
+  assert.doesNotMatch(content.slice(content.indexOf("async function quickResetWallet")), /confirm\(/,
+    "no confirmation popup — the two-step tap IS the confirmation");
+  const resetStart = content.indexOf("async function quickResetWallet(");
+  const resetBlock = content.slice(resetStart, content.indexOf("\n  }", resetStart) + 4);
+  assert.match(resetBlock, /E\.resetState\(settings, state\.seq\)/,
+    "engine owns the seq bump so other tabs adopt the reset");
+  assert.match(resetBlock, /pt_clear_recordings/, "recordings are erased like every other reset path");
+  assert.match(resetBlock, /paper-lines-clear/, "chart drawings of the old wallet are cleared");
+});

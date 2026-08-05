@@ -697,6 +697,54 @@ test('average market-cap lines are computed from the live bar close, not a stale
     'the mcap average line must equal lastBarClose * (avgBuyUsd / currentPriceUsd)');
 });
 
+test('F-32: the line level FREEZES per spec — a stale spec can never ride the candle', async () => {
+  // Community video (lev, post-v2.2.0): entry $4.4K, line hugging the $6.2K
+  // close. Root design flaw: the sweep recomputed close x (avg/current)
+  // every second from a MOVING close, so ANY staleness anywhere upstream
+  // turned into ratio ~= 1 riding. An average line is a constant level in
+  // axis units — computed once per spec, frozen, re-asserted.
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 'sub', () => {});
+  env.axiomRealtime()({ time: Date.now(), close: 100_000 });
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.00021,
+    avgBuyUsd: 0.000441, // entry at 2.1x current => entry cap 210,000
+  });
+  await microtasks();
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the line must be created');
+  assert.ok(Math.abs(line.values.setPrice - 210_000) < 0.01);
+
+  // The market runs +50% with NO fresh spec (whatever upstream link went
+  // stale). The old recompute would drag the line to ~315,000.
+  env.axiomRealtime()({ time: Date.now() + 1000, close: 150_000 });
+  env.runTimers();
+  await microtasks();
+  env.runTimers();
+  await microtasks();
+  assert.ok(Math.abs(line.values.setPrice - 210_000) < 0.01,
+    'without a fresh spec the level HOLDS — never close x stale-ratio');
+
+  // A fresh spec (content re-posts within 2 s of any move) recomputes — and
+  // with honest data the entry cap is invariant: 150k x (0.000441/0.000315)
+  // is still 210,000. The truth does not move; only lies did.
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 7.5e-9,
+    currentPriceUsd: 0.000315,
+    avgBuyUsd: 0.000441,
+  });
+  await microtasks();
+  assert.ok(Math.abs(line.values.setPrice - 210_000) < 0.01,
+    'a fresh spec recomputes to the same TRUE entry level');
+});
+
 test('ticks and lines ignore a preload chart showing a DIFFERENT token', async () => {
   // On a busy Axiom session the second widget preloads the previously viewed
   // token. Its closes must never become our ticks, and lines must never land
