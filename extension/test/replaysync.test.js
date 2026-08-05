@@ -101,8 +101,26 @@ test('the replay shell is built once and reused across cursor moves', () => {
     'cursor moves must update, not rebuild');
 
   const render = fnBody(dash, 'renderReplay');
-  assert.match(render, /replayShell\.sessionId !== replay\.sessionId/,
-    'the shell must only be remounted when the session actually changes');
+
+  // D-12: shell identity is a composite key. It must cover every fact whose
+  // change requires a rebuild (a round closing mid-watch must redraw the hero,
+  // a new session must appear in the list) — and nothing that changes on a
+  // cursor move, or the video would restart on every step.
+  const keyLine = render.match(/const shellKey = (.+)/)?.[1] ?? '';
+  assert.ok(keyLine, 'renderReplay must derive a composite shell key');
+  for (const part of ['replay.sessionId', 'replay.status', 'replay.roundId', 'replays.length']) {
+    assert.ok(keyLine.includes(part),
+      `the shell key must cover ${part}, or its change would leave a stale shell`);
+  }
+  assert.doesNotMatch(keyLine, /cursor/i,
+    'the cursor must never be part of the shell identity');
+
+  assert.match(render, /replayShell\.key !== shellKey/,
+    'the shell must be remounted only when its key changes');
+  assert.match(render, /replayShell\.key = shellKey/,
+    'the new key must be recorded after a remount, or every render would rebuild');
+  assert.doesNotMatch(render, /replayShell\.sessionId/,
+    'the session-only identity check is superseded by the composite key');
 });
 
 test('the video element is only replaced when its source changes', () => {

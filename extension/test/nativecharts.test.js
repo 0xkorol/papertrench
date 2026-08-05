@@ -61,10 +61,20 @@ function runBridge(opts = {}) {
   const execShapes = [];
 
   // ---- GMGN chart manager behind a React fiber on #global-tv-overlay ----
-  const gmgnChart = {
-    createOrderLine: () => Promise.resolve(makeAsyncAdapter(orderLines)),
-    createExecutionShape: () => Promise.resolve(makeAsyncAdapter(execShapes)),
-  };
+  // The chart object is replaceable (C-12: GMGN remounts its chart on
+  // timeframe changes) and its createExecutionShape can be made to fail N
+  // times (C-13: mid-boot charts refuse draws).
+  let gmgnShapeFailures = 0;
+  function makeGmgnChart() {
+    return {
+      createOrderLine: () => Promise.resolve(makeAsyncAdapter(orderLines)),
+      createExecutionShape: () => {
+        if (gmgnShapeFailures > 0) { gmgnShapeFailures -= 1; throw new Error('Value is null'); }
+        return Promise.resolve(makeAsyncAdapter(execShapes));
+      },
+    };
+  }
+  let gmgnChart = makeGmgnChart();
   let gmgnMounted = Boolean(opts.gmgnMounted);
   const gmgnHost = {};
   Object.defineProperty(gmgnHost, '__reactFiber$test', {
@@ -102,11 +112,20 @@ function runBridge(opts = {}) {
       callback([]);
     },
   };
+  // C-15 tests: a per-call plan can make the REAL chart refuse createOrderLine
+  // (index-based), modelling a chart that accepts the buy line then refuses
+  // the sell line mid-boot.
+  let axiomOrderLineCalls = 0;
+  let axiomOrderLinePlan = null;
   const axiomChart = {
     clearMarks() {},
     refreshMarks() {},
     symbol: () => opts.axiomChartSymbol || `${AXIOM_PAIR}-USD-123`,
-    createOrderLine: () => Promise.resolve(makeAsyncAdapter(orderLines)),
+    createOrderLine: () => {
+      const idx = axiomOrderLineCalls++;
+      if (axiomOrderLinePlan && axiomOrderLinePlan(idx)) throw new Error('Value is null');
+      return Promise.resolve(makeAsyncAdapter(orderLines));
+    },
     createExecutionShape: () => Promise.resolve(makeAsyncAdapter(execShapes)),
     exportData: () => Promise.resolve({
       schema: ['time', 'open', 'high', 'low', 'close'],
@@ -302,6 +321,9 @@ function runBridge(opts = {}) {
     win,
     timers,
     mountGmgn: () => { gmgnMounted = true; },
+    remountGmgn: () => { gmgnChart = makeGmgnChart(); },
+    failGmgnShapes: (n) => { gmgnShapeFailures = n; },
+    setAxiomOrderLinePlan: (fn) => { axiomOrderLinePlan = fn; axiomOrderLineCalls = 0; },
     enableAxiom: () => { axiomVisible = true; },
     setPanelOverChip: (on) => { panelOverChip = Boolean(on); },
     rowDebug: () => (typeof win.__ptRowChipDebug === 'function' ? win.__ptRowChipDebug() : []),
@@ -577,6 +599,13 @@ test('on Axiom, a dead marks pipeline still falls back to execution shapes', asy
   env.runTimers();
   const ts = Date.now();
 
+  // C-05: with no bar close the shape's Y unit is unknowable, so the bridge
+  // now (correctly) refuses to draw. Feed a live close first — the original
+  // pre-fix version of this test drew a first-usable-candidate shape with no
+  // evidence, which is exactly the wrong-unit first paint the fix removes.
+  env.axiomDatafeed.subscribeBars({}, '1S', () => {}, 'sub', () => {});
+  env.axiomRealtime()({ time: ts, close: 2_000_000 });
+
   env.send('paper-marker', {
     ts, side: 'buy', priceNative: 0.00001, priceUsd: 0.0021, mcap: 2_100_000, solAmount: 0.5, symbol: 'AX',
   });
@@ -593,7 +622,9 @@ test('lines fall back to widget.chart() when activeChart() is a seriesless shell
   const env = runBridge({ axiom: true, swapAccessors: true, href: 'https://axiom.trade/meme/Pair1' });
   env.runTimers();
 
-  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.0021, avgBuyMcap: 2_100_000 });
+  // axisBasis is stated because C-05 forbids unit-guessing before any bar
+  // close exists (the pre-fix test relied on the first-usable fallback).
+  env.send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyUsd: 0.0021, avgBuyMcap: 2_100_000 });
   await microtasks();
 
   const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
@@ -605,7 +636,8 @@ test('lines and shapes land on the real chart, never the broken preload chart', 
   const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
   env.runTimers();
 
-  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.0021, avgSellUsd: null });
+  // axisBasis stated: C-05 refuses to draw with no close and no known basis.
+  env.send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyUsd: 0.0021, avgSellUsd: null });
   await microtasks();
 
   // The preload chart throws on createOrderLine; the ranked selection must
@@ -1096,7 +1128,7 @@ test('O-03/C-18: standdown erases native lines, marks and GMGN artifacts at once
   env.runTimers();
   const ts = Date.now();
 
-  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.0021 });
+  env.send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyUsd: 0.0021 });
   env.send('gmgn-lines', { enabled: true, avgBuyMcap: 250_000_000, avgSellMcap: 300_000_000 });
   env.send('gmgn-marker', { ts, mcap: 250_000_000, side: 'buy', text: 'PT Buy $250M' });
   env.send('paper-marker', {
@@ -1128,7 +1160,8 @@ test('O-04/C-17: 5 minutes of content silence stops the line re-assert sweep; an
   const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
   env.runTimers(); // boot prober patches the widget and retires itself
 
-  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.0021 });
+  // axisBasis stated: C-05 refuses to draw with no close and no known basis.
+  env.send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyUsd: 0.0021 });
   await microtasks();
   const line = env.orderLines.find((l) => l.values.setPrice === 0.0021);
   assert.ok(line, 'the line must exist before silence');
@@ -1209,6 +1242,264 @@ test('F-26: a paper-axis message returns the stood-down sweep to the fast cadenc
  * check covers panel, bar, pill and toasts.
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * 9. Chart-truth batch: lines/markers land where they belong
+ * ------------------------------------------------------------------ */
+
+test('C-05: no average line before a bar close reveals the axis unit; it appears when evidence arrives', async () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+
+  // No close, no axisBasis: the unit is unknowable. The old first-usable
+  // fallback painted the USD price (~0.002) on an axis in millions here.
+  env.send('paper-lines', { enabled: true, avgBuyUsd: 0.002, avgBuyMcap: 2_000_000 });
+  await microtasks();
+  assert.equal(env.orderLines.length, 0,
+    'honest absence: with no evidence of the axis unit, nothing may be drawn');
+
+  env.axiomDatafeed.subscribeBars({}, '1S', () => {}, 'sub', () => {});
+  env.axiomRealtime()({ time: Date.now(), close: 2_100_000 }); // mcap-scale close
+  env.runTimers(); // the 1 s sweep re-syncs the stored spec
+  await microtasks();
+
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the line must appear once the close reveals the unit');
+  assert.equal(line.values.setPrice, 2_000_000,
+    'and sit at the mcap candidate, not nine orders away at the USD price');
+});
+
+test('C-07: a native-only average draws on a USD axis via the current rate — or refuses without one', async () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+
+  // Fills that predate the SOL/USD rate: avgBuyUsd is null, the native
+  // average is known. The old basis branch hard-returned null here.
+  env.send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyNative: 8e-8 });
+  await microtasks();
+  assert.equal(env.orderLines.length, 0,
+    'no rate means no conversion — no line rather than a wrong-unit one');
+
+  env.send('paper-lines', {
+    enabled: true, axisBasis: 'usd', avgBuyNative: 8e-8,
+    currentPriceNative: 5e-8, currentPriceUsd: 1e-5,
+  });
+  await microtasks();
+  let line = env.orderLines.find((l) => !l.removed && l.values.setPrice !== undefined);
+  assert.ok(line, 'the known-good native average must fall through (C-07)');
+  assert.ok(Math.abs(line.values.setPrice - 1.6e-5) < 1e-18,
+    'converted via the spec rate: 8e-8 x (1e-5 / 5e-8)');
+
+  // Mirror image: native axis with only the USD average known.
+  env.send('paper-lines-clear', null);
+  env.send('paper-lines', {
+    enabled: true, axisBasis: 'native', avgBuyUsd: 1e-5,
+    currentPriceNative: 5e-8, currentPriceUsd: 1e-5,
+  });
+  await microtasks();
+  line = env.orderLines.find((l) => !l.removed && l.values.setPrice !== undefined);
+  assert.ok(line, 'the USD average must convert onto a native axis');
+  assert.ok(Math.abs(line.values.setPrice - 5e-8) < 1e-20,
+    'converted via the spec rate: 1e-5 x (5e-8 / 1e-5)');
+});
+
+test('C-08: GMGN lines and markers are corrected by the live candle close, not resolver supply', async () => {
+  const env = runBridge({ gmgnMounted: true });
+  // GMGN's own chart feed: the candle close IS the value on its Y axis.
+  // Here GMGN counts 3x the supply the resolver implies (migrated coin).
+  injectActivityFrame(env, JSON.stringify({ code: 0, data: { list: [{ close: 300_000_000 }] } }),
+    'https://www.gmgn.ai/api/v1/token_mcap_candles/sol/Mint1');
+
+  env.send('gmgn-lines', {
+    enabled: true,
+    avgBuyMcap: 50_000_000,   // resolver-implied entry cap
+    currentMcap: 100_000_000, // resolver-implied current cap
+  });
+  env.send('gmgn-marker', { ts: Date.now(), mcap: 50_000_000, side: 'buy', text: 'PT Buy' });
+  await microtasks();
+
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the average line must draw');
+  assert.equal(line.values.setPrice, 150_000_000,
+    'line level = close x (avg / current): the candle close is ground truth for GMGN’s cap definition');
+  const shape = env.execShapes.find((s) => s.values.setDirection === 'buy');
+  assert.ok(shape, 'the fill marker must draw');
+  assert.equal(shape.values.setPrice, 150_000_000,
+    'fill markers get the exact same close correction');
+});
+
+test('C-16: a capless fill is queued and drawn once the cap becomes derivable', async () => {
+  const env = runBridge({ gmgnMounted: true });
+  const ts = Date.now();
+
+  // A fill made before the SOL/USD rate warmed: no priceUsd, so no honest
+  // mcap (C-09) — only its SOL price. The old code refused it outright and
+  // the fill stayed unmarked for the whole session.
+  env.send('gmgn-marker', { ts, mcap: null, priceNative: 5e-8, side: 'buy', text: 'PT Buy' });
+  env.runTimeouts();
+  await microtasks();
+  assert.equal(env.execShapes.length, 0, 'nothing is drawn while the level is unknowable');
+
+  // Evidence arrives: GMGN's own candle close plus a current SOL price.
+  injectActivityFrame(env, JSON.stringify({ code: 0, data: { list: [{ close: 250_000_000 }] } }),
+    'https://www.gmgn.ai/api/v1/token_mcap_candles/sol/Mint1');
+  env.send('gmgn-lines', { enabled: true, currentPriceNative: 1e-7 });
+  env.runTimeouts();
+  await microtasks();
+
+  const shape = env.execShapes.find((s) => s.values.setDirection === 'buy');
+  assert.ok(shape, 'the queued fill must be replayed once the cap resolves');
+  assert.equal(shape.values.setPrice, 125_000_000,
+    'level = close x (fillNative / currentNative): the fill expressed on GMGN’s own axis');
+});
+
+test('C-13: failed GMGN shape draws are re-queued with bounded retries, never lost', async () => {
+  const env = runBridge({ gmgnMounted: true });
+  env.failGmgnShapes(2); // a mid-boot chart refuses the first two draws
+  env.send('gmgn-marker', { ts: Date.now(), mcap: 100_000_000, side: 'buy', text: 'PT Buy' });
+  await microtasks();
+  assert.equal(env.execShapes.length, 0, 'the first draw failed');
+
+  env.runTimeouts(); // retry 1 — fails again
+  await microtasks();
+  env.runTimeouts(); // retry 2 — the chart accepts now
+  await microtasks();
+
+  const shape = env.execShapes.find((s) => s.values.setDirection === 'buy');
+  assert.ok(shape,
+    'the failed payload must be retried until it draws (the old drain spliced the queue and discarded it)');
+  assert.equal(shape.values.setPrice, 100_000_000);
+});
+
+test('C-12: a GMGN chart remount re-queues and redraws the fill shapes', async () => {
+  const env = runBridge({ gmgnMounted: true });
+  env.send('gmgn-marker', { ts: Date.now(), mcap: 100_000_000, side: 'buy', text: 'PT Buy' });
+  await microtasks();
+  assert.equal(env.execShapes.length, 1, 'the fill is drawn on the first chart');
+
+  env.remountGmgn(); // timeframe change: fresh chart instance, shapes died with the old one
+  env.runTimers();   // the 1 s sweep detects the chart identity change
+  await microtasks();
+
+  assert.equal(env.execShapes.length, 2, 'the fill must be redrawn on the new chart');
+  assert.equal(env.execShapes[0].removed, true, 'the dead chart’s adapter is released');
+  assert.equal(env.execShapes[1].removed, false);
+  assert.equal(env.execShapes[1].values.setPrice, 100_000_000);
+});
+
+test('C-14: bare-letter resolutions parse and marks snap to the daily grid', () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+  // TradingView sends a bare 'D' for daily charts; resolutionToMs used to
+  // return null for it, silently keeping the previous grid.
+  env.axiomDatafeed.subscribeBars({}, 'D', () => {}, 'sub', () => {});
+  const ts = Date.now();
+  env.send('paper-marker', {
+    ts, side: 'buy', priceNative: 0.00001, priceUsd: 0.0021, mcap: 2_100_000, solAmount: 0.5, symbol: 'AX',
+  });
+
+  let marks = null;
+  env.axiomDatafeed.getMarks({}, 0, Math.floor(ts / 1000) + 86_400, (r) => { marks = r; });
+  const mark = marks.find((m) => String(m.id).startsWith('papertrench-buy-'));
+  assert.ok(mark);
+  assert.equal(mark.time, Math.floor(ts / 86_400_000) * 86_400,
+    'a daily chart must snap marks to the day grid');
+});
+
+test('C-14: existing marks re-snap when the chart resolution changes', () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+  env.axiomDatafeed.subscribeBars({}, '1S', () => {}, 's1', () => {});
+  const ts = Date.now();
+  env.send('paper-marker', {
+    ts, side: 'buy', priceNative: 0.00001, priceUsd: 0.0021, mcap: 2_100_000, solAmount: 0.5, symbol: 'AX',
+  });
+
+  let marks = null;
+  env.axiomDatafeed.getMarks({}, 0, Math.floor(ts / 1000) + 60, (r) => { marks = r; });
+  let mark = marks.find((m) => String(m.id).startsWith('papertrench-buy-'));
+  assert.equal(mark.time, Math.floor(ts / 1000), 'first snapped to the 1 s grid');
+
+  // The user flips to 1-minute candles: TradingView re-subscribes. Marks
+  // snapped to the old grid would be silently DROPPED by the library —
+  // they must re-snap from their original fill timestamps.
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 's2', () => {});
+  env.runTimeouts(); // deferred clear+refresh after the re-snap
+  env.axiomDatafeed.getMarks({}, 0, Math.floor(ts / 1000) + 60, (r) => { marks = r; });
+  mark = marks.find((m) => String(m.id).startsWith('papertrench-buy-'));
+  assert.equal(mark.time, Math.floor(ts / 60_000) * 60,
+    'the same mark must land on the 1-minute grid after the switch');
+});
+
+test('C-14: a preload chart cannot overwrite the visible chart’s snapping grid', () => {
+  const env = runBridge({ axiom: true, wrongTokenPreload: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.send('paper-axis', { pairAddress: env.AXIOM_PAIR, mint: null });
+  env.runTimers();
+
+  // The visible chart runs 1-second candles; Axiom's hidden preload widget
+  // subscribes for ANOTHER token at 60-minute candles.
+  env.axiomDatafeed.subscribeBars({ ticker: `${env.AXIOM_PAIR}-USD-1` }, '1S', () => {}, 's1', () => {});
+  env.preloadDatafeed.subscribeBars({ ticker: 'ZZZWRONGTOKEN999-USD-1' }, '60', () => {}, 's2', () => {});
+
+  const ts = Date.now();
+  env.send('paper-marker', {
+    ts, side: 'buy', priceNative: 0.00001, priceUsd: 0.0021, mcap: 2_100_000, solAmount: 0.5, symbol: 'AX',
+  });
+  let marks = null;
+  env.axiomDatafeed.getMarks({}, 0, Math.floor(ts / 1000) + 60, (r) => { marks = r; });
+  const mark = marks.find((m) => String(m.id).startsWith('papertrench-buy-'));
+  assert.equal(mark.time, Math.floor(ts / 1000),
+    'the mark must snap to the VISIBLE chart’s 1 s grid, not the preload’s hour grid');
+});
+
+test('C-15: a sell-line failure never tears the working buy line onto the preload chart', async () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+  // The real chart accepts the FIRST order line (the buy) then refuses —
+  // the mid-boot state where the sell line fails while the buy is live.
+  env.setAxiomOrderLinePlan((i) => i >= 1);
+
+  env.send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyUsd: 0.0021, avgSellUsd: 0.003 });
+  await microtasks(); // the buy adapter resolves and binds to the real chart
+
+  env.runTimers();    // the 1 s sweep re-syncs; the sell still fails here
+  await microtasks();
+
+  const live = env.orderLines.filter((l) => !l.removed && l.values.setPrice !== undefined);
+  assert.equal(live.length, 1, 'exactly the working buy line remains');
+  assert.equal(live[0].values.setPrice, 0.0021,
+    'the buy line must stay put — the old fall-through tore it off and rebuilt it on the seriesless preload');
+  assert.equal(env.preloadLines.length, 0, 'nothing may land on the preload chart');
+
+  // The chart finishes booting: the sell line completes on the SAME chart.
+  env.setAxiomOrderLinePlan(null);
+  env.runTimers();
+  await microtasks();
+  const prices = env.orderLines.filter((l) => !l.removed).map((l) => l.values.setPrice).sort();
+  assert.deepEqual(prices, [0.0021, 0.003], 'both lines live on the working chart after recovery');
+});
+
+test('C-19: the bridge advertises native capability wherever a widget exists', () => {
+  // Photon is NOT in the hardcoded native set — discovery is site-agnostic,
+  // and the capability flag is what routes such sites down the native path.
+  const env = runBridge({ axiom: true, href: 'https://photon-sol.tinyastro.io/en/lp/Pair1' });
+  env.runTimers();
+  const status = env.emitted.filter((m) => m.type === 'padre-hook-status').pop();
+  assert.ok(status, 'widget discovery must emit a hook status');
+  assert.equal(status.payload.nativeCapable, true,
+    'a discovered widget must be advertised regardless of the site');
+});
+
+test('C-19: with no widget, the paper-axis ack reports nativeCapable false', () => {
+  const env = runBridge({});
+  env.runTimers();
+  env.emitted.length = 0;
+  env.send('paper-axis', { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' });
+  const status = env.emitted.filter((m) => m.type === 'padre-hook-status').pop();
+  assert.ok(status, 'paper-axis must be answered with a capability snapshot');
+  assert.equal(status.payload.nativeCapable, false,
+    'no widget: the content script falls back to the SVG rail after its grace period');
+});
+
 test('O-22: a chip whose spot the overlay covers is hidden, and returns when it moves away', () => {
   const env = runBridge({ rowDom: true, href: 'https://axiom.trade/pulse' });
   const spec = {
@@ -1237,4 +1528,14 @@ test('O-22: a chip whose spot the overlay covers is hidden, and returns when it 
   env.runTimers();
   chips = env.rowDebug();
   assert.notEqual(chips[0].display, 'none', 'the chip must return when the overlay moves');
+});
+
+test("F-18: the chip observer never watches character data (feed-thread starvation)", () => {
+  const bridge = fs.readFileSync(path.join(ROOT, "price-bridge.js"), "utf8");
+  const at = bridge.indexOf("rowChipObserver.observe(");
+  const line = bridge.slice(at, bridge.indexOf(");", at));
+  assert.doesNotMatch(line, /characterData/,
+    "every price-digit update used to schedule a forced-layout chip walk on the thread the feed parses on");
+  assert.match(line, /childList: true, subtree: true/,
+    "row shifts (node changes) must still reposition chips immediately");
 });

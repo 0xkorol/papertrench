@@ -92,13 +92,20 @@
     // A new token means the old bar close is no longer a valid axis hint —
     // and the export dedupe must forget the old token's close, or the first
     // poll on the new token can be swallowed as "unchanged" (DEFECT F-19).
-    if (changed) { lastBarClose = 0; lastExportedClose = 0; }
+    // The GMGN candle close is the same class of per-token evidence (C-08).
+    if (changed) { lastBarClose = 0; lastExportedClose = 0; gmgnLastCandleClose = 0; }
   }
   // GMGN runs a private TradingView widget inside a same-origin blob iframe.
   // Its live React chart manager exposes `getActiveChart().createOrderLine()`.
   let gmgnChart = null;
   let gmgnLineSpec = null;
   let gmgnRetryTimer = null;
+  // DEFECT C-08: the newest close from GMGN's own mcap-candle feed. GMGN's
+  // cap definition can differ from the resolver's (circulating vs total,
+  // migrated coins) by a constant factor; this close is the ground truth for
+  // what GMGN's Y axis actually shows, so lines and fill shapes are scaled
+  // through it rather than trusting resolver-implied supply. Reset per token.
+  let gmgnLastCandleClose = 0;
 
   /* ---------------- content-script liveness (DEFECTS O-04/C-17) ----------
    * The MAIN world cannot observe extension death, so the bridge watches for
@@ -351,6 +358,9 @@
       const last = candles[candles.length - 1];
       const mcap = last && numberValue(last.close);
       if (mcap > 0) {
+        // C-08: this close IS the value on GMGN's Y axis — the scale anchor
+        // for every GMGN line and fill shape (see gmgnCapScale).
+        gmgnLastCandleClose = mcap;
         emit('tick', {
           candidates: [],
           mcap,
@@ -678,7 +688,10 @@
 
     const original = datafeed.subscribeBars;
     function subscribeBars(symbolInfo, resolution, onRealtimeCallback, subscriberUID, onResetCacheNeededCallback) {
-      noteResolution(resolution);
+      // DEFECT C-14: Axiom's hidden preload widget subscribes for OTHER
+      // tokens (often at a different resolution); only the chart showing
+      // THIS token may set the mark-snapping grid.
+      if (barSymbolMatches(symbolInfo)) noteResolution(resolution);
       const wrappedCallback = (bar) => {
         // Bars for a different token's chart (Axiom preload) are still passed
         // to the site but must never move our price or axis detection.
@@ -710,14 +723,38 @@
     const s = String(res || '');
     if (/^\d+S$/.test(s)) return parseInt(s, 10) * 1000;
     if (/^\d+$/.test(s)) return parseInt(s, 10) * 60_000;
-    if (/^\d+D$/i.test(s)) return parseInt(s, 10) * 86_400_000;
-    if (/^\d+W$/i.test(s)) return parseInt(s, 10) * 604_800_000;
+    // DEFECT C-14: TradingView sends BARE letters for daily/weekly/monthly
+    // ('D', 'W', 'M'), where parseInt alone yields NaN — those charts kept a
+    // stale lastResolutionMs and marks snapped to the wrong grid.
+    if (/^\d*D$/i.test(s)) return (parseInt(s, 10) || 1) * 86_400_000;
+    if (/^\d*W$/i.test(s)) return (parseInt(s, 10) || 1) * 604_800_000;
+    if (/^\d*M$/.test(s)) return (parseInt(s, 10) || 1) * 2_592_000_000;
     return null;
   }
 
   function noteResolution(res) {
     const ms = resolutionToMs(res);
-    if (ms) lastResolutionMs = ms;
+    if (!ms || ms === lastResolutionMs) return;
+    lastResolutionMs = ms;
+    // DEFECT C-14: marks were snapped ONCE at creation to the then-current
+    // grid; a chart switched from 1s to 1m candles silently dropped them
+    // (TradingView discards marks whose time is off the bar grid). Re-snap
+    // every stored mark from its original fill timestamp and refresh.
+    resnapPaperMarks();
+  }
+
+  function resnapPaperMarks() {
+    if (!paperMarks.length) return;
+    let moved = false;
+    for (const mark of paperMarks) {
+      if (!(mark._tsMs > 0)) continue;
+      const snapped = snapMarkTime(mark._tsMs);
+      if (snapped !== mark.time) { mark.time = snapped; moved = true; }
+    }
+    // noteResolution runs inside the HOST's subscribeBars/getMarks call —
+    // defer the clear+refresh so a throwing chart cannot break the site's
+    // own callback (the C-29 latent-hazard rule).
+    if (moved) setTimeout(() => { try { refreshPadreMarks(); } catch (_) {} }, 0);
   }
 
   function snapMarkTime(tsMs) {
@@ -785,6 +822,9 @@
       return {
         id,
         time: snapMarkTime(tsMs),
+        // Original fill time, so a later resolution change can re-snap the
+        // mark to the new bar grid instead of dropping it (C-14).
+        _tsMs: Math.floor(tsMs),
         color: { background, border: background + '80' },
         text: `You ${side === 'buy' ? 'bought' : 'sold'} ${sizeText} at ${atText} (Paper)`,
         label: side === 'buy' ? 'B' : 'S',
@@ -799,6 +839,7 @@
     return {
       id,
       time: snapMarkTime(tsMs),
+      _tsMs: Math.floor(tsMs), // C-14: kept for re-snapping on resolution change
       color: { background: color, border: color },
       text: `${sideText} (Paper)\n${solAmount.toFixed(4)} SOL\n${price.toPrecision(7)} SOL${symbol ? `\n${symbol}` : ''}`,
       label: side === 'buy' ? 'B' : 'S',
@@ -834,7 +875,9 @@
     const original = datafeed.getMarks;
     function getMarks(symbolInfo, from, to, onDataCallback, ...rest) {
       marksPipelineSeenAt = Date.now();
-      noteResolution(rest[0]);
+      // C-14: same gate as subscribeBars — a preload chart's resolution must
+      // never overwrite the visible chart's snapping grid.
+      if (barSymbolMatches(symbolInfo)) noteResolution(rest[0]);
       // The library IS pulling marks — the native pipeline wins. If the
       // execution-shape fallback fired first (slow chart boot), hand
       // rendering back and remove the temporary shapes. Paper fills then
@@ -1064,7 +1107,13 @@
   function pickAxisEntry(entries) {
     const usable = entries.filter((e) => Number(e && e.v) > 0);
     if (!usable.length) return null;
-    if (!(lastBarClose > 0)) return usable[0];
+    // DEFECT C-05: before the first bar close there is NO evidence of the
+    // chart's unit. The old "first usable candidate" fallback painted a USD
+    // token price on an mcap axis (~9 orders of magnitude off) exactly
+    // during chart boot. Honest absence beats a fabricated level: draw
+    // nothing until evidence arrives (a close, or an explicit axisBasis
+    // which bypasses this picker entirely).
+    if (!(lastBarClose > 0)) return null;
     let best = usable[0];
     let bestDist = Math.abs(Math.log10(best.v / lastBarClose));
     for (const e of usable.slice(1)) {
@@ -1075,9 +1124,10 @@
   }
 
   function pickAxisLevel(usd, mcap, native, nativeMcap) {
-    // Before any bar close has been seen, pickAxisEntry falls back to the
-    // FIRST usable candidate. Axiom's default chart view is market cap, so
-    // order mcap first there; Padre charts price, so USD first elsewhere.
+    // With a live bar close the nearest candidate in log space wins; with no
+    // close yet, pickAxisEntry refuses (C-05) and callers retry once evidence
+    // arrives. The ordering only breaks exact log-distance ties: Axiom's
+    // default chart view is market cap, Padre charts price.
     const ordered = isAxiomHost
       ? [{ v: mcap }, { v: usd }, { v: native }, { v: nativeMcap }]
       : [{ v: usd }, { v: mcap }, { v: native }, { v: nativeMcap }];
@@ -1110,12 +1160,39 @@
     const currentUsd = Number(spec.currentPriceUsd);
 
     if (basis) {
-      if (basis === 'usd') return Number(spec['avg' + side + 'Usd']) || null;
-      if (basis === 'native') return Number(spec['avg' + side + 'Native']) || null;
+      // DEFECT C-07: fresh launches can have fills that predate the SOL/USD
+      // rate, so avgBuyUsd is null while avgBuyNative sits in the same spec.
+      // The old hard `|| null` returned no line on exactly those tokens.
+      // When the axis is native, the native average is used directly; when
+      // the axis is USD and only the native average is known, convert it via
+      // the spec's current rate — and with no rate, draw no line at all
+      // rather than a wrong one.
+      if (basis === 'usd') {
+        const usd = Number(spec['avg' + side + 'Usd']);
+        if (usd > 0) return usd;
+        const native = Number(spec['avg' + side + 'Native']);
+        if (native > 0 && currentUsd > 0 && currentNative > 0) {
+          return native * (currentUsd / currentNative);
+        }
+        return null;
+      }
+      if (basis === 'native') {
+        const native = Number(spec['avg' + side + 'Native']);
+        if (native > 0) return native;
+        const usd = Number(spec['avg' + side + 'Usd']);
+        if (usd > 0 && currentUsd > 0 && currentNative > 0) {
+          return usd * (currentNative / currentUsd);
+        }
+        return null;
+      }
       if (basis === 'mcap') {
         const avg = Number(spec['avg' + side + 'Usd']);
         const computed = mcapLevelFromClose(avg, currentUsd);
         if (computed > 0) return computed;
+        // C-07: no USD average — the native price RATIO carries the same
+        // information (close x avgNative/currentNative is the same level).
+        const viaNative = mcapLevelFromClose(Number(spec['avg' + side + 'Native']), currentNative);
+        if (viaNative > 0) return viaNative;
         const explicit = Number(spec['avg' + side + 'Mcap']);
         return explicit > 0 ? explicit : null;
       }
@@ -1166,11 +1243,18 @@
     const buyLevel = lineLevelFor(paperLineSpec, 'Buy');
     const sellLevel = lineLevelFor(paperLineSpec, 'Sell');
     // The best-ranked chart can still refuse (Axiom's preload chart throws
-    // "Value is null" until a series loads); fall through the ranking.
+    // "Value is null" until a series loads); fall through the ranking — but
+    // ONLY past charts that refused everything. DEFECT C-15: requiring
+    // buyOk && sellOk from one chart tore a WORKING buy line off the visible
+    // chart whenever the sell line failed, then rebuilt it on the seriesless
+    // preload. A partially-successful chart is kept: the failed line simply
+    // retries there on the next sweep, and a working line is never moved to
+    // a chart that ranked worse.
     for (const chart of charts) {
       const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, 'Avg. Fill Price', '#90A8FA99');
       const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, 'Avg. Exit Price', '#F7DC8599');
       if (buyOk && sellOk) return true;
+      if (buyOk || sellOk) return false; // keep the partial chart; retry the other line here
     }
     return false;
   }
@@ -1288,38 +1372,115 @@
 
   /* ---------------- GMGN native fill markers ---------------- */
 
-  let gmgnShapes = [];       // shape handles for drawn fills
-  let gmgnMarkerQueue = [];  // fills waiting for a usable chart
+  let gmgnShapes = [];       // [{ handle, payload }] for drawn fills
+  let gmgnMarkerQueue = [];  // fills waiting for a usable chart (or a cap)
   let gmgnMarkerTimer = null;
+  // The chart instance the current shapes were drawn on. GMGN remounts its
+  // chart on timeframe changes; shapes drawn on the dead instance vanish and
+  // must be re-queued onto the new one (DEFECT C-12).
+  let gmgnShapesChart = null;
+  // A draw that actually FAILED (createExecutionShape refused) is retried a
+  // bounded number of times; waiting for data (no cap yet) never burns these.
+  const GMGN_MARKER_DRAW_ATTEMPTS = 30;
 
   /**
-   * Draw a paper fill on GMGN's own chart using TradingView's execution shape.
+   * DEFECT C-08: how much GMGN's own cap axis differs from resolver-implied
+   * caps. Both are supply x priceUsd with different supply definitions, so
+   * the ratio is a per-token constant — the live candle close over the
+   * resolver's current mcap (carried in the gmgn-lines spec, re-posted by
+   * the content script as prices move). 1 until both sides exist.
+   */
+  function gmgnCapScale() {
+    const current = gmgnLineSpec && numberValue(gmgnLineSpec.currentMcap);
+    if (gmgnLastCandleClose > 0 && current > 0) return gmgnLastCandleClose / current;
+    return 1;
+  }
+
+  /**
+   * The Y level for one GMGN fill. Resolver-implied caps are corrected onto
+   * GMGN's own axis via gmgnCapScale (C-08). A capless fill — priceUsd was
+   * null at fill time, so the content script refused to fabricate an mcap
+   * (C-09) — is priced from its SOL price the moment the live candle close
+   * and a current SOL price coexist: close x (fillNative / currentNative)
+   * is the fill expressed on GMGN's axis (C-16). Null means "not yet".
+   */
+  function gmgnMarkerLevel(payload) {
+    const mcap = numberValue(payload && payload.mcap);
+    if (mcap > 0) return mcap * gmgnCapScale();
+    const native = numberValue(payload && payload.priceNative);
+    const currentNative = gmgnLineSpec && numberValue(gmgnLineSpec.currentPriceNative);
+    if (native > 0 && currentNative > 0 && gmgnLastCandleClose > 0) {
+      return gmgnLastCandleClose * (native / currentNative);
+    }
+    return null;
+  }
+
+  /** C-12: pull every drawn shape back into the queue (chart remounted). */
+  function requeueGmgnShapes() {
+    for (const entry of gmgnShapes.splice(0)) {
+      removeShapeHandle(entry.handle);
+      entry.payload._ptDrawAttempts = 0;
+      gmgnMarkerQueue.push(entry.payload);
+    }
+    gmgnShapesChart = null;
+  }
+
+  /**
+   * Draw paper fills on GMGN's own chart using TradingView execution shapes.
    *
-   * GMGN's axis is market cap, so `mcap` positions the arrow. A native shape
-   * stays anchored to its candle through panning, zooming and auto-scale,
-   * which an absolutely-positioned SVG overlay cannot do.
+   * A native shape stays anchored to its candle through panning, zooming and
+   * auto-scale, which an absolutely-positioned SVG overlay cannot do.
    *
    * Fills are queued and drained: markers restored from the journal arrive
    * before GMGN's chart manager has mounted, and dropping them on the floor
    * was exactly the "bubbles never show" failure. The drain retries until the
-   * chart exists.
+   * chart exists. DEFECT C-13: the old drain spliced the whole queue and then
+   * DISCARDED payloads whose draw failed (a mid-boot chart ate every batch);
+   * failures now go back into the queue with a bounded retry budget, and
+   * fills still waiting on a cap (C-16) are kept without burning retries.
    */
   function drainGmgnMarkers() {
-    if (!gmgnMarkerQueue.length) return true;
     const chart = findGmgnChart();
+    // C-12: shapes belong to one chart instance. If GMGN swapped it
+    // (timeframe change, SPA remount) the old shapes died with it — requeue
+    // everything onto the live chart before draining new fills.
+    if (chart && gmgnShapesChart && gmgnShapesChart !== chart && gmgnShapes.length) {
+      requeueGmgnShapes();
+    }
+    if (!gmgnMarkerQueue.length) return true;
     if (!chart || typeof chart.createExecutionShape !== 'function') return false;
-    for (const payload of gmgnMarkerQueue.splice(0)) {
+    const pending = gmgnMarkerQueue.splice(0);
+    const retry = [];
+    let allDrawn = true;
+    for (const payload of pending) {
+      const level = gmgnMarkerLevel(payload);
+      if (!(level > 0)) {
+        // C-16: cap not resolvable yet — keep waiting. Not a draw failure.
+        retry.push(payload);
+        allDrawn = false;
+        continue;
+      }
       const handle = spawnExecutionShape(chart, {
         side: payload.side,
         timeSec: Math.floor((numberValue(payload.ts) || 0) / 1000),
-        level: numberValue(payload.mcap),
+        level,
         text: payload.text,
       });
-      if (!handle) continue;
-      gmgnShapes.push(handle);
-      if (gmgnShapes.length > MAX_MARKS) removeShapeHandle(gmgnShapes.shift());
+      if (!handle) {
+        // C-13: a failed draw is re-queued (bounded), never lost.
+        payload._ptDrawAttempts = (payload._ptDrawAttempts || 0) + 1;
+        if (payload._ptDrawAttempts < GMGN_MARKER_DRAW_ATTEMPTS) {
+          retry.push(payload);
+          allDrawn = false;
+        }
+        continue;
+      }
+      gmgnShapes.push({ handle, payload });
+      if (gmgnShapes.length > MAX_MARKS) removeShapeHandle(gmgnShapes.shift().handle);
     }
-    return true;
+    gmgnShapesChart = chart;
+    if (retry.length) gmgnMarkerQueue.unshift(...retry);
+    return allDrawn;
   }
 
   function scheduleGmgnMarkerDrain() {
@@ -1336,7 +1497,12 @@
   function addGmgnFillMarker(payload) {
     const level = numberValue(payload && payload.mcap);
     const time = numberValue(payload && payload.ts);
-    if (!(level > 0) || !(time > 0)) return false;
+    // C-16: a fill whose cap is unknown (null priceUsd at fill time) is still
+    // queued when it carries its SOL price — gmgnMarkerLevel prices it the
+    // moment the candle close and a current price coexist. Only a fill with
+    // no usable level source at all is refused.
+    const native = numberValue(payload && payload.priceNative);
+    if (!(time > 0) || (!(level > 0) && !(native > 0))) return false;
     gmgnMarkerQueue.push(payload);
     if (gmgnMarkerQueue.length > MAX_MARKS) gmgnMarkerQueue = gmgnMarkerQueue.slice(-MAX_MARKS);
     scheduleGmgnMarkerDrain();
@@ -1346,7 +1512,15 @@
   function clearGmgnFillMarkers() {
     gmgnMarkerQueue = [];
     if (gmgnMarkerTimer) { clearTimeout(gmgnMarkerTimer); gmgnMarkerTimer = null; }
-    for (const handle of gmgnShapes.splice(0)) removeShapeHandle(handle);
+    for (const entry of gmgnShapes.splice(0)) removeShapeHandle(entry.handle);
+    gmgnShapesChart = null;
+  }
+
+  /** C-08: line level on GMGN's own axis (see gmgnCapScale). */
+  function gmgnLineLevel(side) {
+    const avg = numberValue(gmgnLineSpec && gmgnLineSpec['avg' + side + 'Mcap']);
+    if (!(avg > 0)) return null;
+    return avg * gmgnCapScale();
   }
 
   function syncGmgnAverageLines() {
@@ -1358,8 +1532,8 @@
     if (!chart) return false;
     if (gmgnChart && gmgnChart !== chart) { clearLineSlot(gmgnBuySlot); clearLineSlot(gmgnSellSlot); }
     gmgnChart = chart;
-    const buyOk = syncLineSlot(gmgnBuySlot, chart, gmgnLineSpec.avgBuyMcap, gmgnLineSpec.avgBuyText || 'PT Avg Buy', '#34D399');
-    const sellOk = syncLineSlot(gmgnSellSlot, chart, gmgnLineSpec.avgSellMcap, gmgnLineSpec.avgSellText || 'PT Avg Sell', '#FF5F56');
+    const buyOk = syncLineSlot(gmgnBuySlot, chart, gmgnLineLevel('Buy'), gmgnLineSpec.avgBuyText || 'PT Avg Buy', '#34D399');
+    const sellOk = syncLineSlot(gmgnSellSlot, chart, gmgnLineLevel('Sell'), gmgnLineSpec.avgSellText || 'PT Avg Sell', '#FF5F56');
     return buyOk && sellOk;
   }
 
@@ -1424,6 +1598,9 @@
         marksHooked: padreMarksHooked,
         linesReady,
         markerCount: paperMarks.length,
+        // C-19: a usable widget exists on this page — the content script may
+        // route markers/lines natively regardless of the site's id.
+        nativeCapable: true,
       });
       // A paper fill may have arrived while the widget was still loading.
       // Refresh once the native marks hook becomes available.
@@ -1467,6 +1644,16 @@
       // The page's resolved token identity: ticks, exports and drawing are
       // only taken from the chart whose symbol contains one of these needles.
       setCurrentSymbolNeedles(payload);
+      // DEFECT C-19: answer with a capability snapshot. Widget discovery is
+      // site-agnostic, so sites outside the hardcoded native set (Photon,
+      // BullX, DexScreener...) route markers natively the moment a usable
+      // TradingView widget exists here — the content script falls back to
+      // the SVG rail only when no widget is found within its grace period.
+      emit('padre-hook-status', {
+        barsHooked: padreBarsHooked,
+        marksHooked: padreMarksHooked,
+        nativeCapable: findTradingViewWidgets().length > 0,
+      });
       return;
     }
 
@@ -1507,8 +1694,17 @@
         avgSellMcap: numberValue(payload && payload.avgSellMcap),
         avgBuyText: typeof (payload && payload.avgBuyText) === 'string' ? payload.avgBuyText : 'PT Avg Buy',
         avgSellText: typeof (payload && payload.avgSellText) === 'string' ? payload.avgSellText : 'PT Avg Sell',
+        // C-08/C-16: the resolver's CURRENT view of the token, re-posted by
+        // the content script as prices move — the other half of the candle-
+        // close correction, and the rate that prices capless fills.
+        currentMcap: numberValue(payload && payload.currentMcap),
+        currentPriceNative: numberValue(payload && payload.currentPriceNative),
+        currentPriceUsd: numberValue(payload && payload.currentPriceUsd),
       };
       retryGmgnAverageLines();
+      // A fresher spec may be exactly what a queued capless fill was waiting
+      // for (C-16) — give the drain a chance without waiting for the sweep.
+      if (gmgnMarkerQueue.length) scheduleGmgnMarkerDrain();
       return;
     }
 
@@ -1786,7 +1982,13 @@
   function ensureRowChipObserver() {
     if (rowChipObserver || !document.body) return;
     rowChipObserver = new MutationObserver(scheduleRowChipReposition);
-    rowChipObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // childList only: rows shifting is a node change. characterData fired a
+    // reposition (with its forced-layout chip walk) on EVERY price-digit
+    // update across the whole list — main-thread starvation exactly when
+    // volume peaked, on the same thread the feed parses on (DEFECT F-18).
+    // Pure text updates cannot move a row; scroll/resize listeners and the
+    // 1 s sweep cover residual drift.
+    rowChipObserver.observe(document.body, { childList: true, subtree: true });
   }
   // SPA navigation away from the list unmounts the rows without another
   // row-scan ever firing — this sweep is what clears the orphaned chips.
@@ -2084,6 +2286,18 @@
       if (buyMissing || sellMissing) syncGmgnAverageLines();
     }
     if (gmgnMarkerQueue.length && !gmgnMarkerTimer) scheduleGmgnMarkerDrain();
+    // DEFECT C-12: lines detect chart replacement inside syncGmgnAverageLines,
+    // but shapes had no such check — a GMGN timeframe change permanently
+    // erased every paper arrow. Compare the drawn shapes' chart identity to
+    // the live chart and requeue+redraw on mismatch. Only runs while shapes
+    // exist, i.e. on GMGN pages with fills.
+    if (gmgnShapes.length && !gmgnMarkerTimer) {
+      const liveGmgnChart = findGmgnChart();
+      if (liveGmgnChart && gmgnShapesChart && liveGmgnChart !== gmgnShapesChart) {
+        requeueGmgnShapes();
+        scheduleGmgnMarkerDrain();
+      }
+    }
 
     // F-26: after a minute of empty scans the widget sweep (fiber walks,
     // iframe probes) drops to every 10th tick until a chart shows up or the

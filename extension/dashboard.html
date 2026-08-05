@@ -104,6 +104,13 @@
       content: ''; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
       width: 16px; height: 2px; border-radius: 2px; background: var(--amber);
     }
+    .overlay-launch {
+      padding: 8px 14px; border-radius: 10px; cursor: pointer;
+      background: var(--raised); border: 1px solid var(--line-2); color: var(--text);
+      font-family: inherit; font-size: 12.5px; font-weight: 650; white-space: nowrap;
+      transition: background 0.16s, border-color 0.16s;
+    }
+    .overlay-launch:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.22); }
 
     /* ---------------- layout ---------------- */
 
@@ -621,6 +628,7 @@
       <button data-section="coach">AI Coach</button>
       <button data-section="settings">Settings</button>
     </nav>
+    <button id="stream-overlay-btn" class="overlay-launch" title="Open the capture-ready stream overlay window for OBS">🎥 Stream overlay</button>
   </header>
   <div class="wrap">
     <aside id="sidebar"></aside>

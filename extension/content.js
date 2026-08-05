@@ -111,8 +111,8 @@
   let chartAxisBasis = null;
 
   /**
-   * Sites whose charts are TradingView, where PaperTrench draws NATIVE marks
-   * and order lines instead of an SVG overlay.
+   * Sites KNOWN to chart with TradingView, where PaperTrench draws NATIVE
+   * marks and order lines instead of an SVG overlay, with no discovery wait.
    *
    * Native drawing is the only way markers stay glued to the candles when the
    * user pans, zooms, or the chart auto-scales. Padre and Axiom both load the
@@ -120,7 +120,30 @@
    * path serves both.
    */
   const NATIVE_TV_SITES = new Set(['padre', 'axiom']);
-  function usesNativeChart() { return Boolean(site && NATIVE_TV_SITES.has(site.id)); }
+  /* DEFECT C-19: routing is CAPABILITY-based beyond that hardcoded set. The
+   * bridge's TradingView discovery is site-agnostic and already runs on
+   * Photon/BullX/DexScreener/…; when it reports a usable widget
+   * (`nativeCapable` on padre-hook-status), markers and lines take the native
+   * path there too. Until the report arrives, the native route is tried
+   * optimistically for a bounded grace window; only when the window expires
+   * with no widget does the site fall back to the honest SVG rail. GMGN keeps
+   * its dedicated native path (gmgn-marker / gmgn-lines). */
+  let bridgeNativeCapable = false;
+  let nativeProbeStartedAt = 0;
+  let nativeProbeTimer = null;
+  let svgFallbackActive = false; // the grace window expired; the SVG rail owns rendering
+  const NATIVE_PROBE_GRACE_MS = 8000;
+  function nativeChartPending() {
+    if (!site || bridgeNativeCapable) return false;
+    if (NATIVE_TV_SITES.has(site.id) || site.id === 'gmgn') return false;
+    return nativeProbeStartedAt > 0 && Date.now() - nativeProbeStartedAt < NATIVE_PROBE_GRACE_MS;
+  }
+  function usesNativeChart() {
+    if (!site) return false;
+    if (NATIVE_TV_SITES.has(site.id)) return true;
+    if (site.id === 'gmgn') return false; // dedicated native path, never this one
+    return bridgeNativeCapable || nativeChartPending();
+  }
   /**
    * True only where fills/lines actually render through the generic SVG
    * overlay. GMGN draws natively through its React-held chart manager
@@ -131,6 +154,57 @@
    */
   function usesSvgMarkers() {
     return Boolean(CM) && !usesNativeChart() && !(site && site.id === 'gmgn');
+  }
+
+  /**
+   * C-19: (re)arm the native-chart discovery window for a fresh token on a
+   * site outside the known-native set. While the window is open the native
+   * route is used optimistically (the bridge queues marks harmlessly); when
+   * it expires with no widget reported, the SVG rail takes over and replays
+   * the journal through itself.
+   */
+  function beginNativeProbe() {
+    if (nativeProbeTimer) { clearTimeout(nativeProbeTimer); nativeProbeTimer = null; }
+    svgFallbackActive = false;
+    if (!site || NATIVE_TV_SITES.has(site.id) || site.id === 'gmgn' || bridgeNativeCapable) {
+      nativeProbeStartedAt = 0;
+      return;
+    }
+    nativeProbeStartedAt = Date.now();
+    nativeProbeTimer = setTimeout(() => {
+      nativeProbeTimer = null;
+      if (contextDead || bridgeNativeCapable || !token) return;
+      // No widget within the grace period: this page has no native chart.
+      // Drop the optimistically-queued native marks and own the SVG rail.
+      svgFallbackActive = true;
+      sendPadreMarker('paper-marker-clear');
+      sendPadreMarker('paper-lines-clear');
+      if (CM && usesSvgMarkers()) {
+        CM.clearMarkers();
+        CM.initChartMarkers();
+        restoreMarkersFromJournal();
+        syncAveragePriceLines();
+      }
+    }, NATIVE_PROBE_GRACE_MS);
+  }
+  // (The probe timer's teardown registration lives next to the other
+  // onTeardown calls further down — teardownFns does not exist yet here.)
+
+  /** C-19: the bridge found (or confirmed) a usable TradingView widget. */
+  function noteNativeCapability(payload) {
+    if (!payload || bridgeNativeCapable) return;
+    if (!(payload.nativeCapable || payload.barsHooked || payload.marksHooked)) return;
+    bridgeNativeCapable = true;
+    if (nativeProbeTimer) { clearTimeout(nativeProbeTimer); nativeProbeTimer = null; }
+    if (!site || NATIVE_TV_SITES.has(site.id) || site.id === 'gmgn') return;
+    if (svgFallbackActive) {
+      // The widget appeared after the grace window: hand rendering from the
+      // SVG rail to the native chart and replay the journal natively.
+      svgFallbackActive = false;
+      if (CM) CM.destroyChartMarkers();
+      restoreMarkersFromJournal();
+      syncAveragePriceLines();
+    }
   }
   const AT = window.PTAttest;       // tamper-evident fill chain
   const profitAlertLevels = new Map(); // mint -> highest threshold already handled
@@ -348,6 +422,8 @@
     }
     else if (ev.type === 'padre-hook-status') {
       padreHookStatus = { ...padreHookStatus, ...(ev.payload || {}) };
+      // C-19: a reported widget flips this page onto the native route.
+      noteNativeCapability(ev.payload);
       renderSiteStatus();
     } else if (ev.type === 'paper-marker-status') {
       lastMarkerStatus = ev.payload || null;
@@ -374,7 +450,12 @@
    * cap but continue to display the trader's USD token fill.
    */
   function genericChartPoint(priceNative, priceUsd, mcap) {
-    const usd = Number(priceUsd) > 0 ? Number(priceUsd) : Number(priceNative);
+    // DEFECT C-09: a fill with null priceUsd must NOT have its market cap
+    // derived by multiplying the SOL price into a USD-implied supply — that
+    // silently substituted units and landed GMGN arrows ~150x below the
+    // candle. Only a genuine USD price may meet the supply; with none, the
+    // cap is honestly null and the fill waits until it can be priced (C-16).
+    const usd = Number(priceUsd) > 0 ? Number(priceUsd) : null;
     const liveSupply = token && Number(token.mcap) > 0 && Number(token.priceUsd) > 0
       ? Number(token.mcap) / Number(token.priceUsd)
       : null;
@@ -384,10 +465,11 @@
     // The hover figure is the market cap of that fill whenever it is known,
     // because that is the number the trader remembers the entry by.
     if (chartMcap > 0) {
-      const plot = site && site.id === 'gmgn' ? chartMcap : usd;
+      const plot = site && site.id === 'gmgn' ? chartMcap : (usd || Number(priceNative));
       return { plot, display: chartMcap, currency: 'MCAP' };
     }
-    return { plot: usd, display: usd, currency: Number(priceUsd) > 0 ? 'USD' : 'SOL' };
+    const fallback = usd || Number(priceNative);
+    return { plot: fallback, display: fallback, currency: usd ? 'USD' : 'SOL' };
   }
 
   /* -------------------- price handling -------------------- */
@@ -444,7 +526,13 @@
 
     // A live chart tick that validates tells us which unit the chart plots.
     if ((payload.source === 'padre-chart-bar' || payload.source === 'chart-export') && verdict.basis) {
+      const basisChanged = chartAxisBasis !== verdict.basis;
       chartAxisBasis = verdict.basis;
+      // DEFECT C-06: a chart unit toggle (Price⇄MCap, USD⇄SOL) surfaces here
+      // as a basis change — the line spec must be re-posted IMMEDIATELY or
+      // the bridge keeps re-asserting the old unit's level every second
+      // until the next fill. This bypasses the price-repost throttle.
+      if (basisChanged) syncAveragePriceLines();
     }
 
     const oldNative = Number(token.priceNative);
@@ -478,6 +566,10 @@
     if (series.length > SERIES_CAP) series.shift();
     E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
     maybeProfitAlert(token.mint);
+    // DEFECT C-01: the line spec must track the market, throttled (see
+    // maybeRepostAverageLines) — a spec frozen at fill time made mcap lines
+    // ride the candle at ratio ≈ 1 instead of holding the entry level.
+    maybeRepostAverageLines();
     if (usesSvgMarkers()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
     persistSoon();
     // Event-driven hot path: render in this same task, with no timer wait.
@@ -649,6 +741,12 @@
       lastPriceAt = 0;
       lastCmTickPrice = 0;
       chartAxisBasis = null;
+      // C-01: the repost throttle is per token, like the spec it re-posts.
+      lastLineSpecPostAt = 0;
+      lastLineSpecPrice = 0;
+      // C-19: a fresh token restarts the native-chart discovery window on
+      // sites outside the known-native set.
+      beginNativeProbe();
       if (usesNativeChart()) {
         // Padre uses its own TradingView getMarks pipeline. Clear native paper
         // marks for the previous token; do not mount the generic SVG overlay.
@@ -793,6 +891,8 @@
           const supply = fresh.mcap / fresh.priceUsd;
           token.mcap = token.priceUsd * supply;
         }
+        // C-01: refreshed rate/supply changes the spec's conversions too.
+        maybeRepostAverageLines();
         persistSoon();
         renderHeader();
         renderPosition();
@@ -809,6 +909,8 @@
       if (series.length > SERIES_CAP) series.shift();
       E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
       maybeProfitAlert(token.mint);
+      // C-01: an adopted resolver quote moves the price like any tick does.
+      maybeRepostAverageLines();
       if (usesSvgMarkers()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
       persistSoon();
       renderHeader();
@@ -833,6 +935,8 @@
   // The heartbeat is recreated per token, so it is torn down explicitly rather
   // than registered once.
   onTeardown(stopPriceLoop);
+  // C-19: the native-chart discovery grace timer dies with the context.
+  onTeardown(() => { if (nativeProbeTimer) { clearTimeout(nativeProbeTimer); nativeProbeTimer = null; } });
 
   /* -------------------- optional fun + alerts -------------------- */
 
@@ -986,11 +1090,18 @@
     }
 
     if (site && site.id === 'gmgn') {
+      const hasCap = point.currency === 'MCAP';
       sendPadreMarker('gmgn-marker', {
         ts: markerTs,
-        mcap: point.currency === 'MCAP' ? point.display : null,
+        mcap: hasCap ? point.display : null,
+        // C-16: a capless fill (priceUsd unknown at fill time, so no honest
+        // mcap — see C-09) still carries its SOL price; the bridge queues it
+        // and prices it from the live candle close when evidence arrives.
+        priceNative: Number(fill.priceNative) > 0 ? Number(fill.priceNative) : null,
         side: fill.side,
-        text: `${fill.side === 'buy' ? 'PT Buy' : 'PT Sell'} ${Q.formatMarketCap(point.display)}`,
+        text: hasCap
+          ? `${fill.side === 'buy' ? 'PT Buy' : 'PT Sell'} ${Q.formatMarketCap(point.display)}`
+          : (fill.side === 'buy' ? 'PT Buy' : 'PT Sell'),
       });
       return;
     }
@@ -1319,8 +1430,36 @@
     }
   }
 
+  /* DEFECT C-01: the paper-lines spec carries currentPrice* so the bridge can
+   * hold mcap-axis lines at the ENTRY level (lastBarClose x avg/current).
+   * When the spec was only posted at resolve/fill/settings time, `current`
+   * froze there — the ratio pinned near 1 and the "average" line rode the
+   * live candle no matter how far the coin ran. The spec is therefore
+   * re-posted while prices move: at most every LINE_REPOST_MS, or immediately
+   * on a move larger than LINE_REPOST_MOVE_PCT since the last post. An
+   * axis-basis change re-posts immediately, bypassing the throttle (C-06).
+   */
+  const LINE_REPOST_MS = 2000;
+  const LINE_REPOST_MOVE_PCT = 0.005; // 0.5 %
+  let lastLineSpecPostAt = 0;
+  let lastLineSpecPrice = 0;
+  let lastLinesActive = false; // the previous sync actually produced lines
+
+  function maybeRepostAverageLines() {
+    // Only worth a post while lines are actually on screen — this must never
+    // turn into a 2 s clear-message drip on tokens with no position.
+    if (!lastLinesActive || !token || !(Number(token.priceNative) > 0)) return;
+    const price = Number(token.priceNative);
+    const now = Date.now();
+    const moved = lastLineSpecPrice > 0
+      && Math.abs(price / lastLineSpecPrice - 1) >= LINE_REPOST_MOVE_PCT;
+    if (!moved && now - lastLineSpecPostAt < LINE_REPOST_MS) return;
+    syncAveragePriceLines();
+  }
+
   function syncAveragePriceLines() {
     if (!settings.averagePriceLinesEnabled || !token || !token.mint) {
+      lastLinesActive = false;
       if (usesNativeChart()) sendPadreMarker('paper-lines-clear');
       if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
       if (CM && site && !usesNativeChart()) CM.clearAverageLines();
@@ -1329,11 +1468,17 @@
 
     const averages = E.averageFillPrices(state, token.mint);
     if (!averages) {
+      lastLinesActive = false;
       if (usesNativeChart()) sendPadreMarker('paper-lines-clear');
       if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
       if (CM && site && !usesNativeChart()) CM.clearAverageLines();
       return;
     }
+    // Stamp the throttle BEFORE routing: every path below posts a spec (or
+    // repaints the rail) built from the price captured right here.
+    lastLinesActive = true;
+    lastLineSpecPostAt = Date.now();
+    lastLineSpecPrice = Number(token.priceNative) || 0;
 
     const usdPerNative = Number(token.priceUsd) > 0 && Number(token.priceNative) > 0
       ? Number(token.priceUsd) / Number(token.priceNative)
@@ -1390,24 +1535,25 @@
         const supply = Number(token.mcap) > 0 && Number(token.priceUsd) > 0
           ? Number(token.mcap) / Number(token.priceUsd)
           : null;
-        if (supply) {
-          // GMGN's own chart manager is available through its React-held
-          // TradingView instance. Ask the MAIN-world bridge to use native
-          // order lines so panning, zooming, and auto-scale stay exact.
-          sendPadreMarker('gmgn-lines', {
-            enabled: true,
-            avgBuyMcap: avgBuyUsd ? avgBuyUsd * supply : null,
-            avgSellMcap: avgSellUsd ? avgSellUsd * supply : null,
-            // GMGN's axis IS market cap, so the label states the cap the line
-            // sits at — the same figure the trader would quote out loud.
-            avgBuyText: avgBuyUsd ? `PT Avg Buy ${Q.formatMarketCap(avgBuyUsd * supply)}` : '',
-            avgSellText: avgSellUsd ? `PT Avg Sell ${Q.formatMarketCap(avgSellUsd * supply)}` : '',
-          });
-          CM.clearAverageLines();
-        } else {
-          sendPadreMarker('gmgn-lines-clear');
-          CM.clearAverageLines();
-        }
+        // GMGN's own chart manager is available through its React-held
+        // TradingView instance. Ask the MAIN-world bridge to use native
+        // order lines so panning, zooming, and auto-scale stay exact.
+        // The spec is sent even before the supply is known: the current*
+        // fields are what let the bridge scale resolver caps onto GMGN's own
+        // candle-close axis (C-08) and price queued capless fills (C-16).
+        sendPadreMarker('gmgn-lines', {
+          enabled: true,
+          avgBuyMcap: supply && avgBuyUsd ? avgBuyUsd * supply : null,
+          avgSellMcap: supply && avgSellUsd ? avgSellUsd * supply : null,
+          // GMGN's axis IS market cap, so the label states the cap the line
+          // sits at — the same figure the trader would quote out loud.
+          avgBuyText: supply && avgBuyUsd ? `PT Avg Buy ${Q.formatMarketCap(avgBuyUsd * supply)}` : '',
+          avgSellText: supply && avgSellUsd ? `PT Avg Sell ${Q.formatMarketCap(avgSellUsd * supply)}` : '',
+          currentMcap: Number(token.mcap) > 0 ? Number(token.mcap) : null,
+          currentPriceNative: Number(token.priceNative) > 0 ? Number(token.priceNative) : null,
+          currentPriceUsd: Number(token.priceUsd) > 0 ? Number(token.priceUsd) : null,
+        });
+        CM.clearAverageLines();
       } else {
         // Non-GMGN generic adapters plot USD token price, but the LABEL still
         // reads in market cap so it matches how the entry is discussed.
@@ -3235,9 +3381,16 @@
       // The caller writes state once, after this returns. Writing here too
       // would mean two storage round trips per fill for no benefit.
     } catch (_) {
-      /* evidence is best-effort; never interfere with trading */
+      /* evidence is best-effort; never interfere with trading — but say so
+       * ONCE, or verifyChain later reports a mismatch the user cannot explain
+       * (DEFECT F-28). */
+      if (!attestFailureToasted) {
+        attestFailureToasted = true;
+        toast('Heads up: this fill could not be added to the verification chain');
+      }
     }
   }
+  let attestFailureToasted = false;
 
   /* -------------------- screener row quick buys --------------------
    *
@@ -4041,6 +4194,12 @@
     token = null;
     armedBuy = null;
     lastHref = '';
+    // C-19/C-01: per-page routing probe and line-repost state die with the
+    // overlay (bridgeNativeCapable itself is a page property and survives).
+    if (nativeProbeTimer) { clearTimeout(nativeProbeTimer); nativeProbeTimer = null; }
+    nativeProbeStartedAt = 0;
+    svgFallbackActive = false;
+    lastLinesActive = false;
     try { host.remove(); } catch (_) {}
     host = null; shadow = null; els = {};
     // The cached position-card nodes belong to the shadow tree we just removed.

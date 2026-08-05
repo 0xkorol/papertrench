@@ -117,8 +117,19 @@ function runOverlay(priceSeries, opts) {
   };
 
   const url = `https://trade.padre.gg/trade/${BONK}`;
+  // Bridge traffic hooks: everything content.js posts toward the MAIN-world
+  // bridge is recorded, and bridge->content messages can be dispatched into
+  // the captured 'message' listeners (drives handlePageTick for the C-01 /
+  // C-06 line-spec re-post contracts).
+  const winListeners = {};
+  const posted = [];
   const win = {
-    addEventListener: () => {}, removeEventListener: () => {}, postMessage: () => {},
+    addEventListener: (type, fn) => { (winListeners[type] = winListeners[type] || []).push(fn); },
+    removeEventListener: (type, fn) => {
+      const arr = winListeners[type];
+      if (arr) { const i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1); }
+    },
+    postMessage: (message) => { posted.push(message); },
     location: { href: url, hostname: 'trade.padre.gg', pathname: `/trade/${BONK}`, search: '' },
     getComputedStyle: () => ({ right: '18px', top: '84px' }),
     confirm: () => false,
@@ -255,6 +266,14 @@ function runOverlay(priceSeries, opts) {
     sellButtons,
     storage: () => storage,
     shadowNodes,
+    /** Everything content.js posted toward the MAIN-world bridge. */
+    posted,
+    /** Deliver a bridge->content message into the captured listeners. */
+    dispatchBridge: (type, payload) => {
+      for (const fn of (winListeners.message || []).slice()) {
+        fn({ source: win, origin: '', data: { source: 'papertrench-bridge', type, payload } });
+      }
+    },
     /** Fail the next N storage reads the way a transient Chrome error would. */
     failGets: (n) => { failGets = n; },
     /** A write from "another tab" whose adoption event this tab misses. */
@@ -813,4 +832,146 @@ test('O-24: the host-isolation rule targets the real host element', () => {
     'the ID selector must guard the host element');
   assert.doesNotMatch(css, /(^|\n)papertrench-host\s*\{/,
     'the dead TYPE selector (matched nothing; host is a div) must be gone');
+});
+
+/* ==================== chart-truth: line spec re-posts ====================
+ *
+ * DEFECT C-01 (the community's "lines aren't where they need to be"): on
+ * mcap axes the bridge computes the average line as
+ * lastBarClose x (avg / current) — but `current*` lives in the paper-lines
+ * spec, which was posted ONLY at resolve/fill/settings time. The frozen
+ * ratio pinned near 1 and the "average" line rode the live candle. The spec
+ * must now re-post as the market moves: immediately on a >0.5% move, and on
+ * a 2 s cadence otherwise. DEFECT C-06: an axis-basis change (Price⇄MCap,
+ * USD⇄SOL toggle) re-posts immediately, bypassing the throttle.
+ */
+
+test('C-01: the paper-lines spec re-posts on price moves so currentPrice* tracks the market', async () => {
+  const ov = runOverlay([0.001]);
+  await ov.advance(1200);                  // resolve the token
+  assert.ok(ov.openPaperPosition(1), 'a position exists so average lines are live');
+  await ov.advance(600);                   // adoption posts the first spec
+
+  const linePosts = () => ov.posted.filter((m) => m.type === 'paper-lines');
+  assert.ok(linePosts().length >= 1, 'opening a position must put a line spec on the wire');
+
+  // A +5% validated chart tick (beyond the 0.5% move threshold) must
+  // re-post the spec at once, carrying the tick's price as currentPrice*.
+  ov.posted.length = 0;
+  ov.dispatchBridge('tick', {
+    source: 'padre-chart-bar',
+    candidates: [{ value: 0.00105, unit: 'unknown', key: 'padreChartClose' }],
+    mcap: null, mint: null, symbol: null,
+  });
+  let posts = linePosts();
+  assert.ok(posts.length >= 1, 'a >0.5% move must re-post the line spec immediately (C-01)');
+  assert.ok(Math.abs(posts[posts.length - 1].payload.currentPriceNative - 0.00105) < 1e-12,
+    'the re-posted spec must carry the moved price, not the fill-time one');
+
+  // A tiny follow-up move inside the 2 s window is throttled — the re-post
+  // path must not turn every tick into a postMessage storm.
+  ov.posted.length = 0;
+  await ov.advance(100);
+  ov.dispatchBridge('tick', {
+    source: 'padre-chart-bar',
+    candidates: [{ value: 0.00105105, unit: 'unknown', key: 'padreChartClose' }], // +0.1%
+    mcap: null, mint: null, symbol: null,
+  });
+  assert.equal(linePosts().length, 0,
+    'a <0.5% move inside the 2 s window must not re-post (throttle)');
+
+  // Another decisive move re-posts again regardless of the cadence clock.
+  ov.posted.length = 0;
+  ov.dispatchBridge('tick', {
+    source: 'padre-chart-bar',
+    candidates: [{ value: 0.00107, unit: 'unknown', key: 'padreChartClose' }], // ~+1.8%
+    mcap: null, mint: null, symbol: null,
+  });
+  posts = linePosts();
+  assert.ok(posts.length >= 1, 'every decisive move must re-post');
+  assert.ok(Math.abs(posts[posts.length - 1].payload.currentPriceNative - 0.00107) < 1e-12);
+});
+
+test('C-06: a chart unit toggle re-posts the spec immediately with the new axis basis', async () => {
+  const ov = runOverlay([0.001]);
+  await ov.advance(1200);
+  assert.ok(ov.openPaperPosition(1));
+  await ov.advance(600);
+
+  // The chart first validates in USD price mode (anchor priceUsd = 0.2).
+  ov.posted.length = 0;
+  ov.dispatchBridge('tick', {
+    source: 'padre-chart-bar',
+    candidates: [{ value: 0.2, unit: 'unknown', key: 'padreChartClose' }],
+    mcap: null, mint: null, symbol: null,
+  });
+  let posts = ov.posted.filter((m) => m.type === 'paper-lines');
+  assert.ok(posts.length >= 1, 'the first learned basis must post a spec');
+  assert.equal(posts[posts.length - 1].payload.axisBasis, 'usd');
+
+  // The user flips the chart to market cap: the next validated tick carries
+  // basis "mcap" and the spec must re-post AT ONCE — inside the 2 s window
+  // and far below the 0.5% move threshold, so only the basis-change path
+  // can produce this post (the old code re-asserted the stale unit for up
+  // to a full fill cycle).
+  ov.posted.length = 0;
+  await ov.advance(100);
+  ov.dispatchBridge('tick', {
+    source: 'padre-chart-bar',
+    candidates: [],
+    mcap: 100_100_000, // anchor mcap 1e8, +0.1%
+    mint: null, symbol: null,
+  });
+  posts = ov.posted.filter((m) => m.type === 'paper-lines');
+  assert.ok(posts.length >= 1, 'a basis change must bypass the repost throttle (C-06)');
+  assert.equal(posts[posts.length - 1].payload.axisBasis, 'mcap',
+    'the re-posted spec must carry the NEW axis basis');
+});
+
+/* ==================== chart-truth: routing & unit honesty ==================== */
+
+test('C-19: native routing is capability-based with a bounded SVG grace fallback', () => {
+  const content = contentSrc();
+  assert.match(content, /let bridgeNativeCapable = false/,
+    'the bridge-reported capability flag must exist');
+  assert.match(content, /NATIVE_PROBE_GRACE_MS/,
+    'the SVG fallback must wait out a discovery grace period');
+  assert.match(content, /return bridgeNativeCapable \|\| nativeChartPending\(\);/,
+    'usesNativeChart must consult the capability, not only the hardcoded site set');
+  assert.match(content, /noteNativeCapability\(ev\.payload\)/,
+    'padre-hook-status must feed the capability flag');
+  // The bridge answers every paper-axis with a capability snapshot, so a
+  // late-loading content script still learns about an existing widget.
+  const bridgeSrc = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
+  assert.match(bridgeSrc, /nativeCapable: findTradingViewWidgets\(\)\.length > 0/,
+    'the bridge must answer paper-axis with a capability snapshot');
+  assert.match(bridgeSrc, /nativeCapable: true/,
+    'widget discovery must advertise the capability');
+});
+
+test('C-09/C-16: no USD price means no fabricated mcap — the fill ships its SOL price instead', () => {
+  const content = contentSrc();
+  const fn = content.slice(
+    content.indexOf('function genericChartPoint'),
+    content.indexOf('/* -------------------- price handling --------------------')
+  );
+  // C-09: the old code substituted the SOL price for USD and multiplied it
+  // into a USD-implied supply — ~150x low on GMGN. Only a genuine USD price
+  // may enter the mcap derivation.
+  assert.match(fn, /const usd = Number\(priceUsd\) > 0 \? Number\(priceUsd\) : null;/,
+    'only a genuine USD price may seed the derivation');
+  assert.match(fn, /liveSupply && usd > 0 \? usd \* liveSupply : null/,
+    'the supply may only multiply a genuine USD price');
+  // C-16: the capless GMGN fill still carries its SOL price so the bridge
+  // can queue it and price it from the live candle close later.
+  assert.match(content, /priceNative: Number\(fill\.priceNative\) > 0 \? Number\(fill\.priceNative\) : null,/,
+    'the gmgn-marker payload must carry the SOL fill price for deferred pricing');
+});
+
+test("F-28: a failed attestation link tells the user once instead of silently diverging the chain", () => {
+  const content = fs.readFileSync(path.join(ROOT, "content.js"), "utf8");
+  const fnStart = content.indexOf("async function commitFill(");
+  const block = content.slice(fnStart, content.indexOf("\n  let attestFailureToasted", fnStart));
+  assert.match(block, /attestFailureToasted = true;[\s\S]{0,120}toast\(/,
+    "the first attestation failure must surface a toast — verifyChain otherwise reports a mismatch the user cannot explain");
 });

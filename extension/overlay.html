@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>PaperTrench — Stream Overlay</title>
+  <style>
+    :root {
+      --bg: #0A0D13;
+      --raised: rgba(255, 255, 255, 0.045);
+      --line: rgba(255, 255, 255, 0.075);
+      --line-2: rgba(255, 255, 255, 0.14);
+      --text: #EAEFF7;
+      --dim: #8D97A9;
+      --faint: #5A6273;
+      --amber: #FF9D45;
+      --amber-2: #FFC081;
+      --green: #34D399;
+      --red: #FF5F56;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, sans-serif;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
+      color: var(--text);
+      overflow: hidden;
+    }
+    /* Chroma-key backgrounds. Green is the OBS default; magenta survives
+       green-heavy webcam scenes; dark is for capturing without a key. */
+    body.bg-green   { background: #00FF00; }
+    body.bg-magenta { background: #FF00FF; }
+    body.bg-dark    { background: var(--bg); }
+
+    /* ---------------- widget shell ---------------- */
+    .widget {
+      position: relative;
+      background: var(--bg);
+      background-image: radial-gradient(420px 200px at 50% -10%, rgba(255, 157, 69, 0.12), transparent 68%);
+      border: 1px solid var(--line-2);
+      border-radius: 16px;
+      box-shadow: 0 18px 50px -18px rgba(0, 0, 0, 0.75);
+      overflow: hidden;
+    }
+    body.layout-card .widget { width: 384px; }
+    body.layout-bar  .widget { display: flex; align-items: stretch; height: 84px; }
+
+    /* Ghost watermark behind the numbers. Deliberately not configurable:
+       an overlay that could pass as a real-money P&L on stream would teach
+       exactly the wrong lesson. */
+    .watermark {
+      position: absolute; inset: 0; z-index: 0;
+      display: grid; place-items: center;
+      font-size: 88px; font-weight: 900; letter-spacing: 8px;
+      color: rgba(255, 255, 255, 0.028);
+      transform: rotate(-14deg);
+      pointer-events: none; user-select: none;
+    }
+    body.layout-bar .watermark { font-size: 54px; letter-spacing: 6px; transform: rotate(-4deg); }
+
+    /* ---------------- card layout ---------------- */
+    .head {
+      position: relative; z-index: 1;
+      display: flex; align-items: center; gap: 9px;
+      padding: 13px 16px 11px;
+      border-bottom: 1px solid var(--line);
+    }
+    .mark {
+      width: 26px; height: 26px; border-radius: 8px; flex: none;
+      display: grid; place-items: center;
+      font-size: 12px; font-weight: 900; color: #2A1400;
+      background: linear-gradient(145deg, var(--amber-2), var(--amber) 55%, #E77B22);
+      box-shadow: 0 4px 12px -3px rgba(255, 157, 69, 0.55), inset 0 1px 0 rgba(255,255,255,0.45);
+    }
+    .title { font-size: 14px; font-weight: 750; letter-spacing: -0.2px; }
+    .paper-badge {
+      margin-left: auto; padding: 3px 9px; border-radius: 999px;
+      background: rgba(255, 157, 69, 0.13); border: 1px solid rgba(255, 157, 69, 0.35);
+      color: var(--amber-2); font-size: 8.5px; font-weight: 800; letter-spacing: 1.1px;
+      white-space: nowrap;
+    }
+
+    .hero { position: relative; z-index: 1; padding: 13px 16px 4px; }
+    .lab {
+      font-size: 9px; font-weight: 700; letter-spacing: 1.1px;
+      text-transform: uppercase; color: var(--faint);
+    }
+    .equity { margin-top: 2px; font-size: 30px; font-weight: 800; letter-spacing: -1px; line-height: 1.1; }
+    .equity small { font-size: 14px; font-weight: 700; opacity: 0.55; }
+    .delta { margin-top: 2px; font-size: 12.5px; font-weight: 650; }
+    .delta.flash-up   { animation: flashUp 0.9s var(--ease); }
+    .delta.flash-down { animation: flashDown 0.9s var(--ease); }
+    @keyframes flashUp   { 0% { text-shadow: 0 0 18px rgba(52, 211, 153, 0.9); } 100% { text-shadow: none; } }
+    @keyframes flashDown { 0% { text-shadow: 0 0 18px rgba(255, 95, 86, 0.9); }  100% { text-shadow: none; } }
+
+    .spark-wrap { position: relative; z-index: 1; padding: 6px 16px 0; }
+    .spark-wrap canvas { display: block; width: 100%; height: 44px; }
+
+    .tiles {
+      position: relative; z-index: 1;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px;
+      padding: 11px 16px 6px;
+    }
+    .tile {
+      padding: 8px 9px; border-radius: 10px;
+      background: var(--raised); border: 1px solid var(--line);
+      min-width: 0;
+    }
+    .tile .k { font-size: 8.5px; font-weight: 700; letter-spacing: 0.9px; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
+    .tile .v { margin-top: 2px; font-size: 14px; font-weight: 750; white-space: nowrap; }
+
+    .positions { position: relative; z-index: 1; padding: 4px 16px 6px; }
+    .pos-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 6px 0; font-size: 12.5px;
+      border-bottom: 1px solid rgba(255,255,255,0.045);
+    }
+    .pos-row:last-child { border-bottom: none; }
+    .pos-row .sym { font-weight: 750; }
+    .pos-row .size { color: var(--faint); font-weight: 600; }
+    .pos-row .pnl { font-weight: 750; font-family: var(--mono); font-size: 12px; }
+    .pos-row.none { color: var(--faint); justify-content: center; padding: 10px 0; }
+
+    .foot {
+      position: relative; z-index: 1;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px 10px; margin-top: 2px;
+      border-top: 1px solid var(--line);
+      font-size: 10px; color: var(--faint); letter-spacing: 0.3px;
+    }
+    .foot b { color: var(--dim); font-weight: 700; }
+
+    /* ---------------- bar layout overrides ---------------- */
+    body.layout-bar .head { border-bottom: none; border-right: 1px solid var(--line); padding: 0 16px; }
+    body.layout-bar .title { display: none; }
+    body.layout-bar .paper-badge { margin-left: 0; }
+    body.layout-bar .head { flex-direction: column; justify-content: center; gap: 6px; }
+    body.layout-bar .hero { padding: 0 16px; display: flex; flex-direction: column; justify-content: center; }
+    body.layout-bar .equity { font-size: 24px; }
+    body.layout-bar .delta { font-size: 11.5px; }
+    body.layout-bar .spark-wrap { width: 120px; padding: 0 6px; display: flex; align-items: center; }
+    body.layout-bar .spark-wrap canvas { height: 40px; }
+    body.layout-bar .tiles { padding: 0 10px; grid-template-columns: repeat(4, auto); align-content: center; gap: 6px; }
+    body.layout-bar .tile { padding: 6px 9px; }
+    body.layout-bar .positions {
+      flex: 1; min-width: 0; padding: 0 12px;
+      display: flex; align-items: center; gap: 8px; overflow: hidden;
+    }
+    body.layout-bar .pos-row {
+      flex: none; border-bottom: none; gap: 7px;
+      padding: 5px 10px; border-radius: 999px;
+      background: var(--raised); border: 1px solid var(--line);
+    }
+    body.layout-bar .foot { display: none; }
+
+    /* ---------------- setup toolbar (hover only, never in capture) -------- */
+    .toolbar {
+      position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+      z-index: 10;
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 9px; border-radius: 12px;
+      background: rgba(10, 13, 19, 0.92);
+      border: 1px solid var(--line-2);
+      box-shadow: 0 10px 30px -10px rgba(0,0,0,0.8);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.18s var(--ease);
+    }
+    body:hover .toolbar { opacity: 1; pointer-events: auto; }
+    .toolbar .grp { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(0,0,0,0.35); border: 1px solid var(--line); }
+    .toolbar button {
+      padding: 5px 10px; border: none; border-radius: 7px;
+      background: transparent; color: var(--dim);
+      font-family: inherit; font-size: 11px; font-weight: 700; cursor: pointer;
+    }
+    .toolbar button:hover { color: var(--text); background: var(--raised); }
+    .toolbar button.on { color: var(--text); background: rgba(255,255,255,0.1); }
+    .toolbar .help-btn { border: 1px solid var(--line); border-radius: 9px; padding: 6px 10px; }
+
+    .setup {
+      position: fixed; top: 54px; left: 50%; transform: translateX(-50%);
+      z-index: 10; width: min(420px, calc(100vw - 32px));
+      padding: 13px 15px; border-radius: 13px;
+      background: rgba(10, 13, 19, 0.96);
+      border: 1px solid var(--line-2);
+      box-shadow: 0 14px 40px -12px rgba(0,0,0,0.85);
+      font-size: 12px; line-height: 1.6; color: var(--dim);
+      display: none;
+    }
+    .setup.open { display: block; }
+    .setup h3 { margin: 0 0 6px; font-size: 12px; color: var(--text); letter-spacing: 0.3px; }
+    .setup ol { margin: 0; padding-left: 18px; }
+    .setup li { margin: 3px 0; }
+    .setup b { color: var(--amber-2); font-weight: 700; }
+    .setup .note { margin-top: 8px; font-size: 11px; color: var(--faint); }
+
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  </style>
+</head>
+<body class="layout-card bg-green">
+
+  <div class="toolbar" id="toolbar">
+    <div class="grp" id="layoutGrp">
+      <button data-layout="card">Card</button>
+      <button data-layout="bar">Bar</button>
+    </div>
+    <div class="grp" id="bgGrp">
+      <button data-bg="green">Green</button>
+      <button data-bg="magenta">Magenta</button>
+      <button data-bg="dark">Dark</button>
+    </div>
+    <button class="help-btn" id="helpBtn">OBS setup</button>
+  </div>
+
+  <div class="setup" id="setup">
+    <h3>Add this to OBS in 30 seconds</h3>
+    <ol>
+      <li>Keep this window open (don't minimize it).</li>
+      <li>In OBS: <b>Sources → + → Window Capture</b> and pick this window.</li>
+      <li>With the green background: <b>right-click the source → Filters → + → Chroma Key</b>. Default settings work.</li>
+      <li>Drag and scale it into your scene — done. Numbers update live as you trade.</li>
+    </ol>
+    <div class="note">Tip: if your scene has a lot of green in it, switch the background to Magenta and set the Chroma Key filter's key color to match. This toolbar only shows when your mouse is over the window — it never appears on stream.</div>
+  </div>
+
+  <div class="widget">
+    <div class="watermark">PAPER</div>
+    <div class="head">
+      <div class="mark">P</div>
+      <div class="title">PaperTrench</div>
+      <span class="paper-badge">PAPER TRADING · SIMULATED</span>
+    </div>
+    <div class="hero">
+      <div class="lab">Paper equity</div>
+      <div class="equity" id="equity">—</div>
+      <div class="delta" id="delta"></div>
+    </div>
+    <div class="spark-wrap"><canvas id="spark"></canvas></div>
+    <div class="tiles">
+      <div class="tile"><div class="k">Realized</div><div class="v" id="realized">—</div></div>
+      <div class="tile"><div class="k">Win rate</div><div class="v" id="winrate">—</div></div>
+      <div class="tile"><div class="k">Rounds</div><div class="v" id="rounds">—</div></div>
+      <div class="tile"><div class="k">Open</div><div class="v" id="open">—</div></div>
+    </div>
+    <div class="positions" id="positions"></div>
+    <div class="foot">
+      <span><b>papertrench.com</b> · free &amp; open source</span>
+      <span>paper money — not real funds</span>
+    </div>
+  </div>
+
+  <script src="overlay.js"></script>
+</body>
+</html>

@@ -17,6 +17,7 @@ $('reset').addEventListener('click', resetWallet);
 $('backup').addEventListener('click', backupWallet);
 $('restore').addEventListener('click', () => $('restoreFile').click());
 $('restoreFile').addEventListener('change', restoreWallet);
+$('overlay-window').addEventListener('click', openStreamOverlay);
 
 function fmt(n, dp = 4) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
@@ -129,6 +130,17 @@ async function toggleOverlay() {
   $('status').textContent = tab
     ? 'Updated — the overlay will respond once you reload this page.'
     : 'Updated.';
+}
+
+/** Chromeless window sized for the card layout — OBS window-captures it. */
+function openStreamOverlay() {
+  chrome.windows.create({
+    url: chrome.runtime.getURL('overlay.html'),
+    type: 'popup',
+    width: 440,
+    height: 560,
+  });
+  window.close();
 }
 
 async function resetWallet() {

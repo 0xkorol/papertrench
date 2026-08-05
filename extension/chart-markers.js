@@ -1,26 +1,29 @@
-/* PaperTrench — chart bubble markers.
+/* PaperTrench — honest chart marker rail (the non-native fallback).
  *
- * Replicates the buy/sell bubble markers that Padre (and similar trading
- * sites) draw on their price chart when a real trade is executed. Paper
- * trades get the same visual treatment: a colored bubble appears at the
- * price level of the fill, and hovering shows the price and SOL amount.
+ * On sites with a reachable TradingView widget, fills and average lines are
+ * drawn NATIVELY through the MAIN-world bridge (see price-bridge.js) — that
+ * is the only way a marker stays glued to its candle through pan, zoom and
+ * auto-scale. This module is the fallback for pages where no native chart
+ * API was discovered (DEFECT C-19 routes everything else away from here).
  *
- * Two rendering strategies, tried in order:
+ * WHAT THIS DELIBERATELY DOES NOT DO (DEFECTS C-02 / C-03 / C-04): the old
+ * SVG overlay invented its own price range from observed ticks, glued
+ * out-of-range levels to the chart edge, put single fills at mid-height, and
+ * spread X positions by rank-in-array instead of time — while drawing precise
+ * labels, with no pan/zoom awareness at all. Every position was a fabrication
+ * wearing the costume of accuracy. A marker at a wrong level is a lie; honest
+ * absence beats fabricated presence.
  *
- *  1. SVG overlay on the chart container — if we can find the chart element,
- *     we position an SVG layer on top of it and draw bubbles at the correct
- *     price/time coordinates.
+ * The replacement is a compact MARKER RAIL pinned to the chart's top-right
+ * corner (or, when no chart container exists, a strip docked to a free screen
+ * corner): each fill is listed with side, price/mcap label and age, and the
+ * average entry/exit LEVELS appear as labeled chips. The rail explicitly
+ * claims NO Y position — the numbers are exact, the geometry claims nothing.
  *
- *  2. Fixed-position fallback — if the chart container can't be reliably
- *     found (e.g. the site uses a shadow DOM or a complex canvas setup),
- *     we render a small floating strip of bubbles on the right edge of the
- *     screen that always stays visible.
- *
- * The chart container is discovered via multiple strategies:
- *  - CSS selectors for common chart class patterns
- *  - Canvas element search (most charting libs use canvas)
- *  - MutationObserver to catch chart elements that render after a delay
- *  - Periodic re-scan to handle SPA re-renders that replace the chart
+ * Sizing note (DEFECTS C-27 / C-28): the old SVG label pill and tooltip
+ * estimated width as character-count x 6.2, overflowing onto the site's
+ * price scale. The rail is plain HTML sized by the layout engine itself
+ * (width: max-content) — no width estimate exists to be wrong.
  */
 (() => {
   'use strict';
@@ -28,36 +31,31 @@
   const Q = window.PaperQuote;
   const OVERLAY_ID = 'papertrench-chart-overlay';
   const FALLBACK_ID = 'papertrench-chart-fallback';
-  const SVG_NS = 'http://www.w3.org/2000/svg';
-  const BUBBLE_R = 7;
-  const BUBBLE_HIT_R = 16;
-  const MAX_MARKERS = 200;
+  const MAX_MARKERS = 200;   // stored
+  const RAIL_MAX_ROWS = 6;   // shown on the rail
+  const FALLBACK_MAX_ROWS = 6;
 
-  let svgEl = null;
+  const BUY_COLOR = '#3fb950';
+  const SELL_COLOR = '#f85149';
+
   let chartContainer = null;
-  let resizeObs = null;
+  let railEl = null;
   let domObserver = null;
-  let markers = []; // {ts, price, side, solAmount, symbol, currency}
+  let markers = []; // {ts, price, side, solAmount, symbol, displayPrice, currency}
   let averageLines = {
     avgBuyPrice: null, avgSellPrice: null,
     avgBuyLabel: null, avgSellLabel: null,
     currency: 'SOL',
   };
-  let priceRange = { min: 0, max: 0 };
-  let series = [];
   let scanTimer = null;
   let fallbackEl = null;
-  // Debounce render: multiple tickPrice calls in the same frame collapse
-  // into a single renderMarkers. Without this, every heartbeat + every
-  // page tick triggers a full SVG rebuild, which is expensive and can
-  // cascade with the DOM observer.
+  // Debounce render: multiple calls in the same frame collapse into one.
   let renderPending = false;
-  // Track whether a render is actually needed. tickPrice only changes the
-  // price range (affecting Y positions), so we skip the rebuild if the
-  // range hasn't moved meaningfully.
-  let lastRenderedRange = { min: 0, max: 0 };
-  let lastRenderedCount = -1;
-  let lastRenderedAvgCount = 0;
+  // DEFECT C-10: the render-skip memo compares the rendered VALUES (average
+  // levels, labels, fill rows), never just counts — a cross-tab fill that
+  // changes the average without changing the marker count must repaint.
+  let lastRenderedSignature = null;
+  let renderCount = 0; // test hook
 
   /* ---------------- chart container discovery ---------------- */
 
@@ -164,13 +162,38 @@
     return best;
   }
 
+  /** Attachment check that works on real nodes and harness fakes alike. */
+  function isAttached(el) {
+    if (!el) return false;
+    if (typeof el.isConnected === 'boolean') return el.isConnected;
+    try {
+      return Boolean(document.contains && document.contains(el));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** parent.contains(el) with a fallback for harness fakes. */
+  function holdsChild(parent, el) {
+    if (!parent || !el) return false;
+    if (typeof parent.contains === 'function') {
+      try { return parent.contains(el); } catch (_) { /* fall through */ }
+    }
+    const kids = parent.children || [];
+    for (let i = 0; i < kids.length; i++) if (kids[i] === el) return true;
+    return false;
+  }
+
   function ensureContainer() {
-    if (chartContainer && typeof document !== 'undefined' && document.contains && document.contains(chartContainer)) return chartContainer;
-    // Stale reference — reset
-    if (chartContainer && !document.contains(chartContainer)) {
+    // DEFECT C-11: a truthy-but-DETACHED container (TradingView reload, SPA
+    // re-render, resolution remount) must be dropped and re-discovered. The
+    // old guard only checked falsiness, so every render after a remount
+    // wrote into a dead subtree forever. Checked on EVERY render.
+    if (chartContainer && !isAttached(chartContainer)) {
       chartContainer = null;
       removeOverlay();
     }
+    if (chartContainer) return chartContainer;
 
     const found = findChartContainer();
     if (found) {
@@ -181,73 +204,102 @@
     return null;
   }
 
-  /* ---------------- SVG overlay ---------------- */
+  /* ---------------- rail placement on the chart ---------------- */
 
   function setupOverlay() {
     if (!chartContainer) return;
     removeOverlay();
 
-    svgEl = document.createElementNS(SVG_NS, 'svg');
-    svgEl.setAttribute('id', OVERLAY_ID);
-    svgEl.style.cssText = [
-      'position:absolute',
-      'top:0', 'left:0',
-      'width:100%', 'height:100%',
-      'pointer-events:none',
-      'z-index:999',
-      'overflow:visible',
-    ].join(';');
-
-    // Position relative to chart container
+    // The rail is positioned INSIDE the container's top-right corner — an
+    // edge pin, not a price position.
     if (getComputedStyle(chartContainer).position === 'static') {
       chartContainer.style.position = 'relative';
     }
-    chartContainer.appendChild(svgEl);
 
-    // Observe chart size changes
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObs = new ResizeObserver(() => requestRender());
-      resizeObs.observe(chartContainer);
-    }
-
-    // Observe DOM changes to the chart container (SPA re-renders)
+    // Observe the container so a site render that removes the rail brings it
+    // back. DEFECT C-24: the old observer watched the very subtree the
+    // renderer wrote into, so every render scheduled another render, with
+    // only the value-blind skip guard breaking the cycle. Mutations that
+    // originate INSIDE our own rail are filtered out here.
     if (typeof MutationObserver !== 'undefined') {
-      domObserver = new MutationObserver(() => {
-        // If our SVG was removed, re-attach
-        if (!chartContainer.contains(svgEl)) {
-          chartContainer.appendChild(svgEl);
+      domObserver = new MutationObserver((records) => {
+        let external = false;
+        for (const record of records || []) {
+          const target = record && record.target;
+          if (railEl && (target === railEl || holdsChild(railEl, target))) continue;
+          external = true;
+          break;
         }
+        if (!external) return; // our own writes: never re-render off them (C-24)
         requestRender();
       });
-      domObserver.observe(chartContainer, { childList: true, subtree: true });
+      try {
+        domObserver.observe(chartContainer, { childList: true, subtree: true });
+      } catch (_) { /* container may be a harness fake */ }
     }
   }
 
+  function detachNode(el) {
+    try {
+      if (el && el.parentNode && typeof el.parentNode.removeChild === 'function') {
+        el.parentNode.removeChild(el);
+      } else if (el && typeof el.remove === 'function') {
+        el.remove();
+      }
+    } catch (_) { /* already gone */ }
+  }
+
   function removeOverlay() {
-    if (svgEl && svgEl.parentNode) svgEl.parentNode.removeChild(svgEl);
-    svgEl = null;
-    if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+    if (railEl) detachNode(railEl);
+    railEl = null;
     if (domObserver) { domObserver.disconnect(); domObserver = null; }
   }
 
   /* ---------------- fallback strip ---------------- */
 
   /**
-   * If we can't find the chart container, render a small floating strip
-   * of bubbles on the right side of the screen so the user still sees
-   * their paper trade markers.
+   * When no chart container can be found, the rail becomes a fixed strip
+   * docked to a screen corner. DEFECTS O-23 / C-25: the old strip hardcoded
+   * `top:140px; right:360px` — the default panel spot — so a widened or
+   * dragged panel sat on top of it. The dock now probes each corner with
+   * elementFromPoint and takes the first one the PaperTrench overlay (which
+   * retargets to its #papertrench-host shadow host) does not occupy.
    */
+  function pickFreeCorner() {
+    const corners = [
+      { name: 'bottom-left', css: 'left:12px;bottom:12px;top:auto;right:auto' },
+      { name: 'bottom-right', css: 'right:12px;bottom:12px;top:auto;left:auto' },
+      { name: 'top-left', css: 'left:12px;top:84px;bottom:auto;right:auto' },
+      { name: 'top-right', css: 'right:12px;top:84px;bottom:auto;left:auto' },
+    ];
+    if (typeof document.elementFromPoint !== 'function') return corners[0];
+    const vw = (window.innerWidth || 1280);
+    const vh = (window.innerHeight || 800);
+    const probes = {
+      'bottom-left': [40, vh - 40],
+      'bottom-right': [vw - 40, vh - 40],
+      'top-left': [40, 120],
+      'top-right': [vw - 40, 120],
+    };
+    for (const corner of corners) {
+      const [x, y] = probes[corner.name];
+      let hit = null;
+      try { hit = document.elementFromPoint(x, y); } catch (_) { hit = null; }
+      if (!hit || hit.id !== 'papertrench-host') return corner;
+    }
+    return corners[0]; // every corner occupied (unlikely): least-bad default
+  }
+
   function ensureFallback() {
-    if (fallbackEl && typeof document !== 'undefined' && document.contains && document.contains(fallbackEl)) return fallbackEl;
+    if (fallbackEl && isAttached(fallbackEl)) return fallbackEl;
     if (fallbackEl) fallbackEl = null;
     if (!document.body) return null; // not ready yet
 
     fallbackEl = document.createElement('div');
-    fallbackEl.id = FALLBACK_ID;
+    fallbackEl.setAttribute('id', FALLBACK_ID);
     fallbackEl.style.cssText = [
       'position:fixed',
-      'top:140px',
-      'right:360px',
+      pickFreeCorner().css,
       'z-index:2147483646',
       'pointer-events:none',
       'display:flex',
@@ -261,163 +313,11 @@
   }
 
   function removeFallback() {
-    if (fallbackEl && fallbackEl.parentNode) fallbackEl.parentNode.removeChild(fallbackEl);
+    if (fallbackEl) detachNode(fallbackEl);
     fallbackEl = null;
   }
 
-  /* ---------------- price-to-pixel mapping ---------------- */
-
-  function updatePriceRange(currentPrice) {
-    if (currentPrice > 0) {
-      series.push(currentPrice);
-      if (series.length > 300) series.shift();
-    }
-    if (series.length < 2) {
-      if (currentPrice > 0) {
-        priceRange = { min: currentPrice * 0.85, max: currentPrice * 1.15 };
-      }
-      return;
-    }
-    let min = Infinity, max = -Infinity;
-    for (const p of series) {
-      if (p < min) min = p;
-      if (p > max) max = p;
-    }
-    const span = max - min || max * 0.1 || 1;
-    priceRange = { min: min - span * 0.15, max: max + span * 0.15 };
-  }
-
-  function priceToY(price) {
-    if (!chartContainer || !svgEl) return 0;
-    const h = chartContainer.clientHeight || 400;
-    if (priceRange.max <= priceRange.min) return h / 2;
-    const frac = (price - priceRange.min) / (priceRange.max - priceRange.min);
-    const clamped = Math.max(0.02, Math.min(0.98, frac));
-    return h * (1 - clamped);
-  }
-
-  function timeToX(ts, allMarkers) {
-    if (!chartContainer) return 0;
-    const w = chartContainer.clientWidth || 800;
-    if (allMarkers.length <= 1) return w - 30;
-    const minTs = allMarkers[0].ts;
-    const maxTs = allMarkers[allMarkers.length - 1].ts;
-    const span = maxTs - minTs || 1;
-    const frac = (ts - minTs) / span;
-    return w * (0.05 + frac * 0.9);
-  }
-
-  /* ---------------- marker rendering (SVG on chart) ---------------- */
-
-  function renderMarkers() {
-    if (!svgEl || !chartContainer) {
-      if (!ensureContainer()) {
-        renderFallback();
-        return;
-      }
-    }
-
-    // Skip rebuild if nothing meaningful changed since last render.
-    // This prevents 60fps SVG rebuilds when tickPrice is called but the
-    // price range hasn't actually moved.
-    const count = markers.length;
-    const avgLinesNow = (averageLines.avgBuyPrice != null ? 1 : 0) + (averageLines.avgSellPrice != null ? 1 : 0);
-    const rangeChanged =
-      Math.abs(priceRange.min - lastRenderedRange.min) > Math.abs(priceRange.min) * 0.001 ||
-      Math.abs(priceRange.max - lastRenderedRange.max) > Math.abs(priceRange.max) * 0.001;
-    if (count === lastRenderedCount && !rangeChanged && avgLinesNow === lastRenderedAvgCount) return;
-
-    lastRenderedCount = count;
-    lastRenderedAvgCount = avgLinesNow;
-    lastRenderedRange = { min: priceRange.min, max: priceRange.max };
-
-    // Clear existing SVG content
-    while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
-
-    if (!markers.length) {
-      // No bubbles yet, but average lines may still need rendering
-      renderAverageLines();
-      if (fallbackEl) removeFallback();
-      return;
-    }
-
-    const visible = markers.slice(-MAX_MARKERS);
-    for (const m of visible) {
-      const x = timeToX(m.ts, visible);
-      const y = priceToY(m.price);
-      const isBuy = m.side === 'buy';
-      const color = isBuy ? '#3fb950' : '#f85149';
-      const label = isBuy ? 'B' : 'S';
-
-      // Hit area
-      const hit = document.createElementNS(SVG_NS, 'circle');
-      hit.setAttribute('cx', x);
-      hit.setAttribute('cy', y);
-      hit.setAttribute('r', BUBBLE_HIT_R);
-      hit.setAttribute('fill', 'transparent');
-      hit.style.pointerEvents = 'all';
-      hit.style.cursor = 'pointer';
-
-      // Visible bubble
-      const bubble = document.createElementNS(SVG_NS, 'circle');
-      bubble.setAttribute('cx', x);
-      bubble.setAttribute('cy', y);
-      bubble.setAttribute('r', BUBBLE_R);
-      bubble.setAttribute('fill', color);
-      bubble.setAttribute('stroke', '#fff');
-      bubble.setAttribute('stroke-width', '1.5');
-      bubble.style.filter = 'drop-shadow(0 1px 3px rgba(0,0,0,.5))';
-
-      // Label
-      const text = document.createElementNS(SVG_NS, 'text');
-      text.setAttribute('x', x);
-      text.setAttribute('y', y + 3);
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('font-size', '8');
-      text.setAttribute('font-weight', '900');
-      text.setAttribute('fill', '#fff');
-      text.style.pointerEvents = 'none';
-      text.textContent = label;
-
-      // Tooltip
-      const tooltip = createSvgTooltip(m);
-      hit.addEventListener('mouseenter', () => showSvgTooltip(tooltip, x, y));
-      hit.addEventListener('mouseleave', () => hideSvgTooltip(tooltip));
-
-      svgEl.appendChild(bubble);
-      svgEl.appendChild(text);
-      svgEl.appendChild(hit);
-      svgEl.appendChild(tooltip);
-    }
-
-    // Draw average price lines on top of markers
-    renderAverageLines();
-
-    // Remove fallback if we're rendering on the chart
-    if (fallbackEl) removeFallback();
-  }
-
-  /* ---------------- average price lines ---------------- */
-
-  function renderAverageLines() {
-    if (!svgEl || !chartContainer) return;
-    const w = chartContainer.clientWidth || 800;
-
-    // Avg buy line
-    if (averageLines.avgBuyPrice != null && priceRange.max > priceRange.min) {
-      const y = priceToY(averageLines.avgBuyPrice);
-      if (y > 0 && y < (chartContainer.clientHeight || 400)) {
-        drawHorizontalLine(y, w, '#34D399', 'AVG BUY', averageLines.avgBuyPrice, averageLines.avgBuyLabel);
-      }
-    }
-    // Avg sell line
-    if (averageLines.avgSellPrice != null && priceRange.max > priceRange.min) {
-      const y = priceToY(averageLines.avgSellPrice);
-      if (y > 0 && y < (chartContainer.clientHeight || 400)) {
-        drawHorizontalLine(y, w, '#FF5F56', 'AVG SELL', averageLines.avgSellPrice, averageLines.avgSellLabel);
-      }
-    }
-  }
+  /* ---------------- shared row/chip builders ---------------- */
 
   /**
    * Chart-side value text.
@@ -436,156 +336,164 @@
     return currency === 'USD' ? '$' + text : text + ' SOL';
   }
 
-  function drawHorizontalLine(y, width, color, label, plotPrice, labelPrice) {
-    // Dashed line across the chart
-    const line = document.createElementNS(SVG_NS, 'line');
-    line.setAttribute('x1', 0);
-    line.setAttribute('y1', y);
-    line.setAttribute('x2', width);
-    line.setAttribute('y2', y);
-    line.setAttribute('stroke', color);
-    line.setAttribute('stroke-width', '1.2');
-    line.setAttribute('stroke-dasharray', '6 4');
-    line.setAttribute('opacity', '0.7');
-    line.style.pointerEvents = 'none';
-    svgEl.appendChild(line);
+  const ROW_BASE_CSS = [
+    'pointer-events:none',
+    'display:flex',
+    'align-items:center',
+    'gap:6px',
+    'width:max-content', // layout-engine sizing — no estimated widths (C-27/C-28)
+    'max-width:340px',
+    'background:rgba(13,17,23,0.92)',
+    'border-radius:8px',
+    'padding:3px 8px',
+    'font-size:11px',
+    'line-height:1.5',
+    'font-family:ui-sans-serif,system-ui,sans-serif',
+    'color:#e6edf3',
+    'white-space:nowrap',
+    'box-shadow:0 2px 8px rgba(0,0,0,.4)',
+  ].join(';');
 
-    // Label pill at the right edge
-    const labelText = `${label} ${formatChartPrice(labelPrice || plotPrice, averageLines.currency)}`;
-    const pillW = labelText.length * 6.2 + 12;
-    const pillH = 16;
-    const pillX = width - pillW - 2;
-    const pillY = y - pillH - 2;
+  /** One fill row: side badge, fill level label, size, age. */
+  function buildFillRow(m) {
+    const isBuy = m.side === 'buy';
+    const row = document.createElement('div');
+    row.className = 'pt-rail-fill';
+    row.style.cssText = ROW_BASE_CSS + ';border:1px solid ' + (isBuy ? BUY_COLOR : SELL_COLOR);
 
-    const bg = document.createElementNS(SVG_NS, 'rect');
-    bg.setAttribute('x', pillX);
-    bg.setAttribute('y', pillY);
-    bg.setAttribute('width', pillW);
-    bg.setAttribute('height', pillH);
-    bg.setAttribute('rx', 4);
-    bg.setAttribute('fill', color);
-    bg.setAttribute('opacity', '0.85');
-    bg.style.pointerEvents = 'none';
-    svgEl.appendChild(bg);
+    const badge = document.createElement('span');
+    badge.textContent = isBuy ? 'B' : 'S';
+    badge.style.cssText = 'font-weight:900;color:' + (isBuy ? BUY_COLOR : SELL_COLOR);
+    row.appendChild(badge);
 
-    const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('x', pillX + 6);
-    text.setAttribute('y', pillY + 11.5);
-    text.setAttribute('font-size', '9');
-    text.setAttribute('font-weight', '700');
-    text.setAttribute('font-family', 'ui-sans-serif, system-ui, sans-serif');
-    text.setAttribute('fill', '#000');
-    text.style.pointerEvents = 'none';
-    text.textContent = labelText;
-    svgEl.appendChild(text);
+    const info = document.createElement('span');
+    info.textContent = `${formatChartPrice(m.displayPrice || m.price, m.currency || 'SOL')} · ${Number(m.solAmount || 0).toFixed(2)} SOL`;
+    row.appendChild(info);
+
+    const age = document.createElement('span');
+    age.style.cssText = 'color:#8b949e;font-size:10px';
+    age.textContent = timeAgo(m.ts);
+    row.appendChild(age);
+
+    return row;
   }
 
-  function createSvgTooltip(m) {
-    const g = document.createElementNS(SVG_NS, 'g');
-    g.style.opacity = '0';
-    g.style.transition = 'opacity 0.15s';
-    g.style.pointerEvents = 'none';
+  /**
+   * One average-level chip. This is a labeled LEVEL, not a positioned line:
+   * the rail never claims a Y coordinate for it (C-02's honest replacement).
+   */
+  function buildAverageChip(kind, value, label, currency) {
+    const color = kind === 'AVG BUY' ? '#34D399' : '#FF5F56';
+    const chip = document.createElement('div');
+    chip.className = 'pt-rail-avg';
+    chip.style.cssText = ROW_BASE_CSS + ';border:1px solid ' + color + ';font-weight:700';
 
-    const lines = [
-      `${m.side === 'buy' ? '🟢 Buy' : '🔴 Sell'} (Paper)`,
-      `Price: ${formatChartPrice(m.displayPrice || m.price, m.currency || 'SOL')}`,
-      `Amount: ${m.solAmount.toFixed(3)} SOL`,
-    ];
-    if (m.symbol) lines.push(`Token: ${m.symbol}`);
-    lines.push(timeAgo(m.ts));
+    const tag = document.createElement('span');
+    tag.textContent = kind;
+    tag.style.cssText = 'color:' + color;
+    chip.appendChild(tag);
 
-    const padX = 8, padY = 6, lineH = 14;
-    const maxW = Math.max(...lines.map(l => l.length * 6.5)) + padX * 2;
-    const totalH = lines.length * lineH + padY * 2;
+    const val = document.createElement('span');
+    val.textContent = formatChartPrice(label != null ? label : value, currency);
+    chip.appendChild(val);
 
-    const bg = document.createElementNS(SVG_NS, 'rect');
-    bg.setAttribute('rx', 6);
-    bg.setAttribute('ry', 6);
-    bg.setAttribute('width', maxW);
-    bg.setAttribute('height', totalH);
-    bg.setAttribute('fill', '#0d1117');
-    bg.setAttribute('stroke', m.side === 'buy' ? '#3fb950' : '#f85149');
-    bg.setAttribute('stroke-width', '1.5');
-    g.appendChild(bg);
-
-    lines.forEach((line, i) => {
-      const t = document.createElementNS(SVG_NS, 'text');
-      t.setAttribute('x', padX);
-      t.setAttribute('y', padY + (i + 1) * lineH - 3);
-      t.setAttribute('font-size', '11');
-      t.setAttribute('font-family', 'ui-sans-serif, system-ui, sans-serif');
-      t.setAttribute('fill', i === 0 ? (m.side === 'buy' ? '#3fb950' : '#f85149') : '#e6edf3');
-      t.textContent = line;
-      g.appendChild(t);
-    });
-
-    g._maxW = maxW;
-    g._totalH = totalH;
-    return g;
+    return chip;
   }
 
-  function showSvgTooltip(g, x, y) {
-    const w = chartContainer.clientWidth || 400;
-    const tx = Math.min(x + 12, w - (g._maxW || 120) - 4);
-    const ty = Math.max(4, y - (g._totalH || 60) - 8);
-    g.setAttribute('transform', `translate(${tx}, ${ty})`);
-    g.style.opacity = '1';
+  /** The rows/chips the rail currently stands behind, oldest fill last. */
+  function buildRailContent(rootCss, maxRows) {
+    const hasAvg = averageLines.avgBuyPrice != null || averageLines.avgSellPrice != null;
+    if (!markers.length && !hasAvg) return null;
+
+    const root = document.createElement('div');
+    root.setAttribute('id', OVERLAY_ID);
+    root.style.cssText = rootCss;
+
+    if (averageLines.avgBuyPrice != null) {
+      root.appendChild(buildAverageChip('AVG BUY', averageLines.avgBuyPrice, averageLines.avgBuyLabel, averageLines.currency));
+    }
+    if (averageLines.avgSellPrice != null) {
+      root.appendChild(buildAverageChip('AVG SELL', averageLines.avgSellPrice, averageLines.avgSellLabel, averageLines.currency));
+    }
+    // Newest fills first — the ones the trader is still thinking about.
+    const visible = markers.slice(-maxRows).reverse();
+    for (const m of visible) root.appendChild(buildFillRow(m));
+    return root;
   }
 
-  function hideSvgTooltip(g) {
-    g.style.opacity = '0';
+  /* ---------------- rendering ---------------- */
+
+  /**
+   * DEFECT C-10: the skip guard is a VALUE signature over everything the rail
+   * displays — average levels, labels, currency and the visible fill rows —
+   * plus a minute bucket so age text refreshes while ticks flow. The old
+   * guard compared marker COUNT and range only, so a cross-tab fill that
+   * moved the average (same count) kept the stale level on screen.
+   */
+  function modelSignature() {
+    const rows = markers.slice(-RAIL_MAX_ROWS).map(
+      (m) => `${m.ts}·${m.side}·${m.displayPrice || m.price}·${m.currency}`
+    );
+    return JSON.stringify([
+      averageLines.avgBuyPrice, averageLines.avgSellPrice,
+      averageLines.avgBuyLabel, averageLines.avgSellLabel,
+      averageLines.currency,
+      markers.length,
+      rows,
+      Math.floor(Date.now() / 60_000),
+    ]);
   }
 
-  /* ---------------- fallback rendering (DOM strip) ---------------- */
-
-  function renderFallback() {
-    if (!markers.length) {
-      if (fallbackEl) removeFallback();
+  function renderMarkers() {
+    const container = ensureContainer();
+    if (!container) {
+      renderFallback();
       return;
     }
 
+    const signature = modelSignature();
+    if (signature === lastRenderedSignature && railEl && holdsChild(container, railEl)) {
+      return; // nothing the rail displays has changed (C-10: values, not counts)
+    }
+    renderCount += 1;
+    lastRenderedSignature = signature;
+
+    // Rebuild wholesale: a fresh rail replaces the old one, which also
+    // self-heals any external mutation of the previous rail's subtree.
+    if (railEl) { detachNode(railEl); railEl = null; }
+    const rail = buildRailContent([
+      'position:absolute',
+      'top:8px',
+      'right:8px',
+      'z-index:999',
+      'pointer-events:none',
+      'display:flex',
+      'flex-direction:column',
+      'align-items:flex-end',
+      'gap:4px',
+      'max-height:70%',
+      'overflow:hidden',
+    ].join(';'), RAIL_MAX_ROWS);
+    if (rail) {
+      container.appendChild(rail);
+      railEl = rail;
+    }
+
+    // Remove fallback if we're rendering on the chart
+    if (fallbackEl) removeFallback();
+  }
+
+  function renderFallback() {
+    const hasAvg = averageLines.avgBuyPrice != null || averageLines.avgSellPrice != null;
+    if (!markers.length && !hasAvg) {
+      if (fallbackEl) removeFallback();
+      return;
+    }
     const el = ensureFallback();
     if (!el) return; // document.body not ready
-    // Clear and re-render
     el.textContent = '';
-
-    const visible = markers.slice(-20); // Show last 20 in fallback
-    for (const m of visible) {
-      const isBuy = m.side === 'buy';
-      const dot = document.createElement('div');
-      dot.style.cssText = [
-        'pointer-events:all',
-        'cursor:pointer',
-        'display:flex',
-        'align-items:center',
-        'gap:6px',
-        'background:#0d1117',
-        'border:1px solid ' + (isBuy ? '#3fb950' : '#f85149'),
-        'border-radius:8px',
-        'padding:4px 8px',
-        'font-size:11px',
-        'font-family:ui-sans-serif,system-ui,sans-serif',
-        'color:#e6edf3',
-        'box-shadow:0 2px 8px rgba(0,0,0,.4)',
-      ].join(';');
-
-      const badge = document.createElement('span');
-      badge.textContent = isBuy ? '🟢 B' : '🔴 S';
-      badge.style.fontWeight = '900';
-      dot.appendChild(badge);
-
-      const info = document.createElement('span');
-      info.textContent = `${formatChartPrice(m.displayPrice || m.price, m.currency || 'SOL')} · ${m.solAmount.toFixed(2)} SOL`;
-      dot.appendChild(info);
-
-      const age = document.createElement('span');
-      age.style.color = '#8b949e';
-      age.style.fontSize = '10px';
-      age.textContent = timeAgo(m.ts);
-      dot.appendChild(age);
-
-      el.appendChild(dot);
-    }
+    const content = buildRailContent('display:flex;flex-direction:column;gap:4px', FALLBACK_MAX_ROWS);
+    if (content) el.appendChild(content);
   }
 
   /* ---------------- utilities ---------------- */
@@ -601,9 +509,7 @@
 
   /**
    * Request a render on the next animation frame. Multiple calls within the
-   * same frame collapse into one render. This prevents render loops where
-   * a DOM mutation from renderMarkers triggers the observer which triggers
-   * another tickPrice which triggers another renderMarkers.
+   * same frame collapse into one render.
    */
   function requestRender() {
     if (renderPending) return;
@@ -630,36 +536,33 @@
       side: m.side || 'buy',
       solAmount: m.solAmount || 0,
       symbol: m.symbol || '',
-      // `price` positions the marker on the chart. On GMGN that is market
-      // cap, while `displayPrice` remains the human-readable token fill.
+      // `displayPrice` is the human-readable fill figure (market cap where
+      // known); `price` is retained for API compatibility and labels.
       displayPrice: Number(m.displayPrice) > 0 ? Number(m.displayPrice) : m.price,
       currency: m.currency === 'USD' || m.currency === 'MCAP' ? m.currency : 'SOL',
     });
     if (markers.length > MAX_MARKERS) markers.shift();
-    updatePriceRange(m.price);
     requestRender();
   }
 
   /**
-   * Update the current price for range tracking. Does NOT immediately render
-   * — rendering is debounced to the next animation frame so multiple rapid
-   * ticks don't cause excessive DOM manipulation.
+   * Live-price notification. DEFECTS C-02/C-03: ticks no longer fabricate a
+   * price range — the rail claims no Y positions, so there is nothing
+   * price-shaped to update. A tick only nudges the debounced render so the
+   * relative-age text stays fresh (the value signature buckets it by minute).
    */
   function tickPrice(price) {
     if (!(price > 0)) return;
-    updatePriceRange(price);
-    if (markers.length) requestRender();
+    if (markers.length || averageLines.avgBuyPrice != null || averageLines.avgSellPrice != null) {
+      requestRender();
+    }
   }
 
   function clearMarkers() {
     markers = [];
     averageLines = { avgBuyPrice: null, avgSellPrice: null, avgBuyLabel: null, avgSellLabel: null, currency: 'SOL' };
-    series = [];
-    priceRange = { min: 0, max: 0 };
-    lastRenderedRange = { min: 0, max: 0 };
-    lastRenderedCount = -1;
-    lastRenderedAvgCount = 0;
-    if (svgEl) while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+    lastRenderedSignature = null;
+    if (railEl) { detachNode(railEl); railEl = null; }
     removeFallback();
   }
 
@@ -706,19 +609,15 @@
     chartContainer = null;
     markers = [];
     averageLines = { avgBuyPrice: null, avgSellPrice: null, avgBuyLabel: null, avgSellLabel: null, currency: 'SOL' };
-    series = [];
-    priceRange = { min: 0, max: 0 };
     // DEFECT C-22: the render-skip memo must reset with the state it
     // memoizes, or the first render after a re-init can compare equal
     // against the previous mount's values and silently skip drawing.
-    lastRenderedRange = { min: 0, max: 0 };
-    lastRenderedCount = -1;
-    lastRenderedAvgCount = 0;
+    lastRenderedSignature = null;
   }
 
   /**
-   * Set horizontal average buy/sell price lines on the chart.
-   * Pass null or omit a value to leave that line unchanged;
+   * Set the average buy/sell LEVELS shown on the rail chips.
+   * Pass null or omit a value to leave that entry unchanged;
    * pass `undefined` explicitly to clear it.
    */
   function setAverageLines(opts) {
@@ -733,7 +632,7 @@
     requestRender();
   }
 
-  /** Clear both average price lines. */
+  /** Clear both average entries. */
   function clearAverageLines() {
     averageLines = { avgBuyPrice: null, avgSellPrice: null, avgBuyLabel: null, avgSellLabel: null, currency: 'SOL' };
     requestRender();
@@ -747,15 +646,16 @@
     clearAverageLines,
     initChartMarkers,
     destroyChartMarkers,
-    // Exposed for testing
-    _priceToY: priceToY,
-    _timeToX: timeToX,
-    _updatePriceRange: updatePriceRange,
+    // Exposed for testing. Deliberately ABSENT: _priceToY / _timeToX /
+    // _updatePriceRange / _getPriceRange — the fabricated positioning they
+    // exposed is gone (C-02/C-03/C-04), not merely unused.
     _getMarkers: () => markers,
     _getAverageLines: () => ({ ...averageLines }),
-    _getPriceRange: () => priceRange,
     _findChartContainer: findChartContainer,
     _scoreChartCandidate: scoreChartCandidate,
+    _getRenderCount: () => renderCount,
+    _getRailElement: () => railEl,
+    _getFallbackElement: () => fallbackEl,
   };
 
   if (typeof window !== 'undefined') window.PTChartMarkers = api;

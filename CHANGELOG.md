@@ -3,6 +3,74 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.0.0 — 2026-08-05 · out of alpha
+
+The production release. A full four-track code audit produced a public,
+ranked defect register (`DEFECTS.md`, 139 findings); v2.0.0 closes 116 of
+them — every wrong number, every silent death, every wrong presence — each
+with a regression test that fails on the old code. The rest carry explicit
+engineering dispositions or sit on an enumerated v2.1 backlog (friction and
+polish only). Suite: 553 tests, green.
+
+**Numbers you can trust (the S1 class):**
+- Fills can no longer execute at stale prices: chain state first, then the
+  click-time snapshot, then a fresh page tick, then one resolver refresh —
+  and a 3-second last resort for every source, aligned with the header's own
+  staleness mark. Beyond that, the trade is refused with a visible reason.
+  The old default path filled at prices up to 10 seconds old.
+- Price collection is per-token: a batched frame can never attribute one
+  coin's price to another, and trade arrays are read newest-first.
+- The average-entry line finally HOLDS YOUR ENTRY. It used to ride the
+  candle on market-cap charts. Unit toggles re-draw it immediately; before
+  any chart evidence exists there is no line rather than a wrong-unit line.
+- GMGN markers and lines are corrected against the chart's own candle scale;
+  a fill without a genuine USD price waits for one instead of drawing ~150×
+  low. Fill markers survive chart remounts and resolution changes.
+- Sites without a native chart hook get an honest marker rail — real fills,
+  real levels, no fabricated Y positions pretending to be chart-accurate.
+- Dashboard accounting is unified: the equity curve converges exactly to
+  equity, realized P&L includes partial exits everywhere, the verification
+  chain agrees with an honest wallet by construction, and open/closed %
+  share one basis.
+
+**Feeds that survive volume (the S2 class):**
+- The high-volume fixes that used to exist only for GMGN's trade feed are
+  now the contract for every site: bigger parse guard with a bounded
+  collector walk, per-mint throttling, and a 10× stress harness in CI.
+- A fast runner no longer freezes the feed: sustained out-of-band ticks
+  force an immediate re-anchor. Armed buys wait while the market is visibly
+  trading instead of expiring on a bare clock.
+- The RPC pool stops eating itself: vault discovery costs one round trip
+  (and is cached), and a fully benched pool cools down instead of hammering
+  dead endpoints.
+- Screener quick-buy chips fill on the first tap, price from fresh quotes
+  only, never stick busy, and step aside when the panel covers them.
+
+**An overlay that behaves (the S3/S4 classes):**
+- PaperTrench now runs ONLY on the nine supported trading sites — never
+  anywhere else. Wallet, portfolio, and EVM routes never mount the panel.
+  Pump.fun is a first-class site with its own adapter.
+- Navigation is instant (SPA route hooks instead of an 800 ms poll) and can
+  never trade the previous token on a new page.
+- One drag system: panel, positions bar, minimized pill, and the collapsed
+  tab all drag with touch support, both-bounds clamps, and positions that
+  can never be lost off-screen. Disabling the overlay removes everything,
+  including chart drawings; reloading the extension leaves nothing behind.
+- The dashboard stops fighting you: tables keep their scroll position, async
+  results survive refreshes, settings saves can't clobber your layout, and
+  every failure says so out loud.
+
+**New: the graduation bar.** The coach view now evaluates the seven-criterion
+bar from `docs/GRADUATION.md` against your own journal — expectancy that
+survives removing your best round, loss sizing, hold symmetry, revenge
+re-entries, thesis coverage, cold-streak discipline — and missing evidence
+never counts as a pass. Paper failure is definitive; clearing the bar earns
+a small, careful start.
+
+**Also:** structured bug-report form, a 9-site release QA matrix, a preflight
+script that gates every tag, a full permissions audit (`docs/PERMISSIONS.md`),
+and the public roadmap + defect register linked from the README.
+
 ## v1.2.18 — 2026-08-05
 
 First fix batch from the public defect register (`DEFECTS.md`) — six correctness

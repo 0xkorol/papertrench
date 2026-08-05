@@ -242,7 +242,10 @@ test('average paper fills use Padre native order-line styling exactly', () => {
     data: {
       source: 'papertrench-content',
       type: 'paper-lines',
-      payload: { enabled: true, avgBuyUsd: 0.00042, avgSellUsd: 0.00069 },
+      // axisBasis is stated: DEFECT C-05 forbids drawing before any bar
+      // close when the axis unit is unknown, so the content script's
+      // learned basis is part of the contract this test drives.
+      payload: { enabled: true, axisBasis: 'usd', avgBuyUsd: 0.00042, avgSellUsd: 0.00069 },
     },
   });
 
@@ -273,9 +276,10 @@ test('average lines update in place and are removed when disabled', () => {
     data: { source: 'papertrench-content', type, payload },
   });
 
-  send('paper-lines', { enabled: true, avgBuyUsd: 1, avgSellUsd: 2 });
+  // axisBasis stated for the same C-05 reason as above.
+  send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyUsd: 1, avgSellUsd: 2 });
   const [fill, exit] = env.orderLines;
-  send('paper-lines', { enabled: true, avgBuyUsd: 1.5, avgSellUsd: null });
+  send('paper-lines', { enabled: true, axisBasis: 'usd', avgBuyUsd: 1.5, avgSellUsd: null });
 
   assert.equal(env.orderLines.length, 2, 'updating must not create duplicate lines');
   assert.equal(fill.values.setPrice, 1.5, 'average fill line must update in place');

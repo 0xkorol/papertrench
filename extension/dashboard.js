@@ -405,6 +405,19 @@ async function mutateState(mutate, retries = 3) {
 }
 
 function bindNav() {
+  // Outside <nav> on purpose: nav buttons switch sections via data-section,
+  // and this one opens a window instead.
+  const overlayLaunch = document.getElementById('stream-overlay-btn');
+  if (overlayLaunch) {
+    overlayLaunch.addEventListener('click', () => {
+      chrome.windows.create({
+        url: chrome.runtime.getURL('overlay.html'),
+        type: 'popup',
+        width: 440,
+        height: 560,
+      });
+    });
+  }
   document.querySelectorAll('nav button').forEach((b) => {
     b.addEventListener('click', () => {
       currentSection = b.dataset.section;
