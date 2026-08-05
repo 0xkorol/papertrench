@@ -793,8 +793,10 @@ complaint, unfixed (header comment blames the old timer).
 ### S4 — friction
 
 **D-35 · S4 · rpcUrl has no UI anywhere** — defined, consumed, documented; no input.
+**fixed v1.3.0** — rpcUrl input in the AI/network settings card, saved with the form.
 `engine.js:94`, `background.js:619` · confirmed · open
 **D-36 · S4 · Reset claims to clear recordings but doesn't — RC.clear() exists and is called by nobody; orphaned videos accumulate forever**
+**fixed v1.3.0** — dashboard reset calls RC.clear(); popup reset routes through a new pt_clear_recordings background message.
 `dashboard.js:2005,2015`, `popup.js:128-132`, `recordings.js:151` · confirmed · open
 **D-37 · S4 · Which settings apply live is undocumented and inconsistent** — live:
 overlay/presets/lines/visibility/size/bar; needs-reload (silently): panelFocusMode,
@@ -816,15 +818,18 @@ sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · con
 ### S5 — polish
 
 **D-44 · S5** Share-card object URL never revoked on success; replacing cardMedia orphans the previous — `dashboard.js:1553-1561`.
+**fixed v1.3.0** — previous object URL revoked when the card media is replaced.
 **D-45 · S5** Drop target advertises GIF but renders only the first frame — `dashboard.html:650`.
 **D-46 · S5** Dead code: renderMomentMedia, renderReplayTape, formatUnix, unused summary, empty else-if — `dashboard.js:1395,1450,2120,1759,1374`.
 **D-47 · S5** "Saved." written into the AI-test output span and never cleared — `dashboard.js:2077`.
 **D-48 · S5** Journal fee column shows entire gross as fee for legacy fills missing solNet; recorded feeSol unused — `dashboard.js:634`.
+**fixed v1.3.0** — fee column prefers the recorded feeSol; em-dash when underivable.
 **D-49 · S5** Coach prompts stamp UTC ISO; calendar buckets local days — day boundaries disagree — `dashboard.js:810`, `background.js:456`, `engine.js:704-708`.
 **D-50 · S5** Frame data URLs interpolated unescaped into src — `dashboard.js:1361,1423,1798`.
 **D-51 · S5** seq double-bumped on dashboard reset — `engine.js:932` + `dashboard.js:2013`.
 **D-52 · S5** sessionStats counts break-even rounds as losses — `engine.js:407`.
 **D-53 · S5** dashboard.js loaded before #card-modal — currently safe only by accident of async init — `dashboard.html:643-644`.
+**fixed v1.3.0** — the modal now precedes the dashboard.js script tag for real.
 
 ### Seq-protocol answer (cross-context write safety)
 

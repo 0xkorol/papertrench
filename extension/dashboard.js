@@ -877,7 +877,7 @@ function renderJournal(el) {
       <td class="num">${fmt(t.qty, 4)}</td>
       <td class="num">${mcapLevel(t)}</td>
       <td class="num">${fmt(t.solGross, 4)}</td>
-      <td class="num dim">${fmt(t.solGross - (t.solNet || 0), 4)}</td>
+      <td class="num dim">${t.feeSol != null ? fmt(t.feeSol, 4) : (t.solNet != null ? fmt(t.solGross - t.solNet, 4) : '—')}</td>
       <td class="num ${t.pnlSol === undefined ? 'dim' : t.pnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">
         ${t.pnlSol !== undefined ? (t.pnlSol >= 0 ? '+' : '') + fmt(t.pnlSol) : '—'}
       </td>
@@ -1803,6 +1803,7 @@ function eventLabel(event) {
 /* ---------- shareable P&L card ---------- */
 
 let cardMedia = null;      // the user's chosen background image/GIF
+let cardMediaUrl = null;   // its object URL, revoked when replaced (D-44)
 let cardModelCurrent = null;
 
 /**
@@ -1864,7 +1865,13 @@ function bindShareCard() {
     if (!chosen) return;
     const url = URL.createObjectURL(chosen);
     const img = new Image();
-    img.onload = () => { cardMedia = img; paintShareCard(); };
+    img.onload = () => {
+      // Replacing the media orphaned the previous object URL (DEFECT D-44).
+      if (cardMediaUrl) { try { URL.revokeObjectURL(cardMediaUrl); } catch (_) {} }
+      cardMediaUrl = url;
+      cardMedia = img;
+      paintShareCard();
+    };
     // A broken/unsupported file must not wipe the card.
     img.onerror = () => URL.revokeObjectURL(url);
     img.src = url;
@@ -2409,6 +2416,7 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-ai-allow-local" ${settings.aiAllowLocalEndpoint ? 'checked' : ''}> Allow local/private AI endpoints</label><small>Enable only if you run a self-hosted (localhost, 127.0.0.1, or LAN) OpenAI-compatible shim. Off blocks SSRF to internal addresses.</small></div>
         <div class="field"><label for="set-model">AI model</label><input id="set-model" type="text" value="${esc(settings.aiModel || '')}" placeholder="endpoint default"><small>Optional override. Blank uses the endpoint's own default.</small></div>
         <div class="field"><label for="set-key">API key</label><input id="set-key" type="password" value="${esc(settings.aiApiKey || '')}" autocomplete="off" placeholder="optional"><small>Only needed if your BYOK setup requires a bearer token.</small></div>
+        <div class="field"><label for="set-rpc">Private Solana RPC (optional)</label><input id="set-rpc" type="text" value="${esc(settings.rpcUrl || '')}" placeholder="blank = built-in keyless public pool"><small>Power users: paste your own RPC endpoint for extra headroom. Blank uses the shared public pool — no signup needed. (This setting existed but had no input anywhere; DEFECT D-35.)</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-rec" ${settings.recordingEnabled ? 'checked' : ''}> Record screen while a position is open</label><small>Chrome asks for screen permission once per session.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-frames" ${settings.framesEnabled ? 'checked' : ''}> Capture key frames on fills</label></div>
         <div class="field field-check"><label><input type="checkbox" id="set-autorev" ${settings.autoReview ? 'checked' : ''}> Auto-run AI review when a round closes</label></div>
@@ -2474,6 +2482,10 @@ function bindSettings() {
     state.updatedAt = Date.now();
     const write = { pt_state: state, pt_frames: [], [RP.STORAGE_KEY]: [] };
     if (balanceChanged) write.pt_settings = settings;
+    // The confirm text promises recordings go too — and orphaned videos used
+    // to survive every reset, tens of MB forever (DEFECT D-36).
+    try { await RC.clear(); } catch (_) {}
+    recordings = {};
     try {
       await store.set(write);
     } catch (err) {
@@ -2594,6 +2606,7 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     sellPcts: sellPcts.length ? sellPcts : [25, 50, 75, 100],
     aiEndpoint: document.getElementById('set-endpoint').value.trim() || DEFAULTS.aiEndpoint,
     aiAllowLocalEndpoint: document.getElementById('set-ai-allow-local').checked,
+    rpcUrl: document.getElementById('set-rpc') ? document.getElementById('set-rpc').value.trim() : (settings.rpcUrl || ''),
     aiModel: document.getElementById('set-model').value.trim(),
     aiApiKey: document.getElementById('set-key').value.trim(),
     recordingEnabled: document.getElementById('set-rec').checked,

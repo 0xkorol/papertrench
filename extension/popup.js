@@ -146,6 +146,9 @@ async function resetWallet() {
     pt_frames: [],
     pt_replays: [],
   });
+  // The confirm text promises recordings are erased too; the background owns
+  // the IndexedDB store (DEFECT D-36).
+  chrome.runtime.sendMessage({ type: 'pt_clear_recordings' }).catch(() => {});
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
   load();
 }

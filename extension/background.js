@@ -9,7 +9,7 @@
 
 
 if (typeof importScripts === 'function') {
-  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js');
+  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js');
 }
 const RP = self.PTReplay;
 const R = self.PaperTrenchResolver;
@@ -585,6 +585,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'pt_settings_changed':
         await refreshFrameInterval();
         sendResponse({ ok: true });
+        break;
+
+      case 'pt_clear_recordings':
+        // The popup's reset promises recordings go too, but the popup is
+        // deliberately storage-only — IndexedDB cleanup runs here (D-36).
+        try { await self.PTRecordings.clear(); sendResponse({ ok: true }); }
+        catch (e) { sendResponse({ ok: false, error: e && e.message }); }
         break;
 
       case 'pt_ai_chat':
