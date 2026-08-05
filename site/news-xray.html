@@ -202,6 +202,26 @@
 
     <p>If X rotates its API, the deep scan quietly stops and the passive layer keeps working. <b>The card degrades; it does not break.</b></p>
 
+    <h2>Update — the dock that never ran (v2.7.0)</h2>
+
+    <p>A postscript worth telling, because it is the most instructive bug we have shipped a fix for.</p>
+
+    <p>The card is meant to <em>dock</em> into the profile header — take its own space in the page rather than float over your timeline. That code existed from day one. It had never run. Not once, on any profile.</p>
+
+    <p>The reason: X renders the Posts / Replies bar as a <code>&lt;div role="tablist"&gt;</code>, and we were looking for <code>nav[role="tablist"]</code>. The selector returned <code>null</code> on every profile, the anchor lookup bailed, and the dock silently gave up and floated instead.</p>
+
+    <p class="post-pull">Every piece of geometry tuning built on top of it was dead code, tuned against a path that never executed.</p>
+
+    <p>The fix is small — match the role alone, verified against real x.com markup rather than assumed. The interesting part is the second half:</p>
+
+    <div class="callout">
+      <span class="co-label">Two changes so this cannot repeat quietly</span>
+      <p><strong>The test fake now fails nav-shaped selectors the way the real page does.</strong> The old fake was more permissive than x.com, so the tests passed on a selector production could never match. A fixture that is kinder than reality is not a test.</p>
+      <p><strong>Every host now carries <code>data-pt-dock="docked"</code> or <code>float:&lt;reason&gt;</code>.</strong> If the card ever floats again, it says why, in devtools, in one word — instead of leaving someone to infer it from geometry.</p>
+    </div>
+
+    <p>Three attempted fixes went by before anyone checked the live markup. The lesson stuck: probe the real DOM first, and make failures name themselves.</p>
+
     <h2>What we tested</h2>
 
     <p>The suite went to <b>749 passing</b> for this release, including a hand-built DOM that drives the card end to end — an intel card that throws is an intel card that is not there — plus tests pinning the three ways this feature could lie:</p>
@@ -262,6 +282,31 @@
         <a href="news.html#v2-6-0">this release in the archive</a>
         <span>·</span>
         <a href="https://github.com/OnlyTerp/papertrench/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md ↗</a>
+      </div>
+    </div>
+
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes · X-Ray</span>
+        <span class="ver-chip">v2.7.0</span>
+        <span class="ver-chip">v2.7.1</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>The X-Ray dock fix</h4>
+          <p>X renders the Posts/Replies bar as a <code>div</code> with <code>role=tablist</code>, so a <code>nav[role=tablist]</code> lookup returned null and the header anchor bailed on every profile — the dock never ran, and all the geometry tuning built on it was dead code. The role is now matched on its own (verified against live x.com markup), the test fake fails nav-shaped selectors the way the real page does, and every host is stamped <code>data-pt-dock=docked</code> or <code>float:&lt;reason&gt;</code> so any future float is diagnosable from devtools instead of by geometry guesswork.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Get the complete build</h4>
+          <p>The dock fix landed after v2.7.0 was tagged, so it is <b>not</b> in the 2.7.0 zip. <b>v2.7.1 is the complete batch</b> — if you downloaded 2.7.0, update.</p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Also in that batch:</span>
+        <a href="news-turbo.html">Terminal Turbo</a>
+        <span>·</span>
+        <a href="news-fills.html">the fill-accuracy fix</a>
       </div>
     </div>
 

@@ -786,6 +786,7 @@ footer { border-top: 1px solid var(--line); padding: 42px 0; }
   display: inline-flex; align-items: center; gap: 7px; margin-top: 15px;
   font-size: 13px; font-weight: 700; color: var(--orange2);
 }
+.rel-more + .rel-more { margin-left: 20px; }
 .rel-more:hover { color: #ffd9b5; }
 
 /* ---------- article pages ---------- */

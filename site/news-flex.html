@@ -172,6 +172,18 @@
 
     <p>That release also fixed two things the maintainer hit while taking a live trade: the resize grip could latch after a cancelled gesture and keep resizing forever (pointer capture now guarantees a terminal event), and the Closed P&amp;L card was being rebuilt on every heartbeat — re-running its entry animation each time, which read as a blink. It now renders once per close, and only the how-long-ago text updates in place.</p>
 
+    <h3>v2.7.0 — flex without leaving the terminal</h3>
+
+    <p>Flexing still cost you your seat: the button bounced you to a dashboard tab, away from the chart you were watching. Now it opens the composer as a <b>floating window centred over the page</b>. Esc or a backdrop click closes it.</p>
+
+    <p>It is the same composer, not a cut-down copy — identical card, backgrounds, customize toggles, Copy and Download, and one shared background gallery, so uploads made in the overlay appear in the dashboard composer and vice versa.</p>
+
+    <div class="callout">
+      <span class="co-label">Two composers, one set of numbers</span>
+      <p>The card math now lives in a single shared derivation (<code>pnlcard.js</code>) used by both. <strong>A card can never show different numbers depending on where you opened it.</strong></p>
+      <p>Two code paths computing the same P&amp;L is two chances to disagree, and a share card that disagrees with the dashboard is a share card nobody should trust. The PAPER watermark rides along, as always.</p>
+    </div>
+
     <!-- ---------- patch notes ---------- -->
     <div class="pn-panel reveal">
       <div class="pn-head">
@@ -241,6 +253,26 @@
       <div class="pn-foot">
         <span>Full history:</span>
         <a href="news.html#v2-5-0">these releases in the archive</a>
+      </div>
+    </div>
+
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.7.0</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>Flex without leaving the terminal</h4>
+          <p>The Flex button on the closed P&amp;L card now opens the share composer as a floating window centered over the page — no more bouncing to a dashboard tab. It is the SAME composer: identical card, backgrounds, customize toggles, Copy and Download, and the same shared background gallery (uploads made in the overlay appear in the dashboard composer and vice versa). Esc or a backdrop click closes it. The card math now lives in one shared derivation (<code>pnlcard.js</code>) used by both composers, so a card can never show different numbers depending on where you opened it. The PAPER watermark rides along, as always.</p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Also in that batch:</span>
+        <a href="news-turbo.html">Terminal Turbo</a>
+        <span>·</span>
+        <a href="news-fills.html">the fill-accuracy fix</a>
       </div>
     </div>
 

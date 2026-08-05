@@ -45,8 +45,11 @@
     <h1 class="reveal d1">What we just<br><span class="grad-orange">shipped.</span></h1>
     <p class="hero-sub reveal d2">PaperTrench moves fast — most of these releases went out the same day someone reported the problem. Every feature and every fix is written up here in plain language, including <strong>what it does not do</strong>, because a trainer that oversells itself teaches the wrong lesson.</p>
     <div class="news-stats reveal d3">
-      <div><div class="num o" style="color:var(--orange)">24</div><div class="lbl">RELEASES LOGGED</div></div>
-      <div><div class="num g" style="color:var(--green)">779</div><div class="lbl">TESTS PASSING</div></div>
+      <!-- Filled by news.js from the archive itself — a hand-typed count here
+           drifts the moment a release is added, and a wrong number on this
+           page is the one thing the page is about. -->
+      <div><div class="num o" style="color:var(--orange)" id="relCount">—</div><div class="lbl">RELEASES LOGGED</div></div>
+      <div><div class="num g" style="color:var(--green)">814</div><div class="lbl">TESTS PASSING</div></div>
       <div><div class="num b" style="color:var(--blue)">116</div><div class="lbl">AUDITED DEFECTS CLOSED</div></div>
       <div><div class="num o" style="color:var(--violet)">0</div><div class="lbl">NUMBERS INVENTED</div></div>
     </div>
@@ -62,14 +65,26 @@
 
     <div class="feat-grid">
 
-      <a class="feat-card lead a-violet reveal" href="news-xray.html">
+      <a class="feat-card lead a-violet reveal" href="news-turbo.html">
+        <div class="feat-meta">
+          <span class="ver-chip">v2.7.0</span>
+          <span class="tag speed">Speed</span>
+          <span class="tag feature">Feature</span>
+          <time class="feat-date" datetime="2026-08-05">Aug 5, 2026</time>
+        </div>
+        <h3>Terminal Turbo: every terminal, warm</h3>
+        <p>The warm-viewer trick was never really about X. Axiom, Padre, GMGN, pump.fun and Solscan all get kept-warm viewers now — click through from one terminal and the next is already booted. Then the half nobody demos: PaperTrench switched off donates zero parsing to the page, chips stopped thrashing layout at volume peaks, and the dashboard stopped re-reading everything every four seconds. With receipts, measured on your own machine.</p>
+        <span class="go">Read the full story <span class="arr" aria-hidden="true">→</span></span>
+      </a>
+
+      <a class="feat-card a-violet reveal" href="news-xray.html">
         <div class="feat-meta">
           <span class="ver-chip">v2.6.0</span>
           <span class="tag feature">Feature</span>
           <time class="feat-date" datetime="2026-08-05">Aug 5, 2026</time>
         </div>
         <h3>X-Ray: every coin an account has ever posted, before you click buy</h3>
-        <p>Open any X profile — or any post — and the intel is already on screen. Every contract address that account has put out, dated by the post itself. Bio, name and @handle changes, counted separately. The biggest accounts following them. No button, no "analyze", no waiting — and every counter says exactly how long we have been watching, because nobody can honestly tell you a bio changed on a day they never saw it.</p>
+        <p>Open any X profile and the intel is already on screen — every contract address that account has put out, bio and @handle changes counted separately, and the biggest accounts following them. Every counter says how long we have been watching, because nobody can honestly tell you a bio changed on a day they never saw it.</p>
         <span class="go">Read the full story <span class="arr" aria-hidden="true">→</span></span>
       </a>
 
@@ -169,7 +184,7 @@
     <h2 class="reveal d1" style="margin-top:24px">Every one of these<br><span class="grad-orange" style="background:linear-gradient(100deg,var(--orange2),var(--orange-deep));-webkit-background-clip:text;background-clip:text;color:transparent">is already in the build.</span></h2>
     <p class="sec-sub reveal d2" style="text-align:center;margin-top:16px">Update by unzipping the latest release over the folder you already loaded, then hitting ↻ Reload on the extension card. Your wallet, journal and attest chain survive.</p>
     <div class="hero-ctas reveal d3" style="margin-top:36px">
-      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.5.2/papertrench-2.7.0.zip" target="_blank" rel="noopener">⬇ Get the latest build</a>
+      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.7.1/papertrench-2.7.1.zip" target="_blank" rel="noopener">⬇ Get the latest build</a>
       <a class="btn btn-ghost" href="https://github.com/OnlyTerp/papertrench/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Raw changelog on GitHub ↗</a>
     </div>
   </div>

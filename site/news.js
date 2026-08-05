@@ -18,16 +18,36 @@
 
   const RELEASES = [
     {
-      v: '2.7.0', date: 'Aug 5, 2026', iso: '2026-08-05',
-      tags: ['fix', 'feature'],
-      title: 'Community feedback batch #2',
-      blurb: 'Four items from the community, all shipped the same day — led by the fill-accuracy bug that could book you instant fake profit.',
-      article: 'news-fills.html',
+      v: '2.7.1', date: 'Aug 5, 2026', iso: '2026-08-05',
+      tags: ['fix'],
+      title: 'The complete v2.7.0 batch',
+      blurb: 'Housekeeping with a straight face: v2.7.0 was tagged and published mid-batch, before the last five commits landed.',
       points: [
-        '<b>Fills land on the chart you are looking at.</b> On migrated (AMM) tokens the on-chain feed could lose one side of every trade it watched, filling paper trades up to ~13% away from the live chart. The stale-frame guard is now per-vault, and every fill is reconciled against the price on your screen.',
-        '<b>Close the hot X tab, it comes back.</b> Accidentally closing the Instant X links viewer no longer degrades the feature — a fresh hidden viewer takes its place immediately.',
-        '<b>Your own X tab IS the warm tab now.</b> PaperTrench adopts the x.com tab you already keep open instead of opening a second one. It never claims a tab you are looking at, a pinned tab, or one playing audio.',
+        '<b>If you downloaded 2.7.0, update.</b> That build is missing the Instant terminal links, the dashboard refresh fix ("stopped re-reading everything every 4 seconds"), and an X-Ray dock fix — all described in the v2.7.0 notes below.',
+        'v2.7.1 is the complete batch; nothing else changed.',
+      ],
+    },
+    {
+      v: '2.7.0', date: 'Aug 5, 2026', iso: '2026-08-05',
+      tags: ['fix', 'feature', 'speed'],
+      title: 'Community batch #2, Terminal Turbo, X-Ray dock, the floating Flex composer',
+      blurb: 'The biggest batch so far: the fill-accuracy bug that could book you instant fake profit, then a whole pass on making every terminal feel fast.',
+      articles: [
+        { href: 'news-fills.html', label: 'The fill-accuracy story' },
+        { href: 'news-turbo.html', label: 'Terminal Turbo, in full' },
+      ],
+      points: [
+        '<b>Fills land on the chart you are looking at — the "instant +14%" is dead.</b> On migrated (AMM) tokens the on-chain feed could lose one side of every trade it watched, filling paper trades up to ~13% away from the live chart. The stale-frame guard is now per-vault, and every fill is reconciled against the price on your screen (F-33).',
+        '<b>Instant terminal links (opt-in).</b> Axiom, Padre and GMGN token links clicked on another terminal open in that terminal\'s kept-warm viewer, and a positions-bar hop to another terminal no longer replaces the tab you are on.',
+        '<b>Instant pump.fun &amp; Solscan links (opt-in).</b> The Instant X viewer idea, generalized — up to two muted background viewer tabs, already warm when you get there, with hover prefetch. Ctrl/click bypasses.',
+        '<b>Turbo receipts.</b> The popup counts your warm vs cold opens and shows the median routing time — measured on your machine, stored locally, never sent anywhere.',
+        '<b>PaperTrench off costs the page nothing.</b> When no consumer exists for price frames, the bridge drops them before the body copy and the JSON parse — zero parsing donated to the host site.',
+        '<b>Chips stopped fighting the page for layout.</b> Chip positioning runs in read/write phases with diffed style writes, so screener chips no longer thrash layout at volume peaks.',
+        '<b>The dashboard stopped re-reading everything every 4 seconds.</b> It refreshes the instant your data changes, naps while hidden, and leaves the recordings database alone unless a new replay landed.',
+        '<b>Flex without leaving the terminal.</b> The Flex button opens the share composer as a floating window over the page — the SAME composer, with card math now in one shared derivation so a card can never show different numbers depending on where you opened it.',
+        '<b>Close the hot X tab, it comes back</b>, and <b>your own X tab IS the warm tab now</b> — PaperTrench adopts the x.com tab you already keep open instead of opening a second one.',
         '<b>Quick settings in the popup.</b> Starting balance, quick-buy presets, quick-sell presets and a fees profile, editable without opening the dashboard.',
+        '<b>The positions bar respects late headers,</b> measuring the site header until it settles so slow-painting headers no longer end up underneath it.',
       ],
     },
     {
@@ -320,9 +340,13 @@
 
     const tags = r.tags.map(t => `<span class="tag ${t}">${TAG_LABEL[t]}</span>`).join('');
     const points = r.points.map(p => `<div class="rel-point"><span class="bullet"></span><span>${p}</span></div>`).join('');
-    const more = r.article
-      ? `<a class="rel-more" href="${r.article}">Read the full story <span aria-hidden="true">→</span></a>`
-      : '';
+
+    // A release can earn more than one deep-dive once it carries more than one
+    // story — `articles` for those, `article` for the single-story common case.
+    const links = r.articles || (r.article ? [{ href: r.article, label: 'Read the full story' }] : []);
+    const more = links
+      .map(l => `<a class="rel-more" href="${l.href}">${l.label} <span aria-hidden="true">→</span></a>`)
+      .join('');
     const blurb = r.blurb ? `<p class="rel-blurb">${r.blurb}</p>` : '';
 
     el.innerHTML = `
@@ -341,6 +365,13 @@
   }
 
   for (const r of RELEASES) timeline.appendChild(releaseCard(r));
+
+  // The hero's "releases logged" figure comes from the array, never from a
+  // number typed into the HTML — those two disagree the first time anyone
+  // adds a release and forgets, and this page has no business printing a
+  // count of its own contents that is wrong.
+  const relCount = document.getElementById('relCount');
+  if (relCount) relCount.textContent = String(RELEASES.length);
 
   /* ---------- filters ---------- */
   let active = 'all';
