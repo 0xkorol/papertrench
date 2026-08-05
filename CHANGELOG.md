@@ -3,6 +3,32 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.8.1 — 2026-08-05
+
+Update from v2.8.0 — it matters this time.
+
+- **v2.8.0 shipped with attestation-chain recording broken.** The release
+  accidentally carried half of an in-flight migration: fills asked for the
+  new segmented chain store, which was not aboard, so every paper fill made
+  on v2.8.0 silently failed to append to your local attestation chain.
+  Your wallet, balances and P&L were never affected — the chain is the
+  tamper-evidence layer used by leaderboard verification. On v2.8.1 the
+  chain records again; fills made during the v2.8.0 window are simply
+  absent from the chain, and the verify panel will honestly show that gap
+  rather than pretend it is not there.
+- **The attestation chain grew up (F-14).** It moved out of the wallet
+  state into a single-writer segmented store: a fill now rewrites one small
+  tail segment instead of the whole history, multi-tab chain races are
+  gone, and no hash is ever truncated. Backups are downgrade-safe — a new
+  backup restores intact on a pre-segmentation build. Resets clear the
+  chain atomically with the wallet, and the leaderboard verifier format is
+  unchanged.
+- **For the record: v2.8.0 also contained the Turbo receipts card** (the
+  Settings card counting warm vs cold opens, median routing latency, and
+  per-site main-thread stalls — measured locally, never sent anywhere).
+  Its release notes did not mention it; the feature description now lives
+  in both entries, where it belongs.
+
 ## v2.8.0 — 2026-08-05
 
 Two from the maintainer's own trench session, same screenshot.
