@@ -3,6 +3,22 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.17 — 2026-08-05
+
+Reliability hardening release — no feature changes.
+
+- **Storage failures are no longer silently ignored.** The background service
+  worker now checks every `chrome.storage` read and write for errors. A failed
+  read falls back to safe defaults (never a fabricated wallet, never an invented
+  AI endpoint) and a failed write reports itself instead of pretending it
+  worked. Locked with new regression tests that simulate storage failure the
+  way Chrome actually reports it.
+- **Stale AI credentials are cleaned up.** Settings migration revision 7: if a
+  saved AI API key/model was tied to the removed insecure local endpoint (or to
+  no endpoint at all), it's cleared — so an old key can never be silently sent
+  to whatever endpoint gets configured next. Deliberately configured endpoints
+  and explicit local opt-ins are untouched.
+
 ## v1.2.16 — 2026-08-05
 
 - **Sell buttons no longer disappear after overlay toggles or SPA navigations.**
