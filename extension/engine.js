@@ -47,6 +47,13 @@
     framesEnabled: true,  // capture page screenshots for the AI coach
     autoReview: false,    // auto-run AI review when a round trip closes
     overlayEnabled: true,
+    // Axiom-style focus mode for the trade tab: strips every decoration and
+    // info card (banner, watermark, sparkline, thesis, last-close card,
+    // footer) and leaves only token, price, balance, buy and sell controls.
+    // Requested from the community: "make the trading tab like axiom and
+    // other platforms for more optimised and less distracted trades".
+    // Opt-in — the decorated panel stays the default.
+    panelFocusMode: false,
     // Hide the overlay on pages where no token is detected (e.g., a project's
     // home page or a screener without a selected token). It pops back the
     // moment the user opens a coin page.

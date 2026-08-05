@@ -1979,6 +1979,7 @@ function renderSettings(el) {
         <h3>Overlay</h3>
         <div class="field field-check"><label><input type="checkbox" id="set-overlay" ${settings.overlayEnabled !== false ? 'checked' : ''}> Enable overlay</label><small>Master switch for the PaperTrench panel. Off hides it on all pages.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-overlay-auto-hide" ${settings.overlayHideWhenNoToken !== false ? 'checked' : ''}> Hide overlay when no token is detected</label><small>The panel disappears on home pages and screeners, then pops back when you open a coin.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-focus-mode" ${settings.panelFocusMode === true ? 'checked' : ''}> Focus mode (Axiom-style)</label><small>Strips the banner, watermark, sparkline, thesis and last-close card from the trade tab — only token, price, balance and buy/sell controls remain. For distraction-free execution.</small></div>
       </div>
     </div>
     <div class="card" style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -2063,6 +2064,7 @@ function gatherSettingsFromForm() {
     positionsBarEnabled: document.getElementById('set-positions-bar').checked,
     overlayEnabled: document.getElementById('set-overlay').checked,
     overlayHideWhenNoToken: document.getElementById('set-overlay-auto-hide').checked,
+    panelFocusMode: document.getElementById('set-focus-mode').checked,
   };
 }
 

@@ -3,6 +3,41 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.16 — 2026-08-05
+
+- **Sell buttons no longer disappear after overlay toggles or SPA navigations.**
+  Reported on v1.2.13: "still having issues with that sell button
+  disappearing". Root cause: `disableOverlay()` and `shutdown()` destroyed
+  the shadow DOM but left the position-card cache (`posEls`) pointing at
+  detached nodes. On re-enable, `renderPosition()` saw a truthy cache and
+  skipped rebuilding the card — so the new card was created without sell
+  buttons. Both teardown paths now null the cache so the card always
+  rebuilds cleanly. Locked by a source-contract regression test.
+
+## v1.2.15 — 2026-08-05
+
+- **Focus mode for the trade tab.** Requested from the community: "make the
+  trading tab like Axiom and other platforms for more optimised and less
+  distracted trades". A new **Focus mode (Axiom-style)** toggle in Settings
+  → Overlay strips every decoration from the panel — banner, watermark,
+  sparkline, thesis card, last-close card and footer — and leaves only
+  token, price, balance and buy/sell controls. Opt-in; the full panel stays
+  the default, and flipping the switch applies live on every open tab.
+
+## v1.2.14 — 2026-08-05
+
+- **GMGN high volume no longer kills the live feed.** Reported from GMGN:
+  "doesn't work when volume is high". Two real causes, both fixed:
+  - GMGN's realtime trade batches grow past the bridge's 500KB frame guard
+    exactly when volume peaks. The guard dropped those frames *before* the
+    trade feed could read them, so the live price went silent at the worst
+    possible moment. Trade batches now bypass the guard (which still
+    protects the generic collector); every other oversized frame stays
+    dropped.
+  - Hot batches carry trades for many tokens at once, and the token you're
+    watching could get crowded out of the 4-tick budget by random batch
+    order. The token on screen is now always emitted first.
+
 ## v1.2.13 — 2026-08-04
 
 - **The panel now remembers its place.** Drag the PaperTrench panel anywhere

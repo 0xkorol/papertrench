@@ -164,6 +164,7 @@
     try { window.removeEventListener('message', onBridgeMessage); } catch (_) {}
     try { if (host && host.remove) host.remove(); } catch (_) {}
     host = null; shadow = null; els = {};
+    posEls = null; lastRenderedPrice = null;
     // One quiet line, not a per-tick error storm.
     try { console.info('PaperTrench: extension context ended (' + (reason || 'reloaded') + '); overlay removed.'); } catch (_) {}
   }
@@ -1587,6 +1588,17 @@
     .pt-resize:hover { color: var(--pt-amber); }
     .pt-resize:active { color: #fff; }
 
+    /* Axiom-style focus mode: decoration out, execution controls stay.
+     * Toggle is settings.panelFocusMode (Dashboard → Settings). The class
+     * rides on .pt-box so every rule below scopes to the panel. */
+    .pt-box.pt-focus .pt-banner,
+    .pt-box.pt-focus .pt-watermark,
+    .pt-box.pt-focus .pt-spark,
+    .pt-box.pt-focus .pt-footer,
+    .pt-box.pt-focus #pt-thesis,
+    .pt-box.pt-focus #pt-closed { display: none; }
+    .pt-box.pt-focus .pt-body { padding-top: 8px; }
+
     .pt-watermark {
       position: absolute; top: 50%; left: 50%;
       transform: translate(-50%, -50%) rotate(-20deg);
@@ -2580,6 +2592,7 @@
 
   function renderAll() {
     if (contextDead || !shadow) return;
+    applyFocusMode();
     renderHeader();
     renderBalance();
     renderPosition();
@@ -2591,6 +2604,17 @@
     renderSparkline();
     updateOverlayVisibility();
     renderPositionsBar();
+  }
+
+  /**
+   * Axiom-style focus mode (settings.panelFocusMode): decoration hidden via
+   * the .pt-focus CSS class on the box. Re-applied on every render so a
+   * settings change from the dashboard flips it live, and so the class can
+   * never drift from the setting.
+   */
+  function applyFocusMode() {
+    if (!els.box || !els.box.classList) return;
+    els.box.classList.toggle('pt-focus', settings.panelFocusMode === true);
   }
 
   function renderSiteStatus() {
@@ -3409,6 +3433,13 @@
 
   /** Build the static structure of the position card exactly once. */
   function buildPositionCard(pos) {
+    // Null the cache BEFORE clearing the container. Otherwise posEls keeps
+    // referencing nodes from the previous card after textContent='' detaches
+    // them, and every subsequent renderPosition() writes to ghosts while the
+    // live card's sell buttons sit untouched. Reported: "sell button
+    // disappearing" — the buttons were being built but never wired because
+    // the stale cache short-circuited the rebuild.
+    posEls = null;
     els.position.textContent = '';
     const card = document.createElement('div');
     card.className = 'pt-pos';
@@ -3545,6 +3576,13 @@
     stopOverlays();
     try { host.remove(); } catch (_) {}
     host = null; shadow = null; els = {};
+    // The cached position-card nodes belong to the shadow tree we just removed.
+    // Without this, a subsequent enableOverlay() would skip buildPositionCard
+    // (because posEls is still truthy) and write updates to detached ghosts
+    // while the live card sits empty — reported as "sell button disappearing"
+    // after toggling the overlay or switching sites.
+    posEls = null;
+    lastRenderedPrice = null;
   }
 
   async function init() {

@@ -49,7 +49,7 @@ function runOverlay(priceSeries, opts) {
     const node = {
       tag, style: { setProperty() {}, removeProperty() {} }, dataset: {}, childNodes: [], _fields: {}, value: '',
       classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
-        toggle(c, on) { if (on === undefined) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); } else if (on) this._s.add(c); else this._s.delete(c); },
+        toggle(c, on) { if (on === undefined) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); } else if (on) this._s.add(c); else this._s.delete(c); return this._s.has(c); },
         contains(c) { return this._s.has(c); } },
       children: [],
       set textContent(v) {
@@ -426,4 +426,76 @@ test('the panel drop handler persists the dragged position', () => {
   const persist = content.indexOf('store.set({ [E.STORAGE_KEYS.settings]: settings })', drop);
   assert.ok(drop !== -1 && persist !== -1 && persist - drop < 400,
     'the recorded position must be written to storage immediately after the drop');
+});
+
+/* ---------------- requested: Axiom-style focus mode ----------------
+ *
+ * levv6x: "make the trading tab like axiom and other platforms for more
+ * optimised and less distracted trades". Focus mode (opt-in setting
+ * panelFocusMode) toggles the .pt-focus class on the panel box, and the
+ * shipped CSS hides every decoration under it. The execution controls
+ * (token, price, balance, buy, sell) must stay.
+ */
+test('focus mode off keeps the decorated panel', async () => {
+  const ov = runOverlay([0.001]);
+  await ov.advance(1200);
+  assert.equal(ov.shadowNodes['pt-box'].classList.contains('pt-focus'), false,
+    'the default panel keeps its banner, sparkline and info cards');
+});
+
+test('focus mode strips the decoration via the pt-focus class', async () => {
+  const ov = runOverlay([0.001], {
+    initialSettings: { panelFocusMode: true, settingsRevision: E.SETTINGS_REVISION },
+  });
+  await ov.advance(1200);
+  assert.equal(ov.shadowNodes['pt-box'].classList.contains('pt-focus'), true,
+    'the setting must land on the panel box as a class');
+
+  // The shipped CSS must actually hide every decoration under that class,
+  // and leave the execution controls alone.
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  for (const selector of ['.pt-banner', '.pt-watermark', '.pt-spark', '.pt-footer', '#pt-thesis', '#pt-closed']) {
+    assert.ok(content.includes(`.pt-box.pt-focus ${selector}`),
+      `focus mode must hide ${selector}`);
+  }
+});
+
+test('the dashboard exposes and persists the focus mode toggle', () => {
+  const E2 = require('../engine.js');
+  assert.equal(E2.DEFAULT_SETTINGS.panelFocusMode, false,
+    'focus mode is opt-in: the decorated panel stays the default');
+  const dashJs = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  assert.match(dashJs, /id="set-focus-mode"/);
+  assert.match(dashJs, /panelFocusMode: document\.getElementById\('set-focus-mode'\)\.checked/,
+    'the toggle must be persisted with the rest of the settings');
+});
+
+/* ---------------- reported: sell button disappearing (saannta, v1.2.13) ----
+ *
+ * Root cause: disableOverlay() and shutdown() destroyed the shadow DOM but
+ * left posEls pointing to detached nodes. On re-enable, renderPosition()
+ * saw a truthy posEls and skipped buildPositionCard — so the new card was
+ * built without sell buttons (the rebuild was short-circuited by the stale
+ * cache). The user sees an empty position card with no way to sell.
+ *
+ * The fix nulls posEls in both teardown paths. Pin the contract in source
+ * because the harness cannot drive the full disable/enable cycle through
+ * the storage listener (externalWriteSilently intentionally skips it).
+ */
+test('disableOverlay and shutdown null posEls so sell buttons rebuild', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+
+  // disableOverlay must null posEls after destroying the shadow tree.
+  const disableFn = content.indexOf('function disableOverlay()');
+  assert.ok(disableFn !== -1, 'disableOverlay must exist');
+  const disableBlock = content.slice(disableFn, content.indexOf('\n  }', disableFn) + 4);
+  assert.match(disableBlock, /posEls\s*=\s*null/,
+    'disableOverlay must null posEls to prevent stale-cache sell-button loss');
+
+  // shutdown must do the same — it also destroys the shadow tree.
+  const shutdownFn = content.indexOf('function shutdown(reason)');
+  assert.ok(shutdownFn !== -1, 'shutdown must exist');
+  const shutdownBlock = content.slice(shutdownFn, content.indexOf('\n  }', shutdownFn) + 4);
+  assert.match(shutdownBlock, /posEls\s*=\s*null/,
+    'shutdown must null posEls to prevent stale-cache sell-button loss');
 });
