@@ -4045,6 +4045,21 @@
       fallbackSite: site,
     });
     if (!url) return;
+    // Turbo: a chip whose position lives on ANOTHER terminal used to replace
+    // this tab with that terminal — the hop cost you the page you were on.
+    // With Instant links enabled, a cross-terminal hop routes to that
+    // terminal's kept-warm viewer instead and this tab stays put. Same-site
+    // hops (and the feature off) keep the Padre-style same-tab swap.
+    const WDs = window.PTWarmDest;
+    if (WDs && settings.appEnabled !== false && settings.warmEverywhereEnabled) {
+      const dest = WDs.classify(url);
+      if (dest && WDs.familyOfHost(location.hostname) !== dest.family && contextAlive()) {
+        try {
+          chrome.runtime.sendMessage({ type: 'pt_warmdest_open', url: dest.url }).catch(() => {});
+          return;
+        } catch (_) { /* dead context: fall through to the native hop */ }
+      }
+    }
     // Same tab: this mirrors Padre's own bar, where a position swaps the chart.
     window.location.href = url;
   }

@@ -23,6 +23,14 @@
 
   const PUMP_HOSTS = new Set(['pump.fun', 'www.pump.fun']);
   const SOLSCAN_HOSTS = new Set(['solscan.io', 'www.solscan.io']);
+  // The main terminals people actually trade on (maintainer's call): a token
+  // link to one of these clicked on ANOTHER terminal warm-routes instead of
+  // cold-loading — and the positions-bar chip hop between terminals stops
+  // costing the tab you were on. Route shapes mirror sites.js adapters
+  // (same O-10/O-11 discipline: token routes only, wallet/portfolio never).
+  const AXIOM_HOST_RE = /(^|\.)axiom\.trade$/;
+  const PADRE_HOST_RE = /(^|\.)padre\.gg$/;
+  const GMGN_HOST_RE = /(^|\.)gmgn\.ai$/;
 
   function parse(href, baseHref) {
     try {
@@ -59,6 +67,28 @@
       };
     }
 
+    if (AXIOM_HOST_RE.test(host)) {
+      // axiom.trade/meme/<pair> and /t/<mint> — token pages only (the wallet
+      // and profile routes also end in base58 and must never warm-route).
+      const m = path.match(/^\/(meme|t)\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      if (!m) return null;
+      return { family: 'axiom', kind: 'token', url: 'https://axiom.trade' + path + url.search };
+    }
+
+    if (PADRE_HOST_RE.test(host)) {
+      // trade.padre.gg/trade/<chain>/<mint> (and legacy /terminal/ routes).
+      const m = path.match(/^\/(?:trade|terminal)\/(?:[a-z0-9-]+\/)*([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      if (!m) return null;
+      return { family: 'padre', kind: 'token', url: 'https://trade.padre.gg' + path + url.search };
+    }
+
+    if (GMGN_HOST_RE.test(host)) {
+      // gmgn.ai/sol/token/<mint> — Solana only, same gate as the adapter.
+      const m = path.match(/^\/sol\/token\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      if (!m) return null;
+      return { family: 'gmgn', kind: 'token', url: 'https://gmgn.ai' + path + url.search };
+    }
+
     if (SOLSCAN_HOSTS.has(host)) {
       const m = path.match(/^\/(token|account|address|tx)\/([^/?#]+)/);
       if (!m) return null;
@@ -81,8 +111,7 @@
   }
 
   function isWarmDestHost(hostname) {
-    const h = String(hostname || '').toLowerCase();
-    return PUMP_HOSTS.has(h) || SOLSCAN_HOSTS.has(h);
+    return familyOfHost(hostname) !== null;
   }
 
   /** Which family a hostname belongs to, or null. The terminal-side
@@ -92,11 +121,14 @@
     const h = String(hostname || '').toLowerCase();
     if (/(^|\.)pump\.fun$/.test(h)) return 'pumpfun';
     if (/(^|\.)solscan\.io$/.test(h)) return 'solscan';
+    if (AXIOM_HOST_RE.test(h)) return 'axiom';
+    if (PADRE_HOST_RE.test(h)) return 'padre';
+    if (GMGN_HOST_RE.test(h)) return 'gmgn';
     return null;
   }
 
   const api = { classify, isWarmDestHost, familyOfHost };
-  const root = typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : globalThis);
-  root.PTWarmDest = api;
+  if (typeof window !== 'undefined') window.PTWarmDest = api;
+  if (typeof self !== 'undefined') self.PTWarmDest = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })();

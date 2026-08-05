@@ -129,8 +129,8 @@ async function load() {
       : '⚡ Instant X links: Off';
 
     $('warmdest').textContent = settings.warmEverywhereEnabled
-      ? '⚡ Instant pump.fun & Solscan: On'
-      : '⚡ Instant pump.fun & Solscan: Off';
+      ? '⚡ Instant terminal links: On'
+      : '⚡ Instant terminal links: Off';
 
     $('xray').textContent = settings.xrayEnabled
       ? '⌖ X-Ray on x.com: On'
@@ -317,8 +317,8 @@ async function toggleWarmEverywhere() {
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
   await load();
   $('status').textContent = next.warmEverywhereEnabled
-    ? 'On — pump.fun and Solscan links on trading sites open in kept-warm viewer tabs; hovering a link preloads it before you click. Costs up to two muted background tabs; Ctrl/Cmd/middle-click still opens normal tabs.'
-    : 'Off — the pump.fun and Solscan viewer tabs are released and links open normally.';
+    ? 'On — Axiom, Padre, GMGN, pump.fun and Solscan links across terminals open in kept-warm viewer tabs, and positions-bar hops to another terminal stop replacing the tab you are on. pump.fun and Solscan pre-warm (up to two muted background tabs); terminal viewers appear on first use. Ctrl/Cmd/middle-click still opens normal tabs.'
+    : 'Off — all viewer tabs are released and links open normally.';
 }
 
 /** Account intel on X itself. The status line states the two things a user

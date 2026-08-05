@@ -1210,6 +1210,29 @@ const WARM_DEST_FAMILIES = {
     hostRe: /(^|\.)solscan\.io$/,
     label: 'Solscan',
   },
+  // The main terminals (maintainer's call: Padre, Axiom, GMGN). No idleUrl —
+  // terminal pages are HEAVY, so these viewers are never pre-created: the
+  // first cross-terminal click pays cold and becomes the viewer, every click
+  // after that is a warm navigate-and-reveal. Prewarm would mean up to five
+  // muted background tabs, which reads as an infestation, not a feature.
+  axiom: {
+    storageKey: 'pt_warm_tab_axiom',
+    idleUrl: null,
+    hostRe: /(^|\.)axiom\.trade$/,
+    label: 'Axiom',
+  },
+  padre: {
+    storageKey: 'pt_warm_tab_padre',
+    idleUrl: null,
+    hostRe: /(^|\.)padre\.gg$/,
+    label: 'Padre',
+  },
+  gmgn: {
+    storageKey: 'pt_warm_tab_gmgn',
+    idleUrl: null,
+    hostRe: /(^|\.)gmgn\.ai$/,
+    label: 'GMGN',
+  },
 };
 
 function readWarmDestTab(family) {
@@ -1327,8 +1350,9 @@ function warmDestPrewarm() {
     const settings = await getSettings();
     if (!warmDestFeatureOn(settings)) return;
     for (const family of Object.keys(WARM_DEST_FAMILIES)) {
-      if (await validWarmDestTab(family)) continue;
       const spec = WARM_DEST_FAMILIES[family];
+      if (!spec.idleUrl) continue; // terminal viewers are click-created only
+      if (await validWarmDestTab(family)) continue;
       let tab = null;
       try { tab = await chrome.tabs.create({ url: spec.idleUrl, active: false }); } catch (_) { tab = null; }
       if (!tab || !Number.isFinite(tab.id)) continue;

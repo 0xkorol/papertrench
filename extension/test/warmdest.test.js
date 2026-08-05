@@ -79,7 +79,8 @@ test('familyOfHost powers the same-site guard', () => {
   assert.equal(WD.familyOfHost('pump.fun'), 'pumpfun');
   assert.equal(WD.familyOfHost('www.pump.fun'), 'pumpfun');
   assert.equal(WD.familyOfHost('solscan.io'), 'solscan');
-  assert.equal(WD.familyOfHost('gmgn.ai'), null);
+  assert.equal(WD.familyOfHost('dexscreener.com'), null,
+    'non-family terminals never trip the same-site guard');
   // warm-links.js must apply it: a pump.fun link ON pump.fun stays native.
   const warmLinks = fs.readFileSync(path.join(ROOT, 'warm-links.js'), 'utf8');
   assert.match(warmLinks, /familyOfHost\(window\.location\.hostname\) === target\.family/,
@@ -416,4 +417,73 @@ test('receipts stay local and bounded (source contract)', () => {
     background.indexOf('warm X links (instant post opens)'),
   );
   assert.doesNotMatch(turboBlock, /fetch\(/, 'receipts never leave the device');
+});
+
+/* ------------- the main terminals: Axiom / Padre / GMGN families ------- */
+
+test('the classifier routes the main terminals token pages and refuses their other routes', () => {
+  const WD = loadWarmDest();
+
+  const axiom = WD.classify(`https://axiom.trade/meme/${MINT}`);
+  assert.equal(axiom && axiom.family, 'axiom');
+  assert.equal(axiom.url, `https://axiom.trade/meme/${MINT}`);
+  assert.equal(WD.classify(`https://axiom.trade/t/${MINT}`).family, 'axiom');
+
+  const padre = WD.classify(`https://trade.padre.gg/trade/solana/${MINT}`);
+  assert.equal(padre && padre.family, 'padre');
+  assert.equal(padre.url, `https://trade.padre.gg/trade/solana/${MINT}`);
+
+  const gmgn = WD.classify(`https://gmgn.ai/sol/token/${MINT}?chain=sol`);
+  assert.equal(gmgn && gmgn.family, 'gmgn');
+  assert.equal(gmgn.url, `https://gmgn.ai/sol/token/${MINT}?chain=sol`,
+    'query passes byte-for-byte');
+
+  // The O-10/O-11 discipline carries over: wallet/portfolio/EVM routes and
+  // the terminals own list pages must never warm-route.
+  for (const href of [
+    `https://axiom.trade/portfolio/${MINT}`,
+    'https://axiom.trade/pulse',
+    `https://trade.padre.gg/wallet/${MINT}`,
+    `https://gmgn.ai/eth/token/${MINT}`,
+    `https://gmgn.ai/sol/address/${MINT}`,
+  ]) {
+    assert.equal(WD.classify(href), null, `${JSON.stringify(href)} must not classify`);
+  }
+
+  assert.equal(WD.familyOfHost('axiom.trade'), 'axiom');
+  assert.equal(WD.familyOfHost('trade.padre.gg'), 'padre');
+  assert.equal(WD.familyOfHost('gmgn.ai'), 'gmgn');
+});
+
+test('terminal viewers are never pre-created — first click pays, then it is warm', async () => {
+  const worker = destWorker({ platformTabs: [{ id: 7 }] });
+  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 2,
+    'prewarm creates ONLY the light pumpfun/solscan viewers, never terminal tabs');
+
+  const AXIOM_URL = `https://axiom.trade/meme/${MINT}`;
+  const first = await send(worker.listener, { type: 'pt_warmdest_open', url: AXIOM_URL });
+  assert.equal(first.route, 'cold_tab', 'the first terminal hop pays cold');
+  assert.ok(worker.session.pt_warm_tab_axiom, 'and the tab becomes the Axiom viewer');
+
+  const second = await send(worker.listener, {
+    type: 'pt_warmdest_open',
+    url: `https://axiom.trade/t/${MINT}`,
+  });
+  assert.equal(second.route, 'warm_nav', 'every hop after that is a warm navigate-and-reveal');
+});
+
+test('the positions-bar chip hop routes cross-terminal through the warm viewer (source contract)', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const fn = content.slice(
+    content.indexOf('function openPositionChart('),
+    content.indexOf('function measureBarLeft('),
+  );
+  assert.match(fn, /pt_warmdest_open/,
+    'a cross-terminal chip hop must offer the warm route');
+  assert.match(fn, /familyOfHost\(location\.hostname\) !== dest\.family/,
+    'same-terminal hops keep the native same-tab swap');
+  assert.match(fn, /window\.location\.href = url/,
+    'the native hop must remain as the fallback');
 });
