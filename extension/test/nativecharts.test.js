@@ -1539,3 +1539,55 @@ test("F-18: the chip observer never watches character data (feed-thread starvati
   assert.match(line, /childList: true, subtree: true/,
     "row shifts (node changes) must still reposition chips immediately");
 });
+
+/* ------------------------------------------------------------------ *
+ * F-30 (community report, post-v2.0): holding a REAL position on the
+ * same token polluted the paper feed — the site streams the user own
+ * entry average (avgPrice / positions subtrees) and the collector took
+ * it as a live market tick, so the paper average line landed at a level
+ * "blended" between the real buy and the paper buy.
+ * ------------------------------------------------------------------ */
+
+test("F-30: a real position avgPrice never becomes a market tick", () => {
+  const env = runBridge({});
+  const WATCHED = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+  env.send("paper-axis", { mint: WATCHED, symbol: "BONK" });
+  env.emitted.length = 0;
+  // The shape a terminal streams while the user holds a real position:
+  // the live trade price and the user entry average, side by side.
+  injectActivityFrame(env, JSON.stringify({
+    data: { mint: WATCHED, lastPrice: "0.00003400", avgPrice: "0.00001700" },
+  }));
+  const ticks = env.emitted.filter((m) => m.type === "tick" && m.payload?.mint === WATCHED);
+  assert.ok(ticks.length >= 1, "the live price must still tick");
+  for (const t of ticks) {
+    assert.ok(t.payload.candidates.every((c) => Math.abs(c.value - 0.000034) < 1e-12),
+      "the user real entry average must never appear among price candidates");
+  }
+});
+
+test("F-30: prices inside a positions subtree are the user, not the market", () => {
+  const env = runBridge({});
+  const WATCHED = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+  env.send("paper-axis", { mint: WATCHED, symbol: "BONK" });
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    positions: [{ mint: WATCHED, price: "0.00001700", marketCap: "9999" }],
+    trade: { mint: WATCHED, price: "0.00003400" },
+  }));
+  const ticks = env.emitted.filter((m) => m.type === "tick" && m.payload?.mint === WATCHED);
+  assert.ok(ticks.length >= 1, "the sibling trade price must still tick");
+  for (const t of ticks) {
+    assert.ok(t.payload.candidates.every((c) => Math.abs(c.value - 0.000034) < 1e-12),
+      "a positions-subtree price must never be a candidate");
+    assert.notEqual(t.payload.mcap, 9999, "a positions-subtree cap must never be the market cap");
+  }
+});
+
+test("F-30: the paper average lines never impersonate the real-position lines", () => {
+  const bridge = fs.readFileSync(path.join(ROOT, "price-bridge.js"), "utf8");
+  assert.doesNotMatch(bridge, /choose = .*Avg\. Fill Price|setText\(.Avg\. Fill Price.\)|\x27Avg\. Fill Price\x27/,
+    "Padre labels the user REAL line exactly Avg. Fill Price — ours must differ");
+  assert.match(bridge, /PAPER Avg\. Fill/);
+  assert.match(bridge, /PAPER Avg\. Exit/);
+});

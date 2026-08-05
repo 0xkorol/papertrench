@@ -262,6 +262,22 @@ for every adapter, enforced by the stress harness.
 
 ---
 
+### Post-release community reports
+
+**F-30 · S1 · Holding a REAL position on the same token polluted the paper feed — the average line blended the real buy with the paper buy**
+`price-bridge.js:149` (PRICE_KEY carried avgPrice), line labels at :1272 ·
+Padre/Axiom confirmed, all sites exposed · reported by the maintainer testing
+v2.0.0 with a live real position · **fixed v2.0.1**
+Two halves: (1) the site streams the user OWN entry average (`avgPrice`,
+`positions[]` subtrees) while a real position is open, and the collector took
+it as a live market tick — well inside the validation band, so the paper P&L
+and the line math ran on the user entry price part of the time; (2) our
+average line used Padre EXACT real-position label ("Avg. Fill Price"), so the
+real and paper lines were indistinguishable. Fix: avgPrice removed from the
+price keys, position-describing subtrees are tainted (identity flows, prices
+and caps never do), and the paper lines are labeled "PAPER Avg. Fill/Exit" —
+the watermark doctrine applied to chart lines. Locked by three tests.
+
 ## O — Overlay lifecycle & movability (audit: 2026-08-05, verified against source)
 
 Community reports covered: "overlay on pages it doesn't need to be on", "can't move

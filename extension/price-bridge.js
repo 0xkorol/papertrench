@@ -146,7 +146,16 @@
   }
 
   const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-  const PRICE_KEY = /^(price|priceNative|priceUsd|priceInSol|priceSol|solPrice|usdPrice|tokenPrice|lastPrice|last|close|c|markPrice|currentPrice|avgPrice|quote)$/i;
+  // avgPrice is deliberately ABSENT: it is a position-average field, not a
+  // live price. When the user holds a REAL position, the site streams their
+  // real entry average under that key, and treating it as a market tick let
+  // the user's own entry price pollute the paper feed (DEFECT F-30 — the
+  // average line "blended" a real buy with the paper buy).
+  const PRICE_KEY = /^(price|priceNative|priceUsd|priceInSol|priceSol|solPrice|usdPrice|tokenPrice|lastPrice|last|close|c|markPrice|currentPrice|quote)$/i;
+  // Subtrees that describe the USER'S OWN holdings, not the market. Prices
+  // inside them are historical facts about the user (entry averages, cost
+  // bases, unrealized P&L) and must never become market-price candidates.
+  const POSITION_SUBTREE_KEY = /^(positions?|holdings?|portfolio|userPositions?|myPositions?|openOrders?)$/i;
   const MCAP_KEY = /^(marketCap|marketCapInUsd|mcap|mcapInUsd|fdv|fullyDilutedValuation)$/i;
   const MINT_KEY = /^(mint|tokenMint|tokenAddress|baseMint|address|contract|ca)$/i;
   const SYMBOL_KEY = /^(symbol|ticker|tokenSymbol|baseSymbol)$/i;
@@ -200,7 +209,7 @@
       rec.candidates.push(cand);
     };
 
-    (function walk(node, depth, ctx) {
+    (function walk(node, depth, ctx, tainted) {
       if (!node || typeof node !== 'object' || depth > MAX_DEPTH || seen.has(node)) return;
       if (budget-- <= 0) return;
       seen.add(node);
@@ -224,17 +233,21 @@
       for (const [key, value] of entries) {
         if (budget <= 0) return;
         if (value && typeof value === 'object') {
-          walk(value, depth + 1, target);
+          // A subtree describing the user's own holdings is DATA ABOUT THE
+          // USER, not the market: entry averages and cost bases inside it
+          // must never tick the price (DEFECT F-30). Identity fields still
+          // flow; prices and caps do not.
+          walk(value, depth + 1, target, tainted || POSITION_SUBTREE_KEY.test(key));
           continue;
         }
         const rec = target || top;
-        if (PRICE_KEY.test(key)) {
+        if (!tainted && PRICE_KEY.test(key)) {
           const n = numberValue(value);
           if (n > 0) {
             const unit = USD_HINT.test(key) ? 'usd' : NATIVE_HINT.test(key) ? 'native' : 'unknown';
             pushCandidate(rec, { value: n, unit, key });
           }
-        } else if (MCAP_KEY.test(key)) {
+        } else if (!tainted && MCAP_KEY.test(key)) {
           const n = numberValue(value);
           if (n > 0 && rec.mcap === null) rec.mcap = n;
         } else if (SYMBOL_KEY.test(key) && typeof value === 'string' && value.length <= 24) {
@@ -243,7 +256,7 @@
           rec.name = rec.name || value;
         }
       }
-    })(obj, 0, null);
+    })(obj, 0, null, false);
 
     return { records, top };
   }
@@ -1251,8 +1264,13 @@
     // retries there on the next sweep, and a working line is never moved to
     // a chart that ranked worse.
     for (const chart of charts) {
-      const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, 'Avg. Fill Price', '#90A8FA99');
-      const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, 'Avg. Exit Price', '#F7DC8599');
+      // "PAPER" prefix is non-negotiable: Padre labels the user's REAL
+      // position line "Avg. Fill Price", so an identical label on ours made
+      // the two indistinguishable when both positions exist (DEFECT F-30).
+      // Same doctrine as the P&L-card watermark — a paper artifact must
+      // never be mistakable for a real one.
+      const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, 'PAPER Avg. Fill', '#90A8FA99');
+      const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, 'PAPER Avg. Exit', '#F7DC8599');
       if (buyOk && sellOk) return true;
       if (buyOk || sellOk) return false; // keep the partial chart; retry the other line here
     }

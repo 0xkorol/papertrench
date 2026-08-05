@@ -3,6 +3,22 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.0.1 — 2026-08-05
+
+First post-2.0 community report, fixed same-day.
+
+- **Holding a real position no longer confuses the paper numbers.** When you
+  hold a REAL position on the same token, the site streams your real entry
+  average alongside the live price — and PaperTrench was accepting it as a
+  market tick, so the paper P&L and the average line could blend your real
+  buy with your paper buy. Your own position data is now never treated as a
+  market price: the avgPrice key is excluded and anything inside a
+  positions/holdings/portfolio subtree is identity-only.
+- **The paper line can never impersonate the real one.** Our average lines
+  are now labeled "PAPER Avg. Fill" / "PAPER Avg. Exit" — deliberately
+  different from the site own real-position label, same doctrine as the P&L
+  card watermark.
+
 ## v2.0.0 — 2026-08-05 · out of alpha
 
 The production release. A full four-track code audit produced a public,

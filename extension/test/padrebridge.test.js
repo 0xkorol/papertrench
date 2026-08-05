@@ -252,7 +252,10 @@ test('average paper fills use Padre native order-line styling exactly', () => {
   assert.equal(env.orderLines.length, 2, 'fill and exit must each create one native line');
   const [fill, exit] = env.orderLines;
 
-  assert.equal(fill.values.setText, 'Avg. Fill Price');
+  // F-30: the label deliberately differs from Padre's own real-position line
+  // ('Avg. Fill Price') — a paper line must be unmistakably paper when the
+  // user holds BOTH a real and a paper position on the same token.
+  assert.equal(fill.values.setText, 'PAPER Avg. Fill');
   assert.equal(fill.values.setPrice, 0.00042);
   assert.equal(fill.values.setLineColor, '#90A8FA99');
   assert.equal(fill.values.setLineStyle, 2);
@@ -264,7 +267,7 @@ test('average paper fills use Padre native order-line styling exactly', () => {
   assert.equal(fill.values.setBodyBackgroundColor, '#FFFFFF00');
   assert.equal(fill.values.setEditable, false);
 
-  assert.equal(exit.values.setText, 'Avg. Exit Price');
+  assert.equal(exit.values.setText, 'PAPER Avg. Exit');
   assert.equal(exit.values.setPrice, 0.00069);
   assert.equal(exit.values.setLineColor, '#F7DC8599');
 });
