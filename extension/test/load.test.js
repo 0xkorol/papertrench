@@ -586,22 +586,34 @@ test('hiding the positions bar is a saved setting, not a per-page flag', () => {
 
 test('the attest chain is never truncated', () => {
   const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
-  const start = contentSrc.indexOf('async function commitFill');
-  const end = contentSrc.indexOf('/* -------------------- screener row quick buys');
-  assert.ok(start !== -1 && end > start, 'commitFill must be locatable');
-  const commit = contentSrc.slice(start, end);
+  const attestSrc = fs.readFileSync(path.join(ROOT, 'attest.js'), 'utf8');
+  const backgroundSrc = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
 
   // Reported defect: a 5000-link cap silently spliced the head off the chain.
   // verifyChain re-verifies from GENESIS and replayChain needs every fill, so
   // truncation made verification fail and derived P&L wrong for heavy traders
   // with nothing actually tampered. The chain must grow without bound — the
-  // manifest grants unlimitedStorage, so retention is safe.
-  assert.doesNotMatch(commit, /chain\.length\s*>\s*5000/,
+  // manifest grants unlimitedStorage, so retention is safe. Since F-14 the
+  // chain lives in attest.js's segmented store behind the worker's single
+  // writer, so the no-truncation scan covers the store code itself.
+  assert.doesNotMatch(attestSrc, /chain\.length\s*>\s*5000/,
     'the 5000-link cap is what broke verifyChain and replayChain');
-  assert.doesNotMatch(commit, /splice\(0,\s*chain\.length/,
-    'dropping the head of the chain loses the GENESIS anchor');
-  assert.doesNotMatch(commit, /splice\(0,/,
-    'no head-splice of any kind may remain in the commit path');
+  assert.doesNotMatch(attestSrc, /splice\(0,/,
+    'no head-splice of any kind may exist in the segment store');
+  assert.match(attestSrc, /appendToChainStore/,
+    'the segmented append is where retention is enforced now');
+
+  // F-14: content.js must not hold the chain at all any more — a tab-local
+  // copy is exactly the multi-tab race and O(lifetime) fill cost that was
+  // removed. Fills travel to the worker's single writer instead.
+  assert.doesNotMatch(contentSrc, /attestChain/,
+    'a tab-local chain reintroduces the F-14 race and per-fill cost');
+  assert.match(contentSrc, /sendMessage\(\{ type: 'pt_attest_append', trade \}\)/,
+    'commitFill must hand the fill to the worker');
+  assert.match(backgroundSrc, /case 'pt_attest_append':/,
+    'the worker must own the append');
+  assert.match(backgroundSrc, /'attest\.js'/,
+    'the worker must import the chain store it writes');
 });
 
 test('popup backup/restore protects the wallet across reinstalls', () => {
@@ -612,6 +624,20 @@ test('popup backup/restore protects the wallet across reinstalls', () => {
   for (const key of ['pt_state', 'pt_settings', 'pt_frames', 'pt_replays']) {
     assert.ok(popupJs.includes(key), `BACKUP_KEYS must include ${key}`);
   }
+  // F-14: the attest chain lives in segmented storage, so the backup must
+  // bundle it explicitly (as one array) and the restore must round-trip it —
+  // a wallet whose verifiable record died in a reinstall defeats the point.
+  assert.match(popupJs, /pt_attest_chain/,
+    'the backup must carry the attestation chain');
+  assert.match(popupJs, /readChainStore/,
+    'the chain must be read from the segmented store, not from pt_state');
+  assert.match(popupJs, /chainSegments\(chainLinks\)/,
+    'restore must re-segment the bundled chain back into the store');
+  assert.match(popupJs, /attestChain: stored\.pt_attest_chain/,
+    'the backup pt_state must keep a legacy in-state copy — restoring on a '
+    + 'pre-segmentation version must not silently lose the record');
+  assert.match(popupHtml, /src="attest\.js"/,
+    'the popup needs the chain helpers loaded before popup.js');
   assert.match(popupJs, /app: 'papertrench-backup'/,
     'the export envelope must be identifiable');
   assert.match(popupJs, /format: 1/, 'the envelope must be versioned for future migrations');

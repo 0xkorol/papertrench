@@ -261,10 +261,133 @@
     };
   }
 
+  /* ---------------- segmented chain storage (DEFECT F-14) ----------------
+   *
+   * The chain used to ride inside pt_state, so EVERY state write — every
+   * fill, every heartbeat mark — serialized the full lifetime chain, and
+   * fill latency grew forever. It now lives in its own append-only keys:
+   *
+   *   pt_attest_seg_<n>  — up to CHAIN_SEG_SIZE links each, never rewritten
+   *                        once full
+   *   pt_attest_meta     — { segCount, length, head }
+   *
+   * An append reads the meta and the TAIL segment only, so per-fill cost is
+   * bounded by the segment size no matter how long the record grows. The
+   * chain is still NEVER truncated — dropping links would break verifyChain
+   * (the first kept link no longer chains from GENESIS) and replayChain
+   * (derived P&L would silently lose early fills). Segmentation bounds the
+   * cost of keeping everything instead.
+   *
+   * The helpers are storage-agnostic: callers pass async get(keys)/set(obj)
+   * so the same code runs in the service worker, the dashboard, and the
+   * popup. A get that yields null/undefined is a FAILED read and throws —
+   * treating it as "empty" would re-anchor the next append at GENESIS and
+   * fork the chain, the same class of bug as D-15's fabricated wallet.
+   */
+  const CHAIN_META_KEY = 'pt_attest_meta';
+  const CHAIN_SEG_PREFIX = 'pt_attest_seg_';
+  const CHAIN_SEG_SIZE = 500;
+
+  function chainSegKey(n) { return CHAIN_SEG_PREFIX + n; }
+
+  function normalizeChainMeta(meta) {
+    const m = meta && typeof meta === 'object' ? meta : {};
+    return {
+      segCount: Number.isInteger(m.segCount) && m.segCount > 0 ? m.segCount : 0,
+      length: Number.isInteger(m.length) && m.length > 0 ? m.length : 0,
+      head: typeof m.head === 'string' && m.head ? m.head : GENESIS,
+    };
+  }
+
+  /** Every storage key the chain currently occupies (meta included). */
+  function chainStorageKeys(meta) {
+    const m = normalizeChainMeta(meta);
+    const keys = [CHAIN_META_KEY];
+    for (let i = 0; i < m.segCount; i++) keys.push(chainSegKey(i));
+    return keys;
+  }
+
+  async function readChainMeta(get) {
+    const stored = await get([CHAIN_META_KEY]);
+    if (stored === null || stored === undefined) throw new Error('attest meta unreadable');
+    return normalizeChainMeta(stored[CHAIN_META_KEY]);
+  }
+
+  /** The full chain, in seq order — the exact array verifyChain/replayChain
+   * and buildSubmission have always consumed. */
+  async function readChainStore(get) {
+    const meta = await readChainMeta(get);
+    if (!meta.segCount) return { meta, chain: [] };
+    const keys = [];
+    for (let i = 0; i < meta.segCount; i++) keys.push(chainSegKey(i));
+    const stored = await get(keys);
+    if (stored === null || stored === undefined) throw new Error('attest segments unreadable');
+    const chain = [];
+    for (const key of keys) {
+      const seg = stored[key];
+      if (Array.isArray(seg)) chain.push(...seg);
+    }
+    return { meta, chain };
+  }
+
+  /**
+   * Append one fill: meta + tail segment in, tail segment + meta out.
+   * O(segment size), never O(chain length) — that bound IS the F-14 fix.
+   */
+  async function appendToChainStore(get, set, fill) {
+    const meta = await readChainMeta(get);
+    let segIndex = meta.segCount ? meta.segCount - 1 : 0;
+    let tail = [];
+    if (meta.segCount) {
+      const key = chainSegKey(segIndex);
+      const stored = await get([key]);
+      if (stored === null || stored === undefined) throw new Error('attest tail unreadable');
+      tail = Array.isArray(stored[key]) ? stored[key] : [];
+    }
+    if (!meta.segCount || tail.length >= CHAIN_SEG_SIZE) {
+      segIndex = meta.segCount;
+      tail = [];
+    }
+    const link = await appendFill(meta.head, fill);
+    link.seq = meta.length;
+    tail.push(link);
+    // One write carries both keys, so a reader can never observe a segment
+    // whose meta has not caught up.
+    await set({
+      [chainSegKey(segIndex)]: tail,
+      [CHAIN_META_KEY]: { segCount: segIndex + 1, length: meta.length + 1, head: link.hash },
+    });
+    return link;
+  }
+
+  /**
+   * Re-segment a complete chain (migration, backup restore). Returns the
+   * storage-write object — segments plus meta — with every hash preserved
+   * exactly as committed; this function must never re-derive a link.
+   */
+  function chainSegments(links) {
+    const list = Array.isArray(links) ? links : [];
+    const write = {};
+    let segCount = 0;
+    for (let i = 0; i < list.length; i += CHAIN_SEG_SIZE) {
+      write[chainSegKey(segCount)] = list.slice(i, i + CHAIN_SEG_SIZE);
+      segCount++;
+    }
+    write[CHAIN_META_KEY] = {
+      segCount,
+      length: list.length,
+      head: list.length ? list[list.length - 1].hash : GENESIS,
+    };
+    return write;
+  }
+
   const api = {
     VERSION, GENESIS,
     sha256, fillPreimage, appendFill, verifyChain,
     buildSubmission, replayChain, claimMatchesChain,
+    CHAIN_META_KEY, CHAIN_SEG_PREFIX, CHAIN_SEG_SIZE,
+    chainSegKey, normalizeChainMeta, chainStorageKeys,
+    readChainMeta, readChainStore, appendToChainStore, chainSegments,
   };
 
   if (typeof window !== 'undefined') window.PTAttest = api;

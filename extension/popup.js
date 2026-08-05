@@ -19,6 +19,15 @@ const FEE_PRESETS = {
 
 function $(id) { return document.getElementById(id); }
 
+// F-14: the attestation chain lives in segmented storage (pt_attest_seg_<n>
+// + pt_attest_meta), so backup/restore/reset must carry it explicitly. Soft
+// binding on purpose — the popup's fail-open principle (see header) means a
+// missing attest.js must degrade to wallet-only handling, never a dead popup.
+const AT = (typeof window !== 'undefined' && window.PTAttest) || null;
+
+/** Promise-API storage get for the chain helpers. */
+function chainGet(keys) { return chrome.storage.local.get(keys); }
+
 $('dash').addEventListener('click', () => chrome.runtime.openOptionsPage());
 $('toggle').addEventListener('click', toggleOverlay);
 $('reset').addEventListener('click', resetWallet);
@@ -358,11 +367,27 @@ async function resetWallet() {
   const baseSeq = (stored.pt_state && Number(stored.pt_state.seq)) || 0;
   const fresh = freshState(settings);
   fresh.seq = baseSeq + 1;
-  await chrome.storage.local.set({
+  // F-14: the attestation chain lives in its own segmented keys. The empty
+  // meta rides the SAME write as the wallet wipe, so the chain can never
+  // survive a reset the wallet did not; orphaned segment bodies (unreachable
+  // once the meta says zero) are swept best-effort after.
+  const wipe = {
     pt_state: fresh,
     pt_frames: [],
     pt_replays: [],
-  });
+  };
+  let staleSegKeys = [];
+  if (AT) {
+    wipe[AT.CHAIN_META_KEY] = AT.normalizeChainMeta(null);
+    try {
+      const meta = await AT.readChainMeta(chainGet);
+      staleSegKeys = AT.chainStorageKeys(meta).filter((key) => key !== AT.CHAIN_META_KEY);
+    } catch (_) { /* segments unknown: the meta overwrite still orphans them */ }
+  }
+  await chrome.storage.local.set(wipe);
+  if (staleSegKeys.length) {
+    try { await chrome.storage.local.remove(staleSegKeys); } catch (_) {}
+  }
   // The confirm text promises recordings are erased too; the background owns
   // the IndexedDB store (DEFECT D-36).
   chrome.runtime.sendMessage({ type: 'pt_clear_recordings' }).catch(() => {});
@@ -387,6 +412,31 @@ const BACKUP_KEYS = ['pt_state', 'pt_settings', 'pt_frames', 'pt_replays'];
 
 async function backupWallet() {
   const stored = await chrome.storage.local.get(BACKUP_KEYS);
+  // F-14: the attestation chain lives in segmented storage, not in pt_state.
+  // The backup bundles it as ONE array (pt_attest_chain) so a restore can
+  // re-segment it on any future segment size — and so the verifiable record
+  // survives a reinstall exactly like the wallet does. A pre-migration
+  // install still carries the chain inside pt_state; bundle that instead.
+  let chainMissing = false;
+  if (AT) {
+    try {
+      const { chain } = await AT.readChainStore(chainGet);
+      if (chain.length) stored.pt_attest_chain = chain;
+      else if (stored.pt_state && Array.isArray(stored.pt_state.attestChain) && stored.pt_state.attestChain.length) {
+        stored.pt_attest_chain = stored.pt_state.attestChain;
+      }
+      // Downgrade safety: ALSO embed the chain inside the backup's pt_state
+      // copy, exactly where a pre-segmentation extension expects it. An old
+      // restore then keeps the record intact instead of silently dropping it
+      // (and flagging a verification mismatch after the next fill); the new
+      // restore strips this copy and re-segments pt_attest_chain. The file
+      // carries the chain twice, but a backup that can lose the verifiable
+      // record on the way back in is not a backup.
+      if (stored.pt_attest_chain && stored.pt_state) {
+        stored.pt_state = { ...stored.pt_state, attestChain: stored.pt_attest_chain };
+      }
+    } catch (_) { chainMissing = true; }
+  }
   const backup = {
     app: 'papertrench-backup',
     format: 1,
@@ -406,7 +456,11 @@ async function backupWallet() {
   // deliberately NOT exported. The status line must say so — silently
   // implying "everything is in the file" is an overpromise the user only
   // discovers after the original machine is gone.
-  $('status').textContent = 'Backup downloaded — note that screen recordings stay on this machine and are not in the file.';
+  $('status').textContent = chainMissing
+    // Same honesty rule for the chain: a backup that quietly lacks the
+    // verifiable record would be discovered exactly when it matters most.
+    ? 'Backup downloaded — but the verification chain could not be read and is NOT in the file. Screen recordings also stay on this machine.'
+    : 'Backup downloaded — note that screen recordings stay on this machine and are not in the file.';
 }
 
 async function restoreWallet(ev) {
@@ -431,6 +485,24 @@ async function restoreWallet(ev) {
   if (!confirm(`Restore this backup? It replaces your current wallet (${rounds} closed rounds in the backup).`)) return;
   const write = {};
   for (const key of BACKUP_KEYS) if (data[key] !== undefined) write[key] = data[key];
+  // F-14: round-trip the attestation chain. New backups carry it as one
+  // array (pt_attest_chain); pre-migration backups carry it inside pt_state.
+  // Either way it is re-segmented into the store, and the restored pt_state
+  // never ships a legacy in-state copy. Hashes are written exactly as they
+  // were committed — a restore must not cost the record its verifiability.
+  if (AT) {
+    const chainLinks = Array.isArray(data.pt_attest_chain) ? data.pt_attest_chain
+      : (Array.isArray(data.pt_state.attestChain) ? data.pt_state.attestChain : []);
+    if (write.pt_state && write.pt_state.attestChain !== undefined) delete write.pt_state.attestChain;
+    // A restore REPLACES the record: sweep the current segments first so a
+    // shorter restored chain cannot leave stale tail segments behind.
+    try {
+      const meta = await AT.readChainMeta(chainGet);
+      const staleKeys = AT.chainStorageKeys(meta).filter((key) => key !== AT.CHAIN_META_KEY);
+      if (staleKeys.length) await chrome.storage.local.remove(staleKeys);
+    } catch (_) { /* the meta written below orphans whatever remains */ }
+    Object.assign(write, AT.chainSegments(chainLinks));
+  }
   // The backup's own seq is meaningless in this browser: any open trading tab
   // holding a higher write counter would treat the restored wallet as stale
   // and overwrite it on its next heartbeat — resurrecting the wallet the user

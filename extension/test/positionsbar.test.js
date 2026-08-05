@@ -338,6 +338,9 @@ function runOverlayBar(positions, opts) {
         id: 'papertrench-test',
         getURL: (p) => 'chrome-extension://x/' + p,
         sendMessage: (msg) => {
+          // F-14: the worker owns the attest chain; the harness acks appends
+          // so a fill does not trip the F-28 failure toast mid-test.
+          if (msg.type === 'pt_attest_append') return Promise.resolve({ ok: true, seq: 0, head: 'pt-test-head' });
           const R = win.PaperTrenchResolver;
           if (msg.type === 'pt_resolve') {
             // The test's stand-in for the background resolver: it decides
