@@ -111,6 +111,36 @@ test('malformed Jupiter payloads are handled without throwing', () => {
   }
 });
 
+/* ---------------- armed-buy survival on mcap-only charts ----------------
+ *
+ * DEFECT F-16: GMGN's chart feed is mcap-only pre-index (empty candidates,
+ * mcap only) and Axiom defaults to mcap view. bootstrapTick rightly refuses
+ * to derive a price from an assumed supply — but the armed buy then expired
+ * on a 60 s clock while the coin was VISIBLY trading, making the snipe path
+ * structurally dead on those charts. Armed buys now expire on QUIET (no
+ * validated mcap activity), with a hard cap, never on the base clock alone.
+ */
+const fsMod = require('node:fs');
+const pathMod = require('node:path');
+
+test('an armed buy survives while mcap-only ticks prove the coin is trading', () => {
+  const content = fsMod.readFileSync(pathMod.join(__dirname, '..', 'content.js'), 'utf8');
+
+  assert.match(content, /if \(Number\(payload\.mcap\) > 0\) lastMcapTickAt = Date\.now\(\);/,
+    'validated mcap-only ticks must stamp market activity even when unfillable');
+
+  const fnStart = content.indexOf('function armedBuyExpired()');
+  assert.ok(fnStart !== -1, 'armed-buy expiry must be its own decision function');
+  const block = content.slice(fnStart, content.indexOf('\n  }', fnStart) + 4);
+  assert.match(block, /ARMED_BUY_MAX_TTL_MS/, 'a hard cap must bound the wait');
+  assert.match(block, /lastMcapTickAt/, 'expiry past the base TTL must require market QUIET');
+
+  assert.match(content, /else if \(armedBuyExpired\(\)\)/,
+    'the watchdog must consult the quiet-aware expiry, not a bare clock');
+  assert.doesNotMatch(content, /else if \(Date\.now\(\) - armedBuy\.at > ARMED_BUY_TTL_MS\)/,
+    'the old bare-clock expiry must be gone');
+});
+
 /* ---------------- source preference ---------------- */
 
 test('an established token prefers the observed pool quote over the derived one', () => {

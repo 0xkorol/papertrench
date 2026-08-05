@@ -33,10 +33,43 @@ let preferFrameOverVideo = false;
 let lastFingerprint = '';
 let replayShell = null;   // persistent replay DOM, so the video survives updates
 let replayRaf = null;     // requestAnimationFrame handle for video-driven sync
+/**
+ * Storage access that fails soft — same contract as content.js's store helper:
+ * get() resolves null when the read FAILED (chrome.runtime.lastError or a
+ * throw) and {} when it succeeded but nothing is stored. Callers must never
+ * treat a failed read as "empty wallet" — loadAll would fabricate a fresh
+ * state and the next note/review save would persist that empty wallet over
+ * the real one at seq+1 (D-15).
+ *
+ * set() rejects on failure so a lost write can be shown instead of being
+ * silently swallowed (D-25).
+ */
 const store = {
-  get: (keys) => new Promise((r) => chrome.storage.local.get(keys, r)),
-  set: (obj) => new Promise((r) => chrome.storage.local.set(obj, r)),
+  get: (keys) => new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(keys, (value) => {
+        if (chrome.runtime && chrome.runtime.lastError) { resolve(null); return; }
+        resolve(value || {});
+      });
+    } catch (_) { resolve(null); }
+  }),
+  set: (obj) => new Promise((resolve, reject) => {
+    try {
+      chrome.storage.local.set(obj, () => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message || 'storage write failed'));
+          return;
+        }
+        resolve();
+      });
+    } catch (err) { reject(err); }
+  }),
 };
+// D-15: true while the most recent storage read failed. The dashboard keeps
+// rendering whatever it already holds and refuses every write until a later
+// read succeeds — writing while blind is how a fabricated empty wallet
+// overwrites the real one.
+let storageReadFailed = false;
 
 const SECTIONS = ['overview', 'calendar', 'journal', 'rounds', 'replay', 'leaderboard', 'coach', 'settings'];
 let currentSection = 'overview';
@@ -62,6 +95,39 @@ async function init() {
   // when nothing is actually different.
   watchDashboardStorage();
   setInterval(refreshIfChanged, 4000);
+}
+
+/**
+ * D-16: init() used to be fired unawaited with no catch — any throw (legacy
+ * state shapes, a corrupt backup, a renderer bug) left a permanently blank
+ * dashboard with no message at all. Failures now render a plain-DOM error
+ * card: message plus a reload button, built without innerHTML so the error
+ * path itself can never throw on odd content.
+ */
+function renderInitError(err) {
+  try {
+    console.error('PaperTrench dashboard failed to initialise', err);
+    const card = document.createElement('div');
+    card.id = 'init-error';
+    card.style.cssText =
+      'max-width:560px;margin:60px auto;padding:24px 26px;'
+      + 'background:#12161E;border:1px solid rgba(255,95,86,.45);border-radius:14px;'
+      + 'color:#EAEFF7;font-family:system-ui,sans-serif';
+    const title = document.createElement('h2');
+    title.textContent = 'Dashboard failed to load';
+    title.style.cssText = 'margin:0 0 8px;font-size:16px';
+    const message = document.createElement('p');
+    message.textContent = (err && err.message) ? err.message : String(err);
+    message.style.cssText = 'margin:0 0 14px;color:#8D97A9;font-size:13px;word-break:break-word';
+    const reload = document.createElement('button');
+    reload.textContent = 'Reload dashboard';
+    reload.style.cssText =
+      'padding:8px 14px;border:1px solid rgba(255,255,255,.2);border-radius:8px;'
+      + 'background:rgba(255,255,255,.06);color:#EAEFF7;cursor:pointer';
+    reload.addEventListener('click', () => location.reload());
+    card.append(title, message, reload);
+    document.body.appendChild(card);
+  } catch (_) { /* the error path must never throw */ }
 }
 
 
@@ -136,6 +202,17 @@ function watchDashboardStorage() {
 
 async function loadAll() {
   const s = await store.get(['pt_state', 'pt_settings', 'pt_frames', RP.STORAGE_KEY]);
+  if (s === null) {
+    // D-15: the read FAILED — this is not "empty storage". Keep whatever is
+    // already in memory, show a banner, and block writes until a read
+    // succeeds. Fabricating a fresh wallet here and then saving a note would
+    // persist an empty wallet over the real one.
+    storageReadFailed = true;
+    renderStorageErrorBanner();
+    return;
+  }
+  storageReadFailed = false;
+  renderStorageErrorBanner();
   settings = E.mergeSettings(s.pt_settings);
   state = s.pt_state || E.defaultState(settings);
   frames = s.pt_frames || [];
@@ -154,11 +231,41 @@ async function loadAll() {
     .catch(() => {});
 }
 
+/**
+ * D-15: a visible, plain-DOM banner while storage is unreadable, removed the
+ * moment a read succeeds. Without it a failed read looked exactly like a
+ * fresh wallet.
+ */
+function renderStorageErrorBanner() {
+  let banner = document.getElementById('pt-storage-error');
+  if (!storageReadFailed) { if (banner) banner.remove(); return; }
+  if (banner) return;
+  banner = document.createElement('div');
+  banner.id = 'pt-storage-error';
+  banner.textContent =
+    'Storage read failed — showing the last data this page loaded. Saving is '
+    + 'disabled until a read succeeds. Reload the dashboard if this persists.';
+  banner.style.cssText =
+    'background:rgba(255,95,86,.14);border-bottom:1px solid rgba(255,95,86,.45);'
+    + 'color:#FFB3AE;padding:9px 26px;font-size:12.5px;font-weight:600';
+  document.body.insertBefore(banner, document.body.firstChild);
+}
+
 async function saveSettings() {
+  // D-15: never write over storage we could not read — the in-memory copy
+  // may be a fabricated default or stale.
+  if (storageReadFailed) {
+    throw new Error('Storage is unreadable — settings were NOT saved. Reload the dashboard and try again.');
+  }
   await store.set({ pt_settings: settings });
 }
 
 async function saveState() {
+  // D-15: same refusal as saveSettings — persisting the in-memory state after
+  // a failed read is how a note-save destroys the real wallet.
+  if (storageReadFailed) {
+    throw new Error('Storage is unreadable — the wallet was NOT saved. Reload the dashboard and try again.');
+  }
   // Bump the write counter: every writer must advance seq, or a lagging
   // content tab (which only adopts when storage's seq is strictly greater)
   // can clobber this write with a stale copy — e.g. a note silently vanishing
@@ -234,7 +341,7 @@ function rebindSection(id, el) {
   if (id === 'calendar') { bindCalendar(el); return; }
   if (id === 'rounds') {
     el.querySelectorAll('.review-btn').forEach((button) =>
-      button.addEventListener('click', () => runReview(button.dataset.id)));
+      button.addEventListener('click', () => runReview(button.dataset.reviewId)));
     el.querySelectorAll('.replay-btn').forEach((button) =>
       button.addEventListener('click', () => openReplay(button.dataset.session)));
     el.querySelectorAll('.share-btn').forEach((button) =>
@@ -335,12 +442,15 @@ function renderOverview(el) {
   const best = [...(state.rounds || [])].sort((a, b) => b.pnlSol - a.pnlSol)[0];
   const worst = [...(state.rounds || [])].sort((a, b) => a.pnlSol - b.pnlSol)[0];
 
+  // D-07: the Best/Worst tiles are coloured by the ACTUAL sign of the value
+  // (a session of only losses has a negative "best" round, and vice versa),
+  // and every value carries an explicit sign — the old Worst tile dropped it.
   el.innerHTML = `
     <div class="grid3" style="margin-bottom:16px">
       ${statTile('Total return', `${stats.equityVsStart >= 0 ? '+' : ''}${fmt(stats.equityVsStart, 3)} SOL`, stats.equityVsStart >= 0 ? 'green' : 'red',
         settings.balanceStartSol ? `${stats.equityVsStart >= 0 ? '+' : ''}${((stats.equityVsStart / settings.balanceStartSol) * 100).toFixed(1)}% on ${fmt(settings.balanceStartSol, 2)} SOL` : '')}
-      ${statTile('Best round', best ? `${best.pnlSol >= 0 ? '+' : ''}${fmt(best.pnlSol, 3)} SOL` : '—', 'green', best ? `${best.symbol} · ${best.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
-      ${statTile('Worst round', worst ? `${fmt(worst.pnlSol, 3)} SOL` : '—', 'red', worst ? `${worst.symbol} · ${worst.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
+      ${statTile('Best round', best ? `${best.pnlSol >= 0 ? '+' : ''}${fmt(best.pnlSol, 3)} SOL` : '—', best && best.pnlSol < 0 ? 'red' : 'green', best ? `${best.symbol} · ${best.pnlPct >= 0 ? '+' : ''}${best.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
+      ${statTile('Worst round', worst ? `${worst.pnlSol >= 0 ? '+' : ''}${fmt(worst.pnlSol, 3)} SOL` : '—', worst && worst.pnlSol >= 0 ? 'green' : 'red', worst ? `${worst.symbol} · ${worst.pnlPct >= 0 ? '+' : ''}${worst.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
     </div>
     <div class="grid2">
       <div class="card"><h3>Equity curve</h3><canvas class="chart" id="eq-canvas"></canvas></div>
@@ -550,6 +660,11 @@ function renderCalendar(el) {
   const isCurrentMonth = cal.todayDay !== null;
   const monthName = new Date(view.year, view.month, 1)
     .toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  // D-33: the best/worst-day chip needs a SHORT month name. Deriving it by
+  // splitting/slicing the long locale string breaks wherever the year comes
+  // first (ja-JP, hu-HU render "2026…" → "202"); ask the locale directly.
+  const monthShort = new Date(view.year, view.month, 1)
+    .toLocaleDateString(undefined, { month: 'short' });
   const atMin = viewIdx <= monthIndex(range.min.year, range.min.month);
   const atMax = viewIdx >= monthIndex(range.max.year, range.max.month);
   const cls = (v) => (v > 0 ? 'green' : v < 0 ? 'red' : 'dim');
@@ -559,8 +674,8 @@ function renderCalendar(el) {
     <div class="cal-summary">
       <span>Realized <strong class="${cls(t.realizedSol)}">${signed(t.realizedSol)} SOL</strong></span>
       <span>Days <strong>${t.winDays}<span class="green">W</span> · ${t.lossDays}<span class="red">L</span>${t.flatDays ? ` · ${t.flatDays} flat` : ''}</strong></span>
-      ${t.bestDay ? `<span>Best <strong class="green">${signed(t.bestDay.pnlSol)}</strong> <span class="dim">(${monthName.split(' ')[0].slice(0, 3)} ${t.bestDay.day})</span></span>` : ''}
-      ${t.worstDay && t.worstDay.pnlSol < 0 ? `<span>Worst <strong class="red">${signed(t.worstDay.pnlSol)}</strong> <span class="dim">(${monthName.split(' ')[0].slice(0, 3)} ${t.worstDay.day})</span></span>` : ''}
+      ${t.bestDay ? `<span>Best <strong class="green">${signed(t.bestDay.pnlSol)}</strong> <span class="dim">(${monthShort} ${t.bestDay.day})</span></span>` : ''}
+      ${t.worstDay && t.worstDay.pnlSol < 0 ? `<span>Worst <strong class="red">${signed(t.worstDay.pnlSol)}</strong> <span class="dim">(${monthShort} ${t.worstDay.day})</span></span>` : ''}
       ${isCurrentMonth ? `<span>Open <strong class="${cls(cal.openPnlSol)}">${signed(cal.openPnlSol)} SOL</strong> <span class="dim">unrealized</span></span>` : ''}
     </div>`;
 
@@ -629,7 +744,7 @@ function renderJournal(el) {
       <td><strong>${esc(t.symbol)}</strong></td>
       <td class="dim">${esc(t.site)}</td>
       <td class="num">${fmt(t.qty, 4)}</td>
-      <td class="num">${fillLevel(t)}</td>
+      <td class="num">${mcapLevel(t)}</td>
       <td class="num">${fmt(t.solGross, 4)}</td>
       <td class="num dim">${fmt(t.solGross - (t.solNet || 0), 4)}</td>
       <td class="num ${t.pnlSol === undefined ? 'dim' : t.pnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">
@@ -654,6 +769,12 @@ function renderRounds(el) {
   const rows = (state.rounds || []).map((r) => {
     const replay = RP.findReplay(replays, r.sessionId || '');
     const win = r.pnlSol >= 0;
+    // D-04: three buttons in this row share the round id; the AI-review
+    // button carries its own data-review-id so runReview can never grab (and
+    // disable) the notes button instead.
+    // D-05: replay.checkpoints is initialised [] and written nowhere, so a
+    // count-based label always read "▶ 0 moments". Plain "▶ Replay" — the
+    // replay view itself shows the real fill/frame timeline.
     return `
       <tr data-id="${esc(r.id)}">
         <td><strong>${esc(r.symbol)}</strong><br><span class="dim mono" style="font-size:10.5px">${esc(E.short(r.mint))}</span></td>
@@ -667,8 +788,8 @@ function renderRounds(el) {
         <td>${renderExitCell(r)}</td>
         <td>${renderThesisCell(r)}</td>
         <td>${renderNoteCell(r)}</td>
-        <td>${r.aiReview ? '<span class="tag" style="color:var(--green);border-color:rgba(52,211,153,.3)">reviewed</span>' : '<button class="btn-sec review-btn" data-id="' + esc(r.id) + '">AI review</button>'}</td>
-        <td>${replay ? `<button class="btn-sec replay-btn" data-session="${esc(replay.sessionId)}">▶ ${Array.isArray(replay.checkpoints) ? replay.checkpoints.length : 0} moments</button>` : '<span class="dim">—</span>'}</td>
+        <td>${r.aiReview ? '<span class="tag" style="color:var(--green);border-color:rgba(52,211,153,.3)">reviewed</span>' : '<button class="btn-sec review-btn" data-review-id="' + esc(r.id) + '">AI review</button>'}</td>
+        <td>${replay ? `<button class="btn-sec replay-btn" data-session="${esc(replay.sessionId)}">▶ Replay</button>` : '<span class="dim">—</span>'}</td>
         <td><button class="btn-sec share-btn" data-id="${esc(r.id)}">Share</button></td>
         <td class="dim" style="font-size:11px">${esc(r.recordingFile || '—')}</td>
       </tr>`;
@@ -772,36 +893,71 @@ function editRoundNote(button) {
     const target = (state.rounds || []).find((r) => r.id === roundId) || round;
     if (text) target.note = { text, t: Date.now() };
     else delete target.note;
-    await saveState();
+    try {
+      await saveState();
+    } catch (err) {
+      // D-15/D-25: keep the editor (and the typed text) on screen instead of
+      // silently dropping the note when storage is unreadable/unwritable.
+      save.textContent = 'Save failed — retry';
+      return;
+    }
     renderSection('rounds');
   });
 }
 
 async function runReview(roundId) {
-  const b = document.querySelector(`button[data-id="${roundId}"]`);
+  // D-04: the notes/share buttons and the row itself share this round id via
+  // data-id — a bare [data-id=...] selector grabbed the NOTES button and
+  // disabled/relabelled that instead. The review button has its own
+  // data-review-id attribute, so this can only ever hit the review button.
+  const b = document.querySelector(`button.review-btn[data-review-id="${roundId}"]`);
+  // D-21: any failure must re-enable the button, restore its label, and show
+  // the error — an unhandled rejection used to leave it (well, the notes
+  // button, per D-04) stuck at "Analyzing…" forever.
+  const fail = (err) => {
+    if (!b) return;
+    b.disabled = false;
+    b.textContent = 'AI review';
+    const cell = b.closest('td');
+    if (cell) {
+      let out = cell.querySelector('.review-error');
+      if (!out) {
+        out = document.createElement('div');
+        out.className = 'review-error red';
+        out.style.cssText = 'margin-top:4px;font-size:11px;max-width:200px;white-space:normal';
+        cell.appendChild(out);
+      }
+      out.textContent = 'Review failed: ' + ((err && err.message) ? err.message : String(err));
+    }
+  };
   if (b) { b.disabled = true; b.textContent = 'Analyzing…'; }
   const round = (state.rounds || []).find((r) => r.id === roundId);
-  if (!round) return;
-  const trades = (state.journal || []).filter((t) => round.tradeIds.includes(t.id));
-  const { pt_frames = [] } = await store.get(['pt_frames']);
-  const roundFrames = pt_frames.filter((frame) =>
-    frame.sessionId ? frame.sessionId === round.sessionId :
-      frame.mint === round.mint && frame.t >= round.openedAt && frame.t <= round.closedAt
-  );
-  const messages = buildCoachMessages(round, trades, roundFrames);
-  const resp = await chrome.runtime.sendMessage({ type: 'pt_ai_chat', messages, maxTokens: 2000 });
-  // The AI call takes seconds, and a fill can land in storage while it runs.
-  // Annotate the FRESHEST state — reloaded just before the write — so saving
-  // the review can never clobber a trade the user made mid-review.
-  await loadAll();
-  const freshRound = (state.rounds || []).find((r) => r.id === roundId);
-  const target = freshRound || round;
-  target.aiReview = {
-    t: Date.now(),
-    text: resp?.reply || ('Error: ' + (resp?.error || 'unknown')),
-    ok: !resp?.error,
-  };
-  await saveState();
+  if (!round) { fail(new Error('round not found')); return; }
+  try {
+    const trades = (state.journal || []).filter((t) => round.tradeIds.includes(t.id));
+    const { pt_frames = [] } = (await store.get(['pt_frames'])) || {};
+    const roundFrames = pt_frames.filter((frame) =>
+      frame.sessionId ? frame.sessionId === round.sessionId :
+        frame.mint === round.mint && frame.t >= round.openedAt && frame.t <= round.closedAt
+    );
+    const messages = buildCoachMessages(round, trades, roundFrames);
+    const resp = await chrome.runtime.sendMessage({ type: 'pt_ai_chat', messages, maxTokens: 2000 });
+    // The AI call takes seconds, and a fill can land in storage while it runs.
+    // Annotate the FRESHEST state — reloaded just before the write — so saving
+    // the review can never clobber a trade the user made mid-review.
+    await loadAll();
+    const freshRound = (state.rounds || []).find((r) => r.id === roundId);
+    const target = freshRound || round;
+    target.aiReview = {
+      t: Date.now(),
+      text: resp?.reply || ('Error: ' + (resp?.error || 'unknown')),
+      ok: !resp?.error,
+    };
+    await saveState();
+  } catch (err) {
+    fail(err);
+    return;
+  }
   renderSection('rounds');
 }
 
@@ -1708,7 +1864,8 @@ async function bindLeaderboard(el) {
         return;
       }
       settings.leaderboardIdentity = { handle, verified: false, linkedAt: Date.now() };
-      await saveSettings();
+      // A refused save (storage unreadable, D-15) must not reject unhandled.
+      try { await saveSettings(); } catch (err) { console.error('PaperTrench: identity save failed', err); }
       renderSection('leaderboard');
     });
   }
@@ -1716,7 +1873,7 @@ async function bindLeaderboard(el) {
   if (unlink) {
     unlink.addEventListener('click', async () => {
       delete settings.leaderboardIdentity;
-      await saveSettings();
+      try { await saveSettings(); } catch (err) { console.error('PaperTrench: identity save failed', err); }
       renderSection('leaderboard');
     });
   }
@@ -1930,7 +2087,16 @@ async function runSessionReview() {
     { role: 'system', content: 'You are a Solana memecoin trading coach. Given a set of paper-trade round trips, identify recurring patterns and the #1 bad habit hurting the trader. Suggest one drill or rule to fix the habit. Be concise and specific.' },
     { role: 'user', content: `Here are all my round trips:\n${summary.roundText}\n\nWin avg: ${summary.avgWin.toFixed(1)}%, loss avg: ${summary.avgLoss.toFixed(1)}%, avg hold: ${summary.avgHold.toFixed(1)}m.\n\nWhat is my biggest bad habit, and what is one concrete rule to fix it?` },
   ];
-  const resp = await chrome.runtime.sendMessage({ type: 'pt_ai_chat', messages, maxTokens: 1800 });
+  let resp;
+  try {
+    resp = await chrome.runtime.sendMessage({ type: 'pt_ai_chat', messages, maxTokens: 1800 });
+  } catch (err) {
+    // D-21: a service-worker failure used to reject unhandled, leaving the
+    // box stuck at "Analyzing session…" forever. Land it in the output.
+    out.textContent = 'Error: ' + ((err && err.message) ? err.message : String(err));
+    out.classList.add('error');
+    return;
+  }
   out.textContent = resp?.reply || ('Error: ' + (resp?.error || 'unknown'));
   if (resp?.error) out.classList.add('error');
 }
@@ -1938,6 +2104,12 @@ async function runSessionReview() {
 /* ---------- settings ---------- */
 
 function renderSettings(el) {
+  // D-24: a corrupt backup can leave presetsBuy/sellPcts as non-arrays. An
+  // unguarded .join() threw mid-render, leaving Settings blank AND unbound —
+  // no working form left to repair the corruption with. Fall back to the
+  // defaults at render time; nothing is written until the user saves.
+  const sellPctsList = Array.isArray(settings.sellPcts) ? settings.sellPcts : DEFAULTS.sellPcts;
+  const presetsBuyList = Array.isArray(settings.presetsBuy) ? settings.presetsBuy : DEFAULTS.presetsBuy;
   el.innerHTML = `
     <div class="grid2">
       <div class="card">
@@ -1945,11 +2117,11 @@ function renderSettings(el) {
         <div class="field"><label for="set-balance">Starting paper balance (SOL)</label><input id="set-balance" type="number" min="0.1" step="0.1" value="${settings.balanceStartSol}"></div>
         <div class="field"><label for="set-fee">Fee bps per side (100 = 1%)</label><input id="set-fee" type="number" min="0" step="1" value="${settings.feeBps}"></div>
         <div class="field"><label for="set-slippage">Simulated slippage bps</label><input id="set-slippage" type="number" min="0" step="1" value="${settings.slippageBps}"><small>Extra price impact on fills. 0 fills at the live tick.</small></div>
-        <div class="field"><label for="set-sellpcts">Quick-sell presets (%)</label><input id="set-sellpcts" type="text" value="${esc(settings.sellPcts.join(', '))}"></div>
+        <div class="field"><label for="set-sellpcts">Quick-sell presets (%)</label><input id="set-sellpcts" type="text" value="${esc(sellPctsList.join(', '))}"></div>
       </div>
       <div class="card">
         <h3>Quick-buy (QB)</h3>
-        <div class="field"><label for="set-presets">Quick-buy presets (SOL)</label><input id="set-presets" type="text" value="${esc(settings.presetsBuy.join(', '))}"><small>Comma separated, shown as buttons in the overlay.</small></div>
+        <div class="field"><label for="set-presets">Quick-buy presets (SOL)</label><input id="set-presets" type="text" value="${esc(presetsBuyList.join(', '))}"><small>Comma separated, shown as buttons in the overlay.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-instant-buy" ${settings.instantBuyEnabled !== false ? 'checked' : ''}> One-click quick buy</label><small>Tapping a preset amount fires the buy immediately, like Axiom and Padre. Off makes presets only select the amount for the BUY button.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-list-quick-buy" ${settings.listQuickBuyEnabled !== false ? 'checked' : ''}> Screener row quick-buy chips</label><small>A "P" chip on every token row of Axiom Pulse, Padre Trenches and GMGN Trenches — buys the first preset amount without opening the chart.</small></div>
     <div class="field"><label for="set-list-quick-buy-size">Screener chip size <span id="val-list-quick-buy-size">${(settings.listQuickBuySize || 1).toFixed(2)}</span>x</label><input id="set-list-quick-buy-size" type="range" min="0.6" max="1.5" step="0.05" value="${Number(settings.listQuickBuySize || 1).toFixed(2)}"><small>Make the trench / pulse snipe chips larger or smaller to fit your screen density.</small></div>
@@ -1984,6 +2156,7 @@ function renderSettings(el) {
     </div>
     <div class="card" style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn" id="save-settings">Save settings</button>
+      <span id="save-status" class="dim" style="font-size:12px" role="status"></span>
       <button class="btn-sec" id="test-ai">Test AI endpoint</button>
       <span id="ai-test-result" class="dim" style="font-size:12px"></span>
       <button class="btn-red" id="reset-all" style="margin-left:auto">Reset wallet &amp; history</button>
@@ -2003,6 +2176,16 @@ function bindSettings() {
   }
   document.getElementById('reset-all').addEventListener('click', async () => {
     if (!confirm('Wipe all paper positions, trades, round trips, screenshots, and session replays?')) return;
+    // D-38: honour the starting balance typed into the (possibly unsaved)
+    // form — resetting to the stale saved value while the form shows another
+    // number makes the fresh wallet and the form disagree. The accepted value
+    // is persisted to settings as part of the reset so the reset balance and
+    // the saved settings agree.
+    const balanceInput = document.getElementById('set-balance');
+    const formBalance = balanceInput ? Number(balanceInput.value) : NaN;
+    const balanceChanged = Number.isFinite(formBalance) && formBalance >= 0.1
+      && formBalance !== Number(settings.balanceStartSol);
+    if (balanceChanged) settings = { ...settings, balanceStartSol: formBalance };
     // Inherit the current seq so a still-open trading tab (holding the
     // pre-reset wallet at a higher seq) adopts the reset instead of
     // resurrecting the old state with its next heartbeat write.
@@ -2010,38 +2193,116 @@ function bindSettings() {
     replays = [];
     frames = [];
     stopReplayPlayback();
-    state.seq = (Number(state.seq) || 0) + 1;
+    // D-51: no extra seq bump here — engine resetState already advanced seq
+    // past the inherited base; the engine owns that bump, and doubling it
+    // here made the write counter lie about how many writes happened.
     state.updatedAt = Date.now();
-    await store.set({ pt_state: state, pt_frames: [], [RP.STORAGE_KEY]: [] });
+    const write = { pt_state: state, pt_frames: [], [RP.STORAGE_KEY]: [] };
+    if (balanceChanged) write.pt_settings = settings;
+    try {
+      await store.set(write);
+    } catch (err) {
+      const status = document.getElementById('save-status');
+      if (status) status.textContent = 'Reset failed: ' + ((err && err.message) ? err.message : String(err));
+      return;
+    }
     chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
     renderSidebar();
     renderSection('overview');
   });
   document.getElementById('test-ai').addEventListener('click', async () => {
     const out = document.getElementById('ai-test-result');
-    const settingsNow = gatherSettingsFromForm();
+    // D-29: a connectivity TEST must not persist anything — the old code
+    // committed the entire unsaved form to storage as a side effect. The form
+    // values now travel as overrides on the message; the background validates
+    // them through the same isAllowedEndpoint gate as saved settings and
+    // writes nothing.
+    const settingsNow = gatherSettingsFromForm([]);
     if (!settingsNow.aiEndpoint) {
       out.textContent = 'AI coach is off — no endpoint set. Paste one above (and enable the local toggle for localhost/LAN), then Save.';
       return;
     }
     out.textContent = 'Testing…';
-    await store.set({ pt_settings: settingsNow });
-    settings = settingsNow;
-    const models = await chrome.runtime.sendMessage({ type: 'pt_ai_models' });
+    let models;
+    try {
+      models = await chrome.runtime.sendMessage({
+        type: 'pt_ai_models',
+        overrides: {
+          endpoint: settingsNow.aiEndpoint,
+          apiKey: settingsNow.aiApiKey,
+          model: settingsNow.aiModel,
+          aiAllowLocalEndpoint: settingsNow.aiAllowLocalEndpoint,
+        },
+      });
+    } catch (err) {
+      out.textContent = 'Error: ' + ((err && err.message) ? err.message : String(err));
+      return;
+    }
     if (models?.error) out.textContent = `Error: ${models.error}`;
     else if (models?.models?.length) out.textContent = `OK — ${models.models.length} model(s) found: ${models.models.slice(0, 3).join(', ')}`;
     else out.textContent = 'No models reachable. Check the endpoint URL, that the service is running, and that the local toggle is on for localhost/LAN endpoints.';
   });
 }
 
-function gatherSettingsFromForm() {
-  const presets = document.getElementById('set-presets').value.split(',').map((s) => parseFloat(s.trim())).filter((n) => !isNaN(n) && n > 0);
-  const sellPcts = document.getElementById('set-sellpcts').value.split(',').map((s) => parseFloat(s.trim())).filter((n) => !isNaN(n) && n > 0);
+/**
+ * Read the settings form, validating every numeric field.
+ *
+ * D-10/D-11/D-23/D-42: raw form values used to flow straight into the engine.
+ * Negative fee bps MINT free SOL on every fill (engine.js applies feeBps
+ * arithmetically), slippage ≥ 10000 collapses every sell quote and throws a
+ * misleading "No live price available", sell presets over 100% render buttons
+ * that lie, and `Number(v) || 10` silently turned an invalid (or 0) balance
+ * into 10. Every coercion or rejection is appended to `notes` so the save
+ * status can SAY what happened instead of silently altering the input.
+ */
+function gatherSettingsFromForm(notes = []) {
+  const clampInt = (id, min, max, fallback, label) => {
+    const raw = document.getElementById(id).value;
+    const n = Math.round(Number(raw));
+    if (String(raw).trim() === '' || !Number.isFinite(n)) {
+      notes.push(`${label} was not a number — using ${fallback}`);
+      return fallback;
+    }
+    if (n < min) { notes.push(`${label} raised to the minimum ${min}`); return min; }
+    if (n > max) { notes.push(`${label} capped at ${max}`); return max; }
+    return n;
+  };
+  // Preset lists: positive, bounded, deduplicated where repeats are
+  // meaningless, and capped at 8 (500 presets would mean 500 overlay buttons).
+  const numberList = (id, max, label, { dedupe = false } = {}) => {
+    const parts = document.getElementById(id).value.split(',').map((s) => s.trim()).filter(Boolean);
+    let values = parts.map((s) => parseFloat(s)).filter((n) => Number.isFinite(n) && n > 0 && n <= max);
+    if (dedupe) values = [...new Set(values)];
+    if (values.length > 8) values = values.slice(0, 8);
+    if (values.length !== parts.length) {
+      notes.push(`${label}: kept ${values.length} of ${parts.length} entries (each must be > 0 and ≤ ${max}, max 8${dedupe ? ', no repeats' : ''})`);
+    }
+    return values;
+  };
+
+  // D-42/D-06: an invalid balance keeps the SAVED value and says so — it
+  // must never silently become 10 (or anything else the user did not type).
+  const savedBalance = Number(settings.balanceStartSol) >= 0.1
+    ? Number(settings.balanceStartSol)
+    : DEFAULTS.balanceStartSol;
+  const balanceRaw = document.getElementById('set-balance').value;
+  const balanceNum = Number(balanceRaw);
+  let balanceStartSol = savedBalance;
+  if (Number.isFinite(balanceNum) && balanceNum >= 0.1) balanceStartSol = balanceNum;
+  else notes.push(`starting balance "${balanceRaw}" rejected (must be ≥ 0.1 SOL) — kept ${savedBalance}`);
+
+  const presets = numberList('set-presets', 1000, 'quick-buy presets');
+  const sellPcts = numberList('set-sellpcts', 100, 'quick-sell presets', { dedupe: true });
+  if (!presets.length) notes.push('quick-buy presets were empty — defaults restored');
+  if (!sellPcts.length) notes.push('quick-sell presets were empty — defaults restored');
+
   return {
     ...settings,
-    balanceStartSol: Number(document.getElementById('set-balance').value) || 10,
-    feeBps: Number(document.getElementById('set-fee').value) || 0,
-    slippageBps: Number(document.getElementById('set-slippage').value) || 0,
+    balanceStartSol,
+    // D-11: integers 0..1000 only — a negative fee inverts the arithmetic.
+    feeBps: clampInt('set-fee', 0, 1000, DEFAULTS.feeBps, 'fee bps'),
+    // D-23: integers 0..2000 only — ≥ 10000 breaks every sell.
+    slippageBps: clampInt('set-slippage', 0, 2000, DEFAULTS.slippageBps, 'slippage bps'),
     presetsBuy: presets.length ? presets : [0.1, 0.5, 1, 2],
     instantBuyEnabled: document.getElementById('set-instant-buy').checked,
     listQuickBuyEnabled: document.getElementById('set-list-quick-buy').checked,
@@ -2068,13 +2329,39 @@ function gatherSettingsFromForm() {
   };
 }
 
+let saveStatusTimer = null;
+
 async function saveFromForm() {
+  const notes = [];
   // Merge form values into the existing settings object so fields that are not
   // exposed in the form (like overlay size) are not wiped.
-  settings = { ...settings, ...gatherSettingsFromForm() };
-  await saveSettings();
+  settings = { ...settings, ...gatherSettingsFromForm(notes) };
+  // D-47: the save flow reports into its OWN status element — it used to
+  // write "Saved." into the AI-test output span and never clear it.
+  const status = document.getElementById('save-status');
+  const show = (text, isError) => {
+    if (!status) return;
+    status.textContent = text;
+    status.style.color = isError ? 'var(--red)' : '';
+    if (saveStatusTimer) { clearTimeout(saveStatusTimer); saveStatusTimer = null; }
+    // The plain confirmation clears itself; failures and adjustment reports
+    // stay put — the user has to be able to read what was changed.
+    if (!isError && !notes.length) {
+      saveStatusTimer = setTimeout(() => {
+        if (status.textContent === text) status.textContent = '';
+      }, 2500);
+    }
+  };
+  try {
+    await saveSettings();
+  } catch (err) {
+    // D-25: a failed save used to be completely invisible — the "Saved."
+    // write happened after the await and nothing caught the rejection.
+    show('Save failed: ' + ((err && err.message) ? err.message : String(err)), true);
+    return;
+  }
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
-  document.getElementById('ai-test-result').textContent = 'Saved.';
+  show(notes.length ? 'Saved — adjusted: ' + notes.join(' · ') : 'Saved.', false);
 }
 
 /* ---------- helpers ---------- */
@@ -2095,7 +2382,20 @@ function fillLevel(trade) {
   if (!trade) return '—';
   const mcap = Number(trade.mcap);
   if (mcap > 0) return PC.formatMarketCap(mcap) + ' MC';
-  return PC.formatPrice(trade.priceNative) + ' SOL';
+  const price = Number(trade.priceNative);
+  // Never render the "— SOL" corpse a missing price used to produce.
+  return price > 0 ? PC.formatPrice(price) + ' SOL' : '—';
+}
+
+/**
+ * D-32: the journal's "Market cap" column must only ever contain a market
+ * cap. fillLevel()'s SOL-price fallback is right for prose labels ("bought
+ * @ …"), but under a "Market cap" header a unit price reads as a (wildly
+ * wrong) market cap — a fill without one renders a plain em-dash instead.
+ */
+function mcapLevel(trade) {
+  const mcap = Number(trade && trade.mcap);
+  return mcap > 0 ? PC.formatMarketCap(mcap) + ' MC' : '—';
 }
 
 function timeAgo(ts) {
@@ -2132,4 +2432,5 @@ function formatDuration(ms) {
   return `${seconds}s`;
 }
 
-init();
+// D-16: catch boot failures — a bare init() left the page blank on any throw.
+init().catch(renderInitError);

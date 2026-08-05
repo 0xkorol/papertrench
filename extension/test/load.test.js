@@ -305,18 +305,46 @@ test('the resolver global the content script reads is the one the resolver insta
     `content.js must read window.${installed[1]}`);
 });
 
-test('quoteForTrade falls back to the on-screen price when the resolver cannot refresh', () => {
+test('quoteForTrade fills honestly: fresh sources first, stale snapshots bounded by the UI staleness mark', () => {
+  // DEFECTS F-01 / F-13 / F-20. The old contract here pinned a 10-second
+  // stale-fill window for page-fed tokens — which was the DEFAULT path, filled
+  // while the header itself showed "stale", and pre-empted even a successful
+  // action-time resolver refresh. The new ladder: chain authority → click-time
+  // snapshot (age judged at click, before any async hop) → fresh page tick →
+  // pending window for unresolved launches → one resolver refresh → 3 s last
+  // resort for every source alike → refuse with a visible reason.
   const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const fnStart = contentSrc.indexOf('async function quoteForTrade()');
+  assert.ok(fnStart !== -1, 'quoteForTrade must exist');
+  const block = contentSrc.slice(fnStart, contentSrc.indexOf('\n  }', fnStart) + 4);
 
-  // The fallback must exist and must not be gated only by token.pending,
-  // or Jupiter-sourced new/migrated coins stay unbuyable while their price is
-  // clearly on screen.
-  assert.match(contentSrc, /const ACTION_FALLBACK_MAX_AGE_MS = 10000/,
-    'a long enough displayed-price fallback window must be declared');
-  assert.match(contentSrc, /token\.priceSource !== 'resolver'/,
-    'the fallback must apply to non-resolver price sources (Jupiter / page feed)');
-  assert.match(contentSrc, /token\.pending \|\| token\.priceSource !== 'resolver'/,
-    'pending or non-resolver prices must both be eligible for the fallback');
+  // F-13: the click-time snapshot is captured BEFORE the service-worker round
+  // trip, so that trip cannot consume the snapshot's freshness budget.
+  const snapAt = block.indexOf('const atClick = quoteSnapshot()');
+  const chainAt = block.indexOf('await R.onchainQuote');
+  assert.ok(snapAt !== -1 && chainAt !== -1 && snapAt < chainAt,
+    'the click-time snapshot must be taken before the first async hop');
+
+  // F-01: the 10-second fallback is gone; the last resort matches the header
+  // staleness bound and is not wider for page-fed tokens than resolver-fed.
+  assert.doesNotMatch(contentSrc, /ACTION_FALLBACK_MAX_AGE_MS/,
+    'the 10 s stale-fill window must not exist anywhere');
+  assert.match(contentSrc, /const STALE_FILL_MAX_AGE_MS = 3000/,
+    'the last-resort fill bound must match STALE_AFTER_MS in quote.js');
+  assert.doesNotMatch(block, /token\.pending \|\| token\.priceSource !== 'resolver'/,
+    'stale fills must not get a wider window for page-fed tokens');
+
+  // The fresh-launch sniping path stays alive: a pending token may fill from
+  // the on-screen price within its own bounded window.
+  assert.match(block, /PENDING_ACTION_MAX_AGE_MS/,
+    'pending fresh launches keep a bounded on-screen fill window');
+
+  // A successful action-time resolver refresh must beat any stale snapshot:
+  // the last resort appears AFTER the action-resolver return in the ladder.
+  const freshUse = block.indexOf("source: 'action-resolver'");
+  const lastResort = block.indexOf('STALE_FILL_MAX_AGE_MS', freshUse);
+  assert.ok(freshUse !== -1 && lastResort > freshUse,
+    'the stale snapshot must be the LAST resort, after the resolver refresh');
 });
 
 test('the positions bar has a draggable grip and saves its position', () => {

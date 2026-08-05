@@ -50,13 +50,19 @@
         ? 'https://axiom.trade/meme/' + pairAddress
         : 'https://axiom.trade/t/' + mint),
       match: (h) => /(^|\.)axiom\.trade$/.test(h),
-      // axiom.trade/meme/<pairAddress>
+      // axiom.trade/meme/<pairAddress> and axiom.trade/t/<mint>. No bare
+      // path-tail fallback: Axiom's wallet-tracker and profile routes also
+      // end in base58 addresses, and treating those as tokens pinned the
+      // panel open on non-trading pages forever (DEFECTS O-10/O-11). The /t/
+      // route carries a MINT and used to be mislabeled as a pair (O-13).
       detect: () => {
-        const m = location.pathname.match(/\/meme\/($|[A-Za-z0-9]+)/);
-        const addr = m && m[1] && firstBase58(m[1]);
-        if (addr) return { kind: 'pair', address: addr };
-        const tail = pathTail();
-        return tail ? { kind: 'pair', address: tail } : null;
+        const meme = location.pathname.match(/^\/meme\/($|[A-Za-z0-9]+)/);
+        const memeAddr = meme && meme[1] && firstBase58(meme[1]);
+        if (memeAddr) return { kind: 'pair', address: memeAddr };
+        const t = location.pathname.match(/^\/t\/($|[A-Za-z0-9]+)/);
+        const mintAddr = t && t[1] && firstBase58(t[1]);
+        if (mintAddr) return { kind: 'mint', address: mintAddr };
+        return null;
       },
       // Pulse / Discover rows carry anchors to /meme/<pair> plus small
       // pump.fun icon links; the row's own instant-buy button is the anchor
@@ -76,10 +82,13 @@
       name: 'Padre / Terminal',
       tokenUrl: (mint) => 'https://trade.padre.gg/trade/solana/' + mint,
       match: (h) => /(^|\.)padre\.gg$/.test(h),
-      // trade.padre.gg/trade/<mint> (and legacy terminal routes)
+      // trade.padre.gg/trade/solana/<mint> (and legacy terminal routes).
+      // Only /trade/ and /terminal/ routes are token pages — Padre's wallet,
+      // portfolio and leaderboard routes also end in base58 addresses and
+      // must never mount the panel (DEFECTS O-10/O-11).
       detect: () => {
-        const tail = pathTail();
-        return tail ? { kind: 'mint', address: tail } : null;
+        const m = location.pathname.match(/^\/(?:trade|terminal)\/(?:[a-z0-9-]+\/)*([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+        return m ? { kind: 'mint', address: m[1] } : null;
       },
       // Trenches cards link (absolute) to the token's trade page and also
       // carry pump.fun icon links.
@@ -101,11 +110,17 @@
         ? 'https://photon-sol.tinyastro.io/en/lp/' + pairAddress
         : 'https://photon-sol.tinyastro.io/en/r/' + mint),
       match: (h) => /(^|\.)tinyastro\.io$/.test(h),
-      // photon-sol.tinyastro.io/en/lp/<pairAddress>
+      // photon-sol.tinyastro.io/en/lp/<pairAddress> and /en/r/<mint> — the
+      // second is Photon's own mint-route shape, which tokenUrl() emits when
+      // no pair is known; not detecting it meant the extension could navigate
+      // a user to a page it then refused to recognize (DEFECT O-12).
       detect: () => {
-        const m = location.pathname.match(/\/lp\/($|[A-Za-z0-9]+)/);
-        const addr = m && m[1] && firstBase58(m[1]);
-        if (addr) return { kind: 'pair', address: addr };
+        const lp = location.pathname.match(/\/lp\/($|[A-Za-z0-9]+)/);
+        const lpAddr = lp && lp[1] && firstBase58(lp[1]);
+        if (lpAddr) return { kind: 'pair', address: lpAddr };
+        const r = location.pathname.match(/\/r\/($|[A-Za-z0-9]+)/);
+        const rAddr = r && r[1] && firstBase58(r[1]);
+        if (rAddr) return { kind: 'mint', address: rAddr };
         return null;
       },
     },
@@ -114,13 +129,16 @@
       name: 'GMGN',
       tokenUrl: (mint) => 'https://gmgn.ai/sol/token/' + mint,
       match: (h) => /(^|\.)gmgn\.ai$/.test(h),
-      // gmgn.ai/sol/token/<mint>
+      // gmgn.ai/sol/token/<mint>. Solana chain only — GMGN's EVM routes
+      // (/eth/token/0x…) can contain hex runs that pass base58 and were
+      // handed to the Solana resolver (DEFECT O-11); and wallet-analysis
+      // routes (/sol/address/<wallet>) must never mount the panel (O-10).
       detect: () => {
+        const chain = location.pathname.match(/^\/([a-z]+)\//);
+        if (chain && chain[1] !== 'sol') return null;
         const m = location.pathname.match(/\/token\/($|[A-Za-z0-9]+)/);
         const addr = m && m[1] && firstBase58(m[1]);
-        if (addr) return { kind: 'mint', address: addr };
-        const tail = pathTail();
-        return tail ? { kind: 'mint', address: tail } : null;
+        return addr ? { kind: 'mint', address: addr } : null;
       },
       // Trenches is GMGN's home feed; cards navigate by JS but carry
       // pump.fun/coin/<mint> icon links (and some /sol/token/ anchors).
@@ -137,12 +155,17 @@
       name: 'BullX NEO',
       tokenUrl: (mint, pairAddress) => 'https://neo.bullx.io/terminal?chainId=1399811149&address=' + (pairAddress || mint),
       match: (h) => /(^|\.)bullx\.io$/.test(h),
-      // bullx.io/terminal?chainId=...&address=<pair>
+      // bullx.io/terminal?chainId=...&address=<pair>. The address param must
+      // be a WHOLE base58 value: an EVM 0x address can contain a 32+ char
+      // base58 run inside it (~13% of addresses) and used to be sent to the
+      // Solana resolver as a pair (DEFECT O-11). Solana's chainId is
+      // 1399811149; any other explicit chainId is not ours.
       detect: () => {
-        const addrQ = firstBase58(queryParam('address') || '');
-        if (addrQ) return { kind: 'pair', address: addrQ };
-        const tail = pathTail();
-        return tail ? { kind: 'pair', address: tail } : null;
+        const chainId = queryParam('chainId');
+        if (chainId && chainId !== '1399811149') return null;
+        const param = queryParam('address') || '';
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(param)) return null;
+        return { kind: 'pair', address: param };
       },
     },
     {
@@ -150,10 +173,14 @@
       name: 'Dexscreener',
       tokenUrl: (mint, pairAddress) => 'https://dexscreener.com/solana/' + (pairAddress || mint),
       match: (h) => /(^|\.)dexscreener\.com$/.test(h),
-      // dexscreener.com/solana/<pair>
+      // dexscreener.com/solana/<pair> — the /solana/ prefix is the gate.
+      // EVM chain routes (/ethereum/0x…) can contain hex runs that pass
+      // base58 and used to reach the Solana resolver (DEFECT O-11);
+      // watchlist/gainers/portfolio routes must never mount (O-10).
       detect: () => {
-        const tail = pathTail();
-        return tail ? { kind: 'pair', address: tail } : null;
+        const m = location.pathname.match(/^\/solana\/($|[A-Za-z0-9]+)/);
+        const addr = m && m[1] && firstBase58(m[1]);
+        return addr ? { kind: 'pair', address: addr } : null;
       },
     },
     {
@@ -161,13 +188,15 @@
       name: 'Birdeye',
       tokenUrl: (mint) => 'https://birdeye.so/token/' + mint + '?chain=solana',
       match: (h) => /(^|\.)birdeye\.so$/.test(h),
-      // birdeye.so/token/<mint>?chain=solana
+      // birdeye.so/token/<mint>?chain=solana. Token routes only — profile
+      // routes end in wallet addresses (DEFECT O-10) — and an explicit
+      // non-Solana ?chain= is not ours.
       detect: () => {
+        const chain = queryParam('chain');
+        if (chain && chain.toLowerCase() !== 'solana') return null;
         const m = location.pathname.match(/\/token\/($|[A-Za-z0-9]+)/);
         const addr = m && m[1] && firstBase58(m[1]);
-        if (addr) return { kind: 'mint', address: addr };
-        const tail = pathTail();
-        return tail ? { kind: 'mint', address: tail } : null;
+        return addr ? { kind: 'mint', address: addr } : null;
       },
     },
     {
@@ -180,15 +209,37 @@
       // itself to ?buy=...&sell=... (usually SOL/USDC), so prefer the original
       // output/input token and ignore stable/quote addresses.
       detect: () => {
+        const pathBase58 = /^\/(?:swap|tokens|limit|dca)\//.test(location.pathname)
+          ? firstBase58(location.pathname)
+          : null; // portfolio/<wallet> and other routes are not token pages (O-10)
         const candidates = [
           firstBase58(queryParam('outputMint') || ''),
           firstBase58(queryParam('inputMint') || ''),
           firstBase58(queryParam('buy') || ''),
           firstBase58(queryParam('sell') || ''),
-          firstBase58(location.pathname),
+          pathBase58,
         ].filter(Boolean);
         const tok = candidates.find((addr) => !QUOTE_MINTS.has(addr)) || null;
         return tok ? { kind: 'mint', address: tok } : null;
+      },
+    },
+    {
+      id: 'pumpfun',
+      name: 'Pump.fun',
+      tokenUrl: (mint) => 'https://pump.fun/coin/' + mint,
+      match: (h) => /(^|\.)pump\.fun$/.test(h),
+      // pump.fun/coin/<mint>, plus the legacy bare /<mint> route. Pump.fun
+      // was in the product description from day one but had NO adapter — it
+      // fell to the generic fallback (DEFECT F-24).
+      detect: () => {
+        const m = location.pathname.match(/^\/coin\/($|[A-Za-z0-9]+)/);
+        const addr = m && m[1] && firstBase58(m[1]);
+        if (addr) return { kind: 'mint', address: addr };
+        const parts = location.pathname.split('/').filter(Boolean);
+        if (parts.length === 1 && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(parts[0])) {
+          return { kind: 'mint', address: parts[0] };
+        }
+        return null;
       },
     },
   ];

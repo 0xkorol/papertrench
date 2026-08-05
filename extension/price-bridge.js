@@ -26,6 +26,10 @@
   const PATCHED = Symbol('papertrench-patched');
   const MAX_DEPTH = 7;
   const MAX_CANDIDATES = 32;
+  // Upper bound on frames the generic path will JSON.parse. Parse cost at
+  // this size is ~10-20 ms occasionally; the collector walk is separately
+  // bounded by NODE_BUDGET, so bigger frames cannot runaway the main thread.
+  const FRAME_GUARD_BYTES = 2_000_000;
   const MAX_MARKS = 500;
 
   let paperMarks = [];
@@ -85,8 +89,10 @@
       || !next.every((n) => currentSymbolNeedles.indexOf(n) >= 0);
     currentSymbolNeedles.length = 0;
     for (const n of next) currentSymbolNeedles.push(n);
-    // A new token means the old bar close is no longer a valid axis hint.
-    if (changed) lastBarClose = 0;
+    // A new token means the old bar close is no longer a valid axis hint —
+    // and the export dedupe must forget the old token's close, or the first
+    // poll on the new token can be swallowed as "unchanged" (DEFECT F-19).
+    if (changed) { lastBarClose = 0; lastExportedClose = 0; }
   }
   // GMGN runs a private TradingView widget inside a same-origin blob iframe.
   // Its live React chart manager exposes `getActiveChart().createOrderLine()`.
@@ -118,42 +124,98 @@
   const USD_HINT = /usd|dollar/i;
   const NATIVE_HINT = /native|sol/i;
 
-  function collect(obj) {
-    const found = { candidates: [], mcap: null, mint: null, symbol: null, name: null };
-    const seen = new WeakSet();
+  // Traversal is bounded by a single global node budget rather than the old
+  // per-array slice(0, 80): trade arrays are newest-LAST, so capping at the
+  // front reported ever older prices exactly as batches grew with volume
+  // (DEFECT F-03). The budget only bites on pathological frames.
+  const NODE_BUDGET = 20_000;
+  // Identifier strength: on several sites `address`/`ca` carry the AMM/pool
+  // address rather than the token mint, so an explicit mint-ish key must win
+  // the record association when both appear on one object.
+  const MINT_KEY_STRONG = /^(mint|tokenMint|baseMint)$/i;
+  const MINT_KEY_MEDIUM = /^(tokenAddress)$/i;
+  function mintKeyRank(key) {
+    if (MINT_KEY_STRONG.test(key)) return 3;
+    if (MINT_KEY_MEDIUM.test(key)) return 2;
+    if (MINT_KEY.test(key)) return 1;
+    return 0;
+  }
 
-    (function walk(node, depth) {
+  function collect(obj) {
+    // Prices are grouped by the token record they appear inside (DEFECT F-02).
+    // A batched frame — screener list, multi-pair snapshot, trending payload —
+    // carries many tokens; the old flattened walk attributed token B's price
+    // to whichever mint happened to be seen first, and the accept band then
+    // derived USD/mcap from that wrong ratio self-consistently. A node that
+    // carries a mint-shaped identifier opens a record; every price / mcap /
+    // symbol beneath it belongs to that token. Finds outside any record land
+    // in `top` (frames with no identifier at all), which downstream
+    // anchor-banding still validates before use.
+    const records = new Map();
+    const top = { candidates: [], mcap: null, mint: null, symbol: null, name: null };
+    const seen = new WeakSet();
+    let budget = NODE_BUDGET;
+
+    const recordFor = (mint) => {
+      let rec = records.get(mint);
+      if (!rec) {
+        rec = { candidates: [], mcap: null, mint, symbol: null, name: null };
+        records.set(mint, rec);
+      }
+      return rec;
+    };
+    const pushCandidate = (rec, cand) => {
+      // Ring, not cap: when a record overflows, keep the NEWEST candidates.
+      if (rec.candidates.length >= MAX_CANDIDATES) rec.candidates.shift();
+      rec.candidates.push(cand);
+    };
+
+    (function walk(node, depth, ctx) {
       if (!node || typeof node !== 'object' || depth > MAX_DEPTH || seen.has(node)) return;
+      if (budget-- <= 0) return;
       seen.add(node);
+
+      let target = ctx;
+      if (!Array.isArray(node)) {
+        let bestRank = 0;
+        let bestMint = null;
+        for (const [key, value] of Object.entries(node)) {
+          if (typeof value !== 'string' || !BASE58_RE.test(value)) continue;
+          const rank = mintKeyRank(key);
+          if (rank > bestRank) { bestRank = rank; bestMint = value; }
+        }
+        if (bestMint) target = recordFor(bestMint);
+      }
+
       const entries = Array.isArray(node)
-        ? node.slice(0, 80).map((v, i) => [String(i), v])
+        ? node.map((v, i) => [String(i), v])
         : Object.entries(node);
 
       for (const [key, value] of entries) {
+        if (budget <= 0) return;
         if (value && typeof value === 'object') {
-          walk(value, depth + 1);
+          walk(value, depth + 1, target);
           continue;
         }
+        const rec = target || top;
         if (PRICE_KEY.test(key)) {
           const n = numberValue(value);
-          if (n > 0 && found.candidates.length < MAX_CANDIDATES) {
+          if (n > 0) {
             const unit = USD_HINT.test(key) ? 'usd' : NATIVE_HINT.test(key) ? 'native' : 'unknown';
-            found.candidates.push({ value: n, unit, key });
+            pushCandidate(rec, { value: n, unit, key });
           }
         } else if (MCAP_KEY.test(key)) {
           const n = numberValue(value);
-          if (n > 0 && found.mcap === null) found.mcap = n;
-        } else if (MINT_KEY.test(key) && typeof value === 'string' && BASE58_RE.test(value)) {
-          found.mint = found.mint || value;
+          if (n > 0 && rec.mcap === null) rec.mcap = n;
         } else if (SYMBOL_KEY.test(key) && typeof value === 'string' && value.length <= 24) {
-          found.symbol = found.symbol || value;
+          rec.symbol = rec.symbol || value;
         } else if (NAME_KEY.test(key) && typeof value === 'string' && value.length <= 64) {
-          found.name = found.name || value;
+          rec.name = rec.name || value;
         }
       }
-    })(obj, 0);
+    })(obj, 0, null);
 
-    return found;
+    return { records, top };
   }
 
   // GMGN's realtime WebSocket publishes every venue trade on the
@@ -162,12 +224,19 @@
   // (`pu` matches no price pattern and `ca` is the AMM address, not the mint),
   // which left GMGN's live feed entirely unused — the extension fell back to
   // slow polling. Mint-tagged USD ticks let quote.js validate exactly.
-  let lastActivityTickAt = 0;
+  // The tick throttle is PER MINT, not global (DEFECT F-07). The old global
+  // 100 ms gate ran before the batch was even inspected, so at high volume —
+  // when inter-batch gaps fall under 100 ms — a batch of unrelated mints
+  // silently discarded the NEXT batch, including the watched coin. That is
+  // the same starvation class v1.2.14 fixed inside a single batch, one layer
+  // up. Every batch is now parsed (a single cheap pass) and each mint keeps
+  // its own emission clock.
+  const ACTIVITY_TICK_MIN_MS = 100;
+  const activityLastEmitByMint = new Map();
 
   function forwardTokenActivity(parsed) {
     if (!parsed || parsed.channel !== 'token_activity' || !Array.isArray(parsed.data)) return false;
     const now = Date.now();
-    if (now - lastActivityTickAt < 100) return true; // consumed, rate-limited
     const latestByMint = new Map();
     for (const item of parsed.data) {
       if (!item || typeof item.a !== 'string' || !BASE58_RE.test(item.a)) continue;
@@ -175,12 +244,13 @@
       if (priceUsd > 0) latestByMint.set(item.a, priceUsd);
     }
     if (!latestByMint.size) return true;
-    lastActivityTickAt = now;
     // Emit the mint the user is actually looking at FIRST: under high volume a
     // batch carries many mints, and Map iteration order offers no guarantee
     // the watched coin makes the cut. Then top up with any others.
     let emitted = 0;
+    const due = (mint) => now - (activityLastEmitByMint.get(mint) || 0) >= ACTIVITY_TICK_MIN_MS;
     const emitTick = (mint, priceUsd) => {
+      activityLastEmitByMint.set(mint, now);
       emit('tick', {
         candidates: [{ value: priceUsd, unit: 'usd', key: 'tokenActivityPriceUsd' }],
         mcap: null,
@@ -190,14 +260,25 @@
         source: 'gmgn-ws-trade',
       });
     };
-    if (currentSymbolInfo.mint && latestByMint.has(currentSymbolInfo.mint)) {
-      emitTick(currentSymbolInfo.mint, latestByMint.get(currentSymbolInfo.mint));
+    const watchedMint = currentSymbolInfo.mint;
+    if (watchedMint && latestByMint.has(watchedMint) && due(watchedMint)) {
+      emitTick(watchedMint, latestByMint.get(watchedMint));
       emitted++;
     }
     for (const [mint, priceUsd] of latestByMint) {
-      if (mint === currentSymbolInfo.mint) continue;
-      if (emitted++ >= 4) break;
+      if (mint === watchedMint) continue;
+      if (emitted >= 5) break;
+      if (!due(mint)) continue;
       emitTick(mint, priceUsd);
+      emitted++;
+    }
+    // Bound the per-mint clock map so a long trenches session cannot grow it
+    // without limit; entries older than a few seconds are meaningless anyway.
+    if (activityLastEmitByMint.size > 512) {
+      for (const [mint, at] of activityLastEmitByMint) {
+        if (now - at > 5000) activityLastEmitByMint.delete(mint);
+        if (activityLastEmitByMint.size <= 256) break;
+      }
     }
     return true;
   }
@@ -219,9 +300,20 @@
         forwardTokenActivity(parsed);
         return;
       }
-      if (raw.length > 500_000) return;
-      if (trimmed[0] !== '{' && trimmed[0] !== '[') return;
-      try { parsed = JSON.parse(raw); } catch (_) { return; }
+      if (url && /\/api\/v1\/token_mcap_candles\//.test(url)) {
+        // GMGN's market-cap candles ARE the chart feed on GMGN, and a hot
+        // token's full history outgrows the generic guard — the exact failure
+        // v1.2.14 fixed for the trade feed (DEFECT F-06). The URL match is
+        // exact, so this is not a generic bypass.
+        try { parsed = JSON.parse(raw); } catch (_) { return; }
+      } else {
+        // The guard bounds JSON.parse cost only — the collector walk itself
+        // is bounded by NODE_BUDGET regardless of frame size. 500 KB silently
+        // killed every non-GMGN site's trade feed at peak volume (F-06).
+        if (raw.length > FRAME_GUARD_BYTES) return;
+        if (trimmed[0] !== '{' && trimmed[0] !== '[') return;
+        try { parsed = JSON.parse(raw); } catch (_) { return; }
+      }
     }
     if (!parsed || typeof parsed !== 'object') return;
 
@@ -247,10 +339,45 @@
       }
     }
 
-    const found = collect(parsed);
-    if (!found.candidates.length && found.mcap === null) return;
-    emit('tick', { ...found, source });
+    const { records, top } = collect(parsed);
+    const hasContent = (rec) => rec.candidates.length || rec.mcap !== null;
+    if (records.size) {
+      // Watched token first — the GMGN fast-path contract, now generic — then
+      // a bounded top-up so screener row chips keep their mint-tagged prices.
+      const watched = (currentSymbolInfo.mint && records.get(currentSymbolInfo.mint))
+        || (currentSymbolInfo.pairAddress && records.get(currentSymbolInfo.pairAddress))
+        || null;
+      let emitted = 0;
+      if (watched && hasContent(watched)) { emit('tick', { ...watched, source }); emitted++; }
+      for (const rec of records.values()) {
+        if (rec === watched || !hasContent(rec)) continue;
+        if (emitted++ >= 5) break;
+        emit('tick', { ...rec, source });
+      }
+      if (emitted) return;
+      // Records existed but carried no prices; fall through to the
+      // unattributed finds so a lone top-level price still ticks.
+    }
+    if (!top.candidates.length && top.mcap === null) return;
+    emit('tick', { ...top, source });
   }
+
+  /* ---------------- SPA navigation signal ----------------
+   * Every supported site is an SPA, and the content script's only navigation
+   * signal used to be an 800 ms URL poll — so the previous token's live panel
+   * and chart lines lingered on the new page for up to a tick (DEFECT O-14).
+   * Programmatic pushState/replaceState is invisible to the isolated world,
+   * so the hook lives here and posts a nav event the moment the route
+   * changes. popstate/hashchange are visible to both worlds and the content
+   * script listens for those itself.
+   */
+  try {
+    const notifyNav = () => emit('nav', { href: location.href });
+    const origPush = history.pushState;
+    history.pushState = function (...args) { const r = origPush.apply(this, args); notifyNav(); return r; };
+    const origReplace = history.replaceState;
+    history.replaceState = function (...args) { const r = origReplace.apply(this, args); notifyNav(); return r; };
+  } catch (_) {}
 
   /* ---------------- early generic transport interception ---------------- */
 
@@ -1460,6 +1587,18 @@
     const target = ev.target;
     const chip = target && target.closest ? target.closest('.pt-rowbuy') : null;
     if (!chip) return;
+    // pointerdown must keep propagating to OTHER window-capture listeners:
+    // the content script's gesture stamp (isTrusted pointerdown) lives there,
+    // and stopImmediatePropagation starved it — so a chip tap after >5 s of
+    // idling was refused by the fill pipeline's own forgery gate and the chip
+    // stuck in busy forever (DEFECT F-08). stopPropagation still keeps the
+    // row underneath from navigating; the later press events stay swallowed
+    // entirely.
+    if (ev.type === 'pointerdown') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
     ev.preventDefault();
     ev.stopPropagation();
     ev.stopImmediatePropagation();
@@ -1782,6 +1921,7 @@
   // years-late resolution cannot publish an outdated close.
   const EXPORT_STUCK_MS = 5000;
   let lastExportedClose = 0;
+  let lastExportEmitAt = 0;
   let exportStartedAt = 0;
   let exportSeq = 0;
 
@@ -1826,8 +1966,13 @@
       // Rows come back as Float64Array (not Array), so index access only.
       const lastRow = rows[rows.length - 1];
       const close = numberValue(lastRow ? lastRow[closeIndex] : null);
-      if (!(close > 0) || close === lastExportedClose) return;
+      if (!(close > 0)) return;
+      // A flat market is not a dead feed. Re-assert an unchanged close on a
+      // slow heartbeat so staleness handling does not declare a healthy chart
+      // dead and route every fill to the resolver (DEFECT F-19).
+      if (close === lastExportedClose && Date.now() - lastExportEmitAt < 2500) return;
       lastExportedClose = close;
+      lastExportEmitAt = Date.now();
       lastBarClose = close;
       emit('tick', {
         candidates: [{ value: close, unit: 'unknown', key: 'chartExportClose' }],

@@ -74,6 +74,17 @@
   let detectLoopTimer = null;
   let barScanTimer = null;
   let lastCmTickPrice = 0;
+  // Sustained out-of-band tick rejections force an early anchor refresh
+  // instead of waiting out the 30 s cadence (DEFECT F-10).
+  const OOB_REJECTS_FOR_REANCHOR = 5;
+  const OOB_REANCHOR_MIN_MS = 3000;
+  let oobRejects = 0;
+  let lastOobRequoteAt = 0;
+  // Armed buys expire on QUIET, not on a clock alone (DEFECT F-16): while
+  // validated mcap ticks prove the coin is actively trading, keep waiting for
+  // the first fillable price. A hard cap still bounds the wait.
+  const ARMED_BUY_MAX_TTL_MS = 300_000;
+  let lastMcapTickAt = 0;
   // Track whether the main panel is collapsed to the mini pill.
   let panelMinimized = false;
   // Track an in-progress resize of the trade tab.
@@ -250,6 +261,27 @@
   window.addEventListener('pointerdown', noteGesture, true);
   window.addEventListener('keydown', noteGesture, true);
 
+  /* SPA navigation: react to route changes the moment they happen instead of
+   * waiting out the 800 ms detect poll (DEFECT O-14). pushState/replaceState
+   * arrive as a bridge 'nav' message; popstate/hashchange fire here directly. */
+  let navDetectTimer = null;
+  function scheduleDetect() {
+    if (navDetectTimer) return;
+    navDetectTimer = setTimeout(() => {
+      navDetectTimer = null;
+      if (!contextAlive()) return;
+      detectLoop();
+    }, 30);
+  }
+  const onNavEvent = () => scheduleDetect();
+  window.addEventListener('popstate', onNavEvent, true);
+  window.addEventListener('hashchange', onNavEvent, true);
+  onTeardown(() => {
+    window.removeEventListener('popstate', onNavEvent, true);
+    window.removeEventListener('hashchange', onNavEvent, true);
+    if (navDetectTimer) { clearTimeout(navDetectTimer); navDetectTimer = null; }
+  });
+
   function onBridgeMessage(event) {
     // Same-origin only: foreign-origin and cross-window forges never read
     // as bridge traffic, whatever tag they paste on themselves.
@@ -264,12 +296,20 @@
       // gets nothing: without a genuine recent gesture the fill is refused.
       if (Date.now() - lastGestureAt > TRADE_GESTURE_WINDOW_MS) {
         toast('Paper buy needs a real tap — websites cannot trigger fills');
+        // The chip's busy state is cleared ONLY by row-buy-done; a refusal
+        // that skipped it left the chip stuck forever (DEFECT F-08).
+        sendPadreMarker('row-buy-done', null);
         return;
       }
       if (ev.payload && ev.payload.address) {
         doRowBuy(ev.payload.address, null)
           .finally(() => sendPadreMarker('row-buy-done', null));
       }
+    }
+    else if (ev.type === 'nav') {
+      // The page's router moved (pushState/replaceState in the MAIN world);
+      // re-detect immediately instead of waiting for the poll (DEFECT O-14).
+      scheduleDetect();
     }
     else if (ev.type === 'padre-hook-status') {
       padreHookStatus = { ...padreHookStatus, ...(ev.payload || {}) };
@@ -334,6 +374,11 @@
     if (payload.symbol && token.symbol
       && String(payload.symbol).toUpperCase() !== String(token.symbol).toUpperCase()) return;
 
+    // Market-cap-only ticks (GMGN/Axiom pre-index) cannot price a fill, but
+    // they PROVE the coin is actively trading — that keeps an armed buy
+    // waiting for its first real price instead of expiring (DEFECT F-16).
+    if (Number(payload.mcap) > 0) lastMcapTickAt = Date.now();
+
     let verdict = null;
     const anchor = tokenAnchor();
     if (Number(anchor && anchor.priceNative) > 0) {
@@ -341,7 +386,26 @@
     } else {
       verdict = Q.bootstrapTick(token, payload, pendingSolUsd);
     }
-    if (!verdict || !verdict.accepted) return;
+    if (!verdict || !verdict.accepted) {
+      // A RUN of out-of-band rejections is not noise — it is a genuine move
+      // beyond the accept band (a fast runner can clear 20x inside the 30 s
+      // anchor-refresh cadence). Waiting for the cadence froze the price at
+      // the pre-move level exactly when it mattered most (DEFECT F-10).
+      // Force an early re-anchor from the trusted resolver; requote() is
+      // single-flight, and if the ticks were genuinely bogus the fresh anchor
+      // simply keeps rejecting them.
+      if (verdict && verdict.reason === 'out-of-band') {
+        oobRejects += 1;
+        if (oobRejects >= OOB_REJECTS_FOR_REANCHOR
+          && Date.now() - lastOobRequoteAt > OOB_REANCHOR_MIN_MS) {
+          lastOobRequoteAt = Date.now();
+          oobRejects = 0;
+          requote();
+        }
+      }
+      return;
+    }
+    oobRejects = 0;
 
     // A live chart tick that validates tells us which unit the chart plots.
     if ((payload.source === 'padre-chart-bar' || payload.source === 'chart-export') && verdict.basis) {
@@ -448,6 +512,9 @@
         // then the next tick rebuilt everything from scratch.
         pendingAttempts += 1;
         renderHeader();
+        // Re-evaluate the false-positive give-up (DEFECT O-10) as the
+        // failure count grows; cheap, and reversible the moment it resolves.
+        updateOverlayVisibility();
         return;
       }
       data.srcAddress = candidate.address;
@@ -495,6 +562,10 @@
   function setToken(data) {
     const prevMint = token?.mint;
     const hadPrice = Boolean(token && token.priceNative);
+    // Per-token feed counters must not leak across a token switch: stale mcap
+    // activity could hold a NEW token's armed buy alive (F-16), and stale
+    // out-of-band tallies could trigger a premature re-anchor (F-10).
+    if (!data || data.mint !== prevMint) { lastMcapTickAt = 0; oobRejects = 0; }
     token = data;
     // Keep a separate resolver anchor for validation. This is the price we
     // trust until a newer resolver quote or a first on-chain observation
@@ -621,15 +692,30 @@
       if (armedBuy) {
         if (token && Number(token.priceNative) > 0) {
           flushArmedBuy();
-        } else if (Date.now() - armedBuy.at > ARMED_BUY_TTL_MS) {
+        } else if (armedBuyExpired()) {
           armedBuy = null;
           renderBuyButton();
-          toast('Armed buy expired — no quote arrived in time');
+          toast('Armed buy expired — no fillable quote arrived in time');
         }
       }
       renderHeader();
       renderPosition();
     }, PRICE_TICK_MS);
+  }
+
+  /**
+   * An armed buy expires only when the market has gone QUIET (no validated
+   * mcap ticks for 15 s past the base TTL) or the hard cap is reached. On
+   * GMGN/Axiom a pre-index launch emits mcap-only ticks that cannot price a
+   * fill — expiring on the base clock alone made sniping structurally dead on
+   * exactly those charts (DEFECT F-16).
+   */
+  function armedBuyExpired() {
+    if (!armedBuy) return false;
+    const age = Date.now() - armedBuy.at;
+    if (age > ARMED_BUY_MAX_TTL_MS) return true;
+    if (age <= ARMED_BUY_TTL_MS) return false;
+    return Date.now() - lastMcapTickAt > 15_000;
   }
 
   /** Fetch a fresh anchor quote and adopt it if it is for this token. */
@@ -931,10 +1017,12 @@
   // A fresh-launch coin has no Dexscreener/Jupiter quote yet, so the on-screen
   // price is the only price. Keep it tradeable a little longer while pending.
   const PENDING_ACTION_MAX_AGE_MS = 2000;
-  // When the resolver is momentarily unavailable (new launch, just migrated,
-  // network hiccup), the on-screen price is still better than refusing the
-  // trade entirely, as long as it is not ancient.
-  const ACTION_FALLBACK_MAX_AGE_MS = 10000;
+  // Last-resort bound for filling from the on-screen snapshot when every live
+  // source failed. Aligned with the header's staleness marker (STALE_AFTER_MS
+  // in quote.js): the moment the UI flags a price as stale, a fill at that
+  // price would be a lie. The old 10 s window routinely filled 30-50% away
+  // from the live market on a moving memecoin (DEFECT F-01).
+  const STALE_FILL_MAX_AGE_MS = 3000;
 
   function quoteSnapshot() {
     if (!token || !(Number(token.priceNative) > 0)) return null;
@@ -994,14 +1082,23 @@
     const startMint = token && token.mint;
     if (!startMint) return null;
 
+    // Snapshot BEFORE any async hop. The service-worker round trip below can
+    // cost hundreds of ms on a cold worker — it must not consume the freshness
+    // budget of the price the user actually clicked on (DEFECT F-13).
+    const clickAt = Date.now();
+    const atClick = quoteSnapshot();
+    const atClickAge = atClick ? clickAt - atClick.receivedAt : Infinity;
+
     // Chain state is the authority. It is the only source that is not behind
     // by construction, so it is asked first and trusted absolutely.
     const observation = await R.onchainQuote(startMint);
+    if (!token || token.mint !== startMint) return null;
     const onchain = quoteFromOnchain(observation);
     if (onchain) return onchain;
 
-    const initial = quoteSnapshot();
-    if (initial && Date.now() - initial.receivedAt <= ACTION_QUOTE_MAX_AGE_MS) return initial;
+    // The freshest local price, judged by its age AT CLICK time — the round
+    // trip above must not have aged it out of its own window.
+    if (atClick && atClickAge <= ACTION_QUOTE_MAX_AGE_MS) return atClick;
 
     const seqAtClick = pageQuoteSeq;
     // Prefer an imminent site-feed update (Padre bar / GMGN worker) over an
@@ -1013,46 +1110,49 @@
       return pageQuote;
     }
 
+    // A truly unresolved fresh launch has no aggregator to ask — the on-screen
+    // price is the only price there is. Give it its own bounded window and
+    // skip the refresh round trip that cannot succeed yet (the sniping case).
+    if (token.pending) {
+      const pendingQuote = quoteSnapshot();
+      if (pendingQuote && Date.now() - pendingQuote.receivedAt <= PENDING_ACTION_MAX_AGE_MS) return pendingQuote;
+    }
+
     // The feed is quiet. Take exactly one action-time resolver quote rather
     // than filling from the stale display snapshot. If the page ticks while it
     // is in flight, the newer page quote wins.
     const fresh = await R.refresh(token);
     if (!token || token.mint !== startMint) return null;
-
-    // A new coin or a freshly-migrated coin may not be re-indexed by the
-    // aggregator yet. The on-screen price is the only truthful quote we have,
-    // so use it for a little longer rather than refusing the buy entirely.
-    // This also covers a transient resolver outage for page-driven feeds.
-    const displayPriceOnly = token.pending || token.priceSource !== 'resolver';
-    if (displayPriceOnly) {
-      if (pageQuoteSeq > seqAtClick) {
-        const newerPageQuote = quoteSnapshot();
-        if (newerPageQuote && Date.now() - newerPageQuote.receivedAt <= ACTION_FALLBACK_MAX_AGE_MS) return newerPageQuote;
-      }
-      const stalePageQuote = quoteSnapshot();
-      if (stalePageQuote && Date.now() - stalePageQuote.receivedAt <= ACTION_FALLBACK_MAX_AGE_MS) return stalePageQuote;
-    }
-
-    if (!fresh || !(Number(fresh.priceNative) > 0)) return null;
-    if (fresh.mint && fresh.mint !== startMint) return null;
     if (pageQuoteSeq > seqAtClick) {
       const newerPageQuote = quoteSnapshot();
       if (newerPageQuote && Date.now() - newerPageQuote.receivedAt <= ACTION_QUOTE_MAX_AGE_MS) return newerPageQuote;
     }
 
-    // Keep GMGN's chart-scale market cap from its own market-cap feed when it
-    // is available; Dexscreener is the fallback quote, not the chart authority.
-    const inheritedMcap = site && site.id === 'gmgn' && Number(token.mcap) > 0 && Number(token.priceUsd) > 0 && Number(fresh.priceUsd) > 0
-      ? Number(token.mcap) * (Number(fresh.priceUsd) / Number(token.priceUsd))
-      : Number(fresh.mcap) || null;
-    return {
-      mint: startMint,
-      priceNative: Number(fresh.priceNative),
-      priceUsd: Number(fresh.priceUsd) > 0 ? Number(fresh.priceUsd) : null,
-      mcap: inheritedMcap,
-      source: 'action-resolver',
-      receivedAt: Date.now(),
-    };
+    if (fresh && Number(fresh.priceNative) > 0 && (!fresh.mint || fresh.mint === startMint)) {
+      // Keep GMGN's chart-scale market cap from its own market-cap feed when
+      // it is available; Dexscreener is the fallback quote, not the chart
+      // authority.
+      const inheritedMcap = site && site.id === 'gmgn' && Number(token.mcap) > 0 && Number(token.priceUsd) > 0 && Number(fresh.priceUsd) > 0
+        ? Number(token.mcap) * (Number(fresh.priceUsd) / Number(token.priceUsd))
+        : Number(fresh.mcap) || null;
+      return {
+        mint: startMint,
+        priceNative: Number(fresh.priceNative),
+        priceUsd: Number(fresh.priceUsd) > 0 ? Number(fresh.priceUsd) : null,
+        mcap: inheritedMcap,
+        source: 'action-resolver',
+        receivedAt: Date.now(),
+      };
+    }
+
+    // Every live source failed (resolver outage, unindexed migration). The
+    // on-screen snapshot may stand in — but only within the same bound the
+    // header uses to flag a price as stale, and for EVERY price source alike.
+    // Beyond that, the fill is refused with a visible reason instead of
+    // executing at a price the UI itself no longer stands behind (F-01/F-20).
+    const lastResort = quoteSnapshot();
+    if (lastResort && Date.now() - lastResort.receivedAt <= STALE_FILL_MAX_AGE_MS) return lastResort;
+    return null;
   }
 
   /* -------------------- fills -------------------- */
@@ -2586,7 +2686,17 @@
    */
   function updateOverlayVisibility() {
     if (!host) return;
-    const hide = settings.overlayHideWhenNoToken && !token;
+    // A pending token that keeps failing to resolve with no sign of market
+    // activity is a false positive — an address-shaped but dead route. It
+    // must count as "no token" or the panel pins open on non-trading pages
+    // forever (DEFECT O-10). A YOUNG pending token stays visible: that is
+    // the fresh-launch sniping window, and hiding it would kill the arm-buy
+    // flow the pending state exists for.
+    const unresolvable = token && token.pending
+      && pendingAttempts > 40
+      && !(Number(token.priceNative) > 0)
+      && Date.now() - lastMcapTickAt > 15_000;
+    const hide = settings.overlayHideWhenNoToken && (!token || unresolvable);
     setPanelVisible(!hide);
     renderVisibilityIcon();
   }

@@ -217,11 +217,21 @@ function runBridge(opts = {}) {
   let timeoutSeq = 0;
 
   const href = opts.href || 'https://gmgn.ai/sol/token/Mint1';
+  // Controllable clock: stress tests need to space batches by tens of
+  // milliseconds deterministically. Untouched, it follows real time.
+  const RealDate = Date;
+  let fakeNow = null;
+  class TestDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0 && fakeNow !== null) { super(fakeNow); } else { super(...args); }
+    }
+    static now() { return fakeNow !== null ? fakeNow : RealDate.now(); }
+  }
   const sandbox = {
     window: win,
     document: doc,
     location: { href, hostname: new URL(href).hostname },
-    console, Date, Math, Number, String, Array, Object, Boolean, RegExp,
+    console, Date: TestDate, Math, Number, String, Array, Object, Boolean, RegExp,
     Error, Set, WeakSet, WeakMap, Map, Symbol, JSON, Promise, isFinite,
     setInterval(fn) { timers.push(fn); return timers.length; },
     clearInterval() {},
@@ -250,6 +260,8 @@ function runBridge(opts = {}) {
     preloadLines,
     AXIOM_PAIR,
     setExportRows: (rows) => { exportRows = rows; },
+    setNow(t) { fakeNow = t; },
+    advance(ms) { fakeNow = (fakeNow === null ? RealDate.now() : fakeNow) + ms; },
     send(type, payload) {
       listeners.message({
         source: win,
@@ -799,16 +811,124 @@ test('GMGN high-volume frames past the size guard still feed the live price', ()
     'the tick must carry the LATEST trade price in the batch');
 });
 
-test('the size guard still protects the generic collector walk', () => {
-  // The fast path must not become a bypass for arbitrary huge frames: a
-  // non-token_activity payload past the guard is still dropped.
+test('the parse guard still bounds arbitrary huge frames', () => {
+  // The guard was raised from 500 KB to 2 MB (F-06): the collector walk is
+  // separately bounded by NODE_BUDGET, so the guard only bounds JSON.parse
+  // cost. But it must still exist — a truly pathological frame is dropped.
   const env = runBridge({ gmgnMounted: true });
-  const huge = JSON.stringify({ channel: 'something_else', data: new Array(60000).fill({ price: 1 }) });
-  assert.ok(huge.length > 500_000);
+  const huge = JSON.stringify({ channel: 'something_else', data: new Array(240000).fill({ price: 1 }) });
+  assert.ok(huge.length > 2_000_000, 'the test frame must outgrow the raised guard');
   env.emitted.length = 0;
   injectActivityFrame(env, huge);
   assert.equal(env.emitted.filter((m) => m.type === 'tick').length, 0,
-    'oversized non-activity frames must stay dropped');
+    'frames beyond the parse guard must stay dropped');
+});
+
+test('a mid-size non-GMGN trade frame past the old 500 KB guard now feeds the price', () => {
+  // DEFECT F-06: the v1.2.14 guard bypass covered ONLY GMGN token_activity.
+  // Every other site's trade batches were still silently dropped at exactly
+  // peak volume. With per-record collection and the raised guard, a 700 KB
+  // Photon/BullX-style frame must still tick.
+  const env = runBridge({});
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.send('paper-axis', { mint: WATCHED });
+
+  const trades = [];
+  for (let i = 0; i < 6000; i++) {
+    trades.push({ mint: WATCHED, price: String(0.001 + i * 1e-7), pad: 'x'.repeat(80) });
+  }
+  const frame = JSON.stringify({ trades });
+  assert.ok(frame.length > 500_000 && frame.length < 2_000_000,
+    'the test frame must sit between the old and new guard');
+
+  env.emitted.length = 0;
+  injectActivityFrame(env, frame);
+  const tick = env.emitted.find((m) => m.type === 'tick' && m.payload?.mint === WATCHED);
+  assert.ok(tick, 'a large non-GMGN trade frame must still produce a tick');
+});
+
+test('an oversized GMGN mcap-candle response still feeds the chart close', () => {
+  // DEFECT F-06 (second half): the guard sat BEFORE the mcap-candle URL
+  // handler, so GMGN's own chart feed kept the exact bug v1.2.14 fixed for
+  // its trade feed — a hot token's full candle history was dropped whole.
+  const env = runBridge({ gmgnMounted: true });
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.send('paper-axis', { mint: WATCHED, symbol: 'BONK' });
+
+  const list = [];
+  for (let i = 0; i < 40000; i++) {
+    list.push({ time: 1_800_000_000 + i, open: 240000 + i, high: 240010 + i, low: 239990 + i, close: 240000 + i });
+  }
+  const frame = JSON.stringify({ code: 0, data: { list } });
+  assert.ok(frame.length > 2_000_000, 'the candle history must outgrow even the raised guard');
+
+  env.emitted.length = 0;
+  injectActivityFrame(env, frame, 'https://www.gmgn.ai/api/v1/token_mcap_candles/sol/' + WATCHED);
+  const tick = env.emitted.find((m) => m.type === 'tick' && m.payload?.source === 'gmgn-mcap-candle');
+  assert.ok(tick, 'the mcap-candle handler must see frames of any size');
+  assert.equal(tick.payload.mcap, 240000 + 39999, 'the newest candle close is the tick');
+});
+
+/* ------------------------------------------------------------------ *
+ * 5. Stress: 10x volume across rapid batches (DEFECT F-07 + harness)
+ * ------------------------------------------------------------------ */
+
+/** Base58-safe synthetic mint for filler trades. */
+function fillerMint(batch, i) {
+  const digits = (batch * 1000 + i).toString(8).split('')
+    .map((d) => 'abcdefgh'[Number(d)]).join('');
+  return ('M' + digits).padEnd(34, 'z');
+}
+
+test('rapid unrelated batches never starve the watched mint (per-mint throttle)', () => {
+  // DEFECT F-07: the old throttle was GLOBAL and ran before the batch was
+  // inspected. Under high volume, batches arrive < 100 ms apart — a filler
+  // batch stamped the clock and the next batch (carrying the watched coin)
+  // was discarded whole. The throttle is now per mint.
+  const env = runBridge({ gmgnMounted: true });
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.send('paper-axis', { mint: WATCHED, symbol: 'BONK' });
+  env.setNow(1_800_000_000_000);
+
+  let watchedTicks = 0;
+  for (let batch = 0; batch < 40; batch++) {
+    const filler = [];
+    for (let i = 0; i < 300; i++) {
+      filler.push({ a: fillerMint(batch, i), pu: '0.001', e: 'buy' });
+    }
+    injectActivityFrame(env, JSON.stringify({ channel: 'token_activity', data: filler }));
+    env.advance(50); // the watched batch lands INSIDE the old global window
+    env.emitted.length = 0;
+    injectActivityFrame(env, JSON.stringify({
+      channel: 'token_activity',
+      data: [{ a: WATCHED, pu: String(0.000001 * (batch + 1)), e: 'buy' }],
+    }));
+    watchedTicks += env.emitted.filter((m) => m.type === 'tick' && m.payload?.mint === WATCHED).length;
+    env.advance(100);
+  }
+  assert.equal(watchedTicks, 40,
+    'the watched mint must tick on every round however many unrelated batches land first');
+});
+
+test('malformed frames between valid ones do not kill the feed', () => {
+  const env = runBridge({ gmgnMounted: true });
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.send('paper-axis', { mint: WATCHED });
+  env.setNow(1_800_000_000_000);
+
+  injectActivityFrame(env, '{"channel":"token_activity","data":[{'); // truncated
+  injectActivityFrame(env, 'null');
+  injectActivityFrame(env, '[]');
+  injectActivityFrame(env, 'not json at all');
+  env.advance(150);
+
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    channel: 'token_activity',
+    data: [{ a: WATCHED, pu: '0.002', e: 'buy' }],
+  }));
+  assert.ok(env.emitted.some((m) => m.type === 'tick' && m.payload?.mint === WATCHED),
+    'garbage frames must never poison the frames after them');
 });
 
 test('the watched mint is never crowded out of a high-volume batch', () => {
@@ -835,4 +955,73 @@ test('the watched mint is never crowded out of a high-volume batch', () => {
   assert.equal(ticks[0].payload.mint, WATCHED,
     'the token the user is watching must be the FIRST tick, whatever the batch order');
   assert.equal(ticks[0].payload.symbol, 'BONK', 'the watched tick carries the symbol');
+});
+
+/* ------------------------------------------------------------------ *
+ * 4. Generic collector: per-token attribution (DEFECTS F-02 / F-03)
+ *
+ * The old collector flattened a whole frame into one bag: the first base58
+ * seen became the tick's mint and up to 32 prices from ANYWHERE in the tree
+ * became its candidates. A screener list or multi-pair snapshot therefore
+ * attributed token B's price to token A — and the accept band derived USD and
+ * market cap from that wrong ratio self-consistently, so it looked plausible
+ * on screen. It also read arrays front-first while trade feeds are
+ * newest-LAST, so the reported price got OLDER as volume grew.
+ * ------------------------------------------------------------------ */
+
+test('a multi-token frame attributes each price to its own token', () => {
+  const env = runBridge({});
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  const OTHER = 'MfDuWeqSHEqTFVYZ7LoexgAK9dxk7cy4DFJWjWMGVWa';
+  env.send('paper-axis', { mint: WATCHED, symbol: 'BONK' });
+
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    pairs: [
+      { mint: OTHER, priceUsd: '99.5' },
+      { mint: WATCHED, priceUsd: '0.0000021' },
+    ],
+  }));
+
+  const ticks = env.emitted.filter((m) => m.type === 'tick');
+  assert.ok(ticks.length >= 1, 'the frame must emit ticks');
+  assert.equal(ticks[0].payload.mint, WATCHED, 'the watched token is emitted first');
+  assert.ok(ticks[0].payload.candidates.length > 0);
+  assert.ok(ticks[0].payload.candidates.every((c) => Math.abs(c.value - 0.0000021) < 1e-12),
+    "the watched tick must carry ONLY the watched token's own price");
+  for (const t of ticks) {
+    if (t.payload.mint === OTHER) {
+      assert.ok(t.payload.candidates.every((c) => Math.abs(c.value - 99.5) < 1e-9),
+        "the other token's tick must carry only its own price");
+    }
+  }
+});
+
+test('the generic collector reads the newest trades in a batch, not the oldest', () => {
+  const env = runBridge({});
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.send('paper-axis', { mint: WATCHED });
+
+  const trades = [];
+  for (let i = 0; i < 500; i++) {
+    trades.push({ mint: WATCHED, price: String(0.001 + i * 0.000001) });
+  }
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({ trades }));
+
+  const tick = env.emitted.find((m) => m.type === 'tick' && m.payload?.mint === WATCHED);
+  assert.ok(tick, 'the batch must tick for the watched mint');
+  const newest = 0.001 + 499 * 0.000001;
+  assert.ok(tick.payload.candidates.some((c) => Math.abs(c.value - newest) < 1e-12),
+    'the newest trade in the batch must be among the candidates (arrays are newest-last)');
+});
+
+test('a frame with no token identifier still emits an unattributed tick for anchor banding', () => {
+  const env = runBridge({});
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({ ohlcv: { close: '0.00042' } }));
+
+  const tick = env.emitted.find((m) => m.type === 'tick');
+  assert.ok(tick, 'identifier-less frames must still tick — downstream banding validates them');
+  assert.equal(tick.payload.mint, null);
 });

@@ -420,16 +420,33 @@ async function aiChat({ messages, maxTokens }) {
 }
 
 
-async function aiModels() {
+/**
+ * List the models the configured endpoint serves — or, when the caller
+ * passes overrides, the endpoint the caller supplies.
+ *
+ * D-29: the dashboard's "Test AI endpoint" button used to persist the entire
+ * unsaved settings form to storage just so this function would read the right
+ * endpoint. Overrides let the probe use the form values with NOTHING written;
+ * they pass through the exact same isAllowedEndpoint gate as saved settings,
+ * so this widens no security surface — it only changes where the values come
+ * from. (`model` is accepted for interface symmetry; the /models listing does
+ * not need it.)
+ */
+async function aiModels(overrides) {
   const settings = await getSettings();
-  const endpoint = (settings.aiEndpoint || '').replace(/\/+$/, '');
+  const o = overrides && typeof overrides === 'object' ? overrides : {};
+  const endpoint = String(typeof o.endpoint === 'string' ? o.endpoint : (settings.aiEndpoint || '')).replace(/\/+$/, '');
+  const allowLocal = typeof o.aiAllowLocalEndpoint === 'boolean'
+    ? o.aiAllowLocalEndpoint
+    : Boolean(settings.aiAllowLocalEndpoint);
+  const apiKey = typeof o.apiKey === 'string' ? o.apiKey : (settings.aiApiKey || '');
   if (!endpoint) return { models: [] };
-  if (!isAllowedEndpoint(endpoint, settings.aiAllowLocalEndpoint)) {
+  if (!isAllowedEndpoint(endpoint, allowLocal)) {
     return { models: [], error: 'AI endpoint URL is not allowed. Enable local/private endpoints in Settings if you run a self-hosted endpoint, otherwise use a public endpoint.' };
   }
   try {
     const response = await fetch(endpoint + '/models', {
-      headers: settings.aiApiKey ? { Authorization: 'Bearer ' + settings.aiApiKey } : {},
+      headers: apiKey ? { Authorization: 'Bearer ' + apiKey } : {},
       redirect: 'error',
     });
     if (!response.ok) return { models: [] };
@@ -575,7 +592,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
 
       case 'pt_ai_models':
-        sendResponse(await aiModels());
+        // D-29: optional overrides carry the dashboard's UNSAVED form values
+        // for the endpoint test; aiModels validates them through the same
+        // isAllowedEndpoint gate and persists nothing.
+        sendResponse(await aiModels(message.overrides));
         break;
 
       case 'pt_rec_query':

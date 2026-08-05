@@ -24,7 +24,7 @@ Community reports covered: "trades not going in during high volume", feeds dying
 ### S1 — wrong numbers
 
 **F-01 · S1 · Fills execute on quotes up to 10 s old — and that's the DEFAULT path**
-`content.js:928,1017,1023-1024` vs `quote.js:483` · all sites · confirmed · open
+`content.js:928,1017,1023-1024` vs `quote.js:483` · all sites · confirmed · **fixed v1.3.0** (quoteForTrade ladder rewritten; stale fills bounded at 3 s for EVERY source; refusals visible)
 `ACTION_FALLBACK_MAX_AGE_MS = 10000` vs `STALE_AFTER_MS = 3000`. Gate is
 `displayPriceOnly = token.pending || token.priceSource !== 'resolver'`, but
 `content.js:355` sets `priceSource = 'page-feed'` on every accepted page tick — so on
@@ -36,7 +36,7 @@ at the 9 s price.
 
 **F-02 · S1 · Generic collector merges price candidates from DIFFERENT tokens into one tick**
 `price-bridge.js:121-157,250-252` · Photon, BullX, Axiom, DexScreener, Birdeye,
-Jupiter, Pump.fun · confirmed · open
+Jupiter, Pump.fun · confirmed · **fixed v1.3.0** (per-mint record collection in collect(); watched-first bounded emission)
 `found.mint = found.mint || value` takes the first base58 seen anywhere in the frame;
 `found.candidates` accumulates up to 32 prices from anywhere in the tree; one emit. A
 batched frame (screener list, multi-pair snapshot) yields a tick tagged with token A's
@@ -46,7 +46,7 @@ generic path — GMGN's `forwardTokenActivity` (`latestByMint` map) is the only 
 implementation.
 
 **F-03 · S1 · Generic collector reads the OLDEST trades in a batch — price lag grows with volume**
-`price-bridge.js:129,139` · all non-GMGN sites · confirmed · open
+`price-bridge.js:129,139` · all non-GMGN sites · confirmed · **fixed v1.3.0** (full-array traversal with newest-last candidate ring + global node budget)
 `node.slice(0, 80)` + 32-candidate cap stop at the FRONT of newest-last trade arrays
 (newest-last confirmed by `nativecharts.test.js:798`). Longer batches at high volume →
 older reported price, monotonically. `forwardTokenActivity:172-176` (full iteration,
@@ -62,7 +62,7 @@ row ticks — exactly what F-02/F-03 fail to produce. A chip tap on a token seen
 fills at the 55 s price.
 
 **F-05 · S1 · ACCEPT_RATIO = 20 is too wide to reject wrong-token prices**
-`quote.js:343,462-466` · all sites · confirmed · open
+`quote.js:343,462-466` · all sites · confirmed · **fixed v1.3.0** (structurally closed by F-02 attribution; band now only arbitrates identifier-less frames)
 Candidates accepted at up to 20× either direction (400× total window). Combined with
 F-02, any foreign token within 20× passes; `validateTick:437-449` then derives the other
 currency side and mcap from the same bad ratio — corruption is self-consistent, so it
@@ -72,14 +72,14 @@ looks plausible on screen.
 
 **F-06 · S2 · 500 KB frame guard bypassed ONLY for GMGN token_activity — every other site still loses oversized frames**
 `price-bridge.js:217-224` · all sites except GMGN trade feed; including GMGN's own
-mcap-candle path (guard at :222 precedes handler at :234) · confirmed · open
+mcap-candle path (guard at :222 precedes handler at :234) · confirmed · **fixed v1.3.0** (guard raised to 2 MB (walk separately budget-bounded); mcap-candles routed around it)
 The v1.2.14 fix's exact bug is still live for Padre/Photon/BullX/Axiom/DexScreener/
 Pump.fun/Birdeye frames and GMGN chart candles: >500 KB dropped whole, silently, no
 counter, no log. NOTE: `nativecharts.test.js:802` locks current behavior in — the test
 must change with the fix.
 
 **F-07 · S2 · token_activity throttle is global, not per-mint — other mints' batches starve the watched coin**
-`price-bridge.js:170,178` · GMGN · confirmed · open
+`price-bridge.js:170,178` · GMGN · confirmed · **fixed v1.3.0** (throttle is per mint with bounded clock map; stress-locked)
 `now - lastActivityTickAt < 100 → return` runs before batch inspection; the stamp is set
 when ANY mint is priced. v1.2.14 fixed intra-batch crowding but not inter-batch: at high
 volume, inter-batch gaps < 100 ms discard whole batches including the watched mint. Same
@@ -89,7 +89,7 @@ Repro: filler-mint frame, then watched-mint frame 30 ms later → zero ticks.
 **F-08 · S2 · Row quick-buy chips refused by their own gesture gate; chip sticks in `busy` forever**
 `price-bridge.js:1459-1477,1301-1303`, `content.js:249-251,265-268` · Axiom Pulse,
 Padre Trenches, GMGN Trenches · confirmed (mechanism), high-confidence (event
-semantics) · open
+semantics) · **fixed v1.3.0** (pointerdown propagates to the gesture stamp; refusal path always clears chip busy)
 Bridge's MAIN-world capture listener calls `stopImmediatePropagation()` on chip taps, so
 content.js's ISOLATED-world `noteGesture` never fires; after 5 s idle, tap is refused
 ("Paper buy needs a real tap…"). The refusal branch returns WITHOUT `row-buy-done`, and
@@ -106,7 +106,7 @@ failing → `watch()` false → `onchainLive` false → chain-quote authority pa
 every fill degrades to F-01. Only UI signal: the `· CHAIN ⚡` suffix disappears.
 
 **F-10 · S2 · A genuine >20× move freezes the feed silently for up to 30 s**
-`quote.js:429-430,487,503-505`, `content.js:344` · all sites · confirmed · open
+`quote.js:429-430,487,503-505`, `content.js:344` · all sites · confirmed · **fixed v1.3.0** (5 consecutive out-of-band rejections force an immediate re-anchor, throttled 3 s)
 Out-of-band ticks rejected with no log/counter/UI; anchor refreshes only every 30 s. A
 launch doing >20× inside 30 s has EVERY tick rejected: price freezes at the pre-move
 anchor exactly when it matters most, fills route to resolver or the 10 s snapshot
@@ -114,7 +114,7 @@ anchor exactly when it matters most, fills route to resolver or the 10 s snapsho
 
 **F-11 · S2 · Nothing detects a dead bridge feed or fails over**
 `price-bridge.js` (no watchdog), `quote.js:496-509`, `content.js:3290-3292` · all
-sites · confirmed · open
+sites · confirmed · **partial fix v1.3.0** (recovery via F-10 re-anchor; live-dot honesty verified pre-existing; full failover orchestration deferred to backlog)
 No liveness monitor on the price path; live-dot keys off `priceNative` existing, not
 feed liveness. De-facto fallback is Dexscreener polling at 400 ms/tab (~150 req/min vs
 ~300 budget) — which throttles during high volume, so feed-death and fallback-death are
@@ -128,7 +128,7 @@ fallback; a missed TradingView patch window → Dexscreener polling only. Dedica
 `Worker` globals are entirely uninstrumented (only `SharedWorker` is wrapped).
 
 **F-13 · S2 · Every fill blocks on a service-worker round trip that consumes the freshness budget it protects**
-`content.js:990,994-995`, `background.js:632-635` · all sites · confirmed · open
+`content.js:990,994-995`, `background.js:632-635` · all sites · confirmed · **fixed v1.3.0** (click-time snapshot captured before the first async hop; age judged at click)
 `await R.onchainQuote()` is the FIRST await in `quoteForTrade`; MV3 cold SW = 100–500 ms
 (worst at high volume when it's servicing every tab). The 350 ms snapshot age test runs
 on a clock that already advanced during the round trip: fresh local data is discarded
@@ -150,7 +150,7 @@ separate flag from `doBuy` — chip tap and panel BUY can interleave.)
 
 **F-16 · S2 · Fresh launches on market-cap charts can never bootstrap — armed buys always expire**
 `quote.js:313,331`, `price-bridge.js:239-246`, `content.js:615-618` · GMGN, Axiom ·
-confirmed · open
+confirmed · **fixed v1.3.0** (armed buys expire on market QUIET (15 s past TTL) with a 5 min hard cap, never bare clock)
 `bootstrapTick` rejects mcap-only ticks without supply; GMGN's chart emits exactly that
 shape (`gmgn-mcap-candle`: empty candidates, mcap only) and Axiom defaults to mcap
 view. For a coin with no Dexscreener/Jupiter anchor — the arm-and-fire target case —
@@ -174,7 +174,7 @@ parses on this same thread: main-thread starvation IS the feed dying. Highest
 volume-sensitivity item; invisible to unit tests.
 
 **F-19 · S2 · Chart-export poll emits only on price CHANGE — flat market reads as dead feed**
-`price-bridge.js:1829` · Axiom primarily · confirmed · open
+`price-bridge.js:1829` · Axiom primarily · confirmed · **fixed v1.3.0** (export dedupe reset on token switch; unchanged close re-asserted every 2.5 s)
 Unchanged close emits nothing; on Axiom the export poll is frequently the only price
 path. Flat/illiquid token → zero ticks → stale header → resolver fallback on every
 click despite a healthy chart. `lastExportedClose` is never reset on token switch
@@ -183,7 +183,7 @@ click despite a healthy chart. `lastExportedClose` is never reset on token switc
 ### S3 — wrong presence
 
 **F-20 · S3 · Staleness gates are inverted relative to source accuracy**
-`onchain-feed.js:41,397` vs `content.js:928` · confirmed · open
+`onchain-feed.js:41,397` vs `content.js:928` · confirmed · **fixed v1.3.0** (policy aligned: chain authority first, page snapshot bounded at 3 s — no inversion)
 The chain quote ("the authority", content.js:988) is refused past 2.5 s; the page
 snapshot is accepted to 10 s. Failing strict on the accurate source silently routes
 fills to the loose gate on the inaccurate one.
@@ -205,7 +205,7 @@ Bare `$number` regex; the 3× validate band catches price↔mcap confusion but n
 different dollar figure within 3× (P&L, position value in tab title).
 
 **F-24 · S3 · pump.fun has no adapter; the bridge instruments every site on the internet**
-`sites.js:44-194,204-216`, `manifest.json:22-31` · confirmed · open
+`sites.js:44-194,204-216`, `manifest.json:22-31` · confirmed · **fixed v1.3.0** (pump.fun adapter added; manifest narrowed to supported trading sites only)
 Pump.fun (in the product description) falls to the generic fallback. Separately:
 `matches: ["<all_urls>"]` at document_start/MAIN wraps fetch/XHR/WebSocket/SharedWorker/
 EventSource and runs the 700 ms + 1000 ms intervals and a body-wide MutationObserver on
@@ -330,14 +330,14 @@ manifest half, C-23.)
 ### S3 — wrong presence
 
 **O-09 · S3 · `<all_urls>` + generic adapter: any 32-44-char base58 run anywhere in ANY URL mounts the panel**
-`manifest.json:22,32-52`, `sites.js:203-216` · every website · confirmed · open
+`manifest.json:22,32-52`, `sites.js:203-216` · every website · confirmed · **fixed v1.3.0** (manifest matches narrowed to 9 supported hosts; generic fallback now bounded to them)
 `generic.detect()` scans the whole href (path+query+hash). A match mounts the full
 panel AND `CM.initChartMarkers()` — whose scan uses selectors like `[class*="chart"]`,
 `canvas` — then writes `position: relative` onto whatever page element wins. Repro:
 solscan account page, raydium `?inputMint=`, magiceden, some Google Docs URLs.
 
 **O-10 · S3 · overlayHideWhenNoToken checks `!token` — but a pending token is truthy, so auto-hide never fires on false positives**
-`content.js:2565,416-419,435-442` · all sites · confirmed · open
+`content.js:2565,416-419,435-442` · all sites · confirmed · **fixed v1.3.0** (per-site route allowlists + pending give-up (40 failed resolves + market quiet) with snipe window preserved)
 Unresolvable address (wallet, EVM addr, random base58) → placeholder token kept
 forever (`pendingAttempts` never tears down) → `hide` permanently false → panel pinned
 open, `pt_resolve` re-issued every 250 ms for 90 s then 800 ms forever. THE
@@ -345,24 +345,24 @@ open, `pt_resolve` re-issued every 250 ms for 90 s then 800 ms forever. THE
 open.
 
 **O-11 · S3 · padre and dexscreener adapters have no route gating; EVM hex passes base58 ~13 % of the time**
-`sites.js:80-83,154-157,35-42` · confirmed · open
+`sites.js:80-83,154-157,35-42` · confirmed · **fixed v1.3.0** (route allowlists; EVM chains rejected; bullx address must be WHOLE base58)
 Both are bare `pathTail()` — wallet/profile/leaderboard routes produce false tokens.
 DexScreener EVM routes (`/ethereum/0x…`): hex minus `0` is a base58 subset, so ≥32-char
 runs without `0` (~13 % of addresses) get sent to the Solana resolver as pairs. Same
 class on bullx query param, birdeye/jupiter wallet paths (see gating map).
 
 **O-12 · S3 · Photon's own tokenUrl shape `/en/r/<mint>` is not detectable — overlay absent where it should be**
-`sites.js:100-102` vs `:105-110`, `content.js:3210-3222` · Photon · confirmed · open
+`sites.js:100-102` vs `:105-110`, `content.js:3210-3222` · Photon · confirmed · **fixed v1.3.0** (/en/r/<mint> route detected)
 Positions-bar chip navigates to `/en/r/<mint>` when no pairAddress; detect() only
 matches `/lp/<pair>` → panel hides on the page the extension itself sent the user to.
 
 **O-13 · S3 · Axiom fallback detection mislabels mints as `kind:'pair'`**
-`sites.js:54-60`, `content.js:423-426` · Axiom · confirmed · open
+`sites.js:54-60`, `content.js:423-426` · Axiom · confirmed · **fixed v1.3.0** (/t/<mint> reported as kind mint)
 `/t/<mint>` (Axiom's own tokenUrl) reported as pair → `paper-axis` gets
 `pairAddress=<mint>, mint=null` → wrong identifier class for chart-symbol matching.
 
 **O-14 · S3 · SPA navigation detection is 800 ms polling only — zero pushState/replaceState/popstate hooks in the extension**
-`content.js:3538`, `DETECT_MS=800` :33 · all sites (all are SPAs) · confirmed · open
+`content.js:3538`, `DETECT_MS=800` :33 · all sites (all are SPAs) · confirmed · **fixed v1.3.0** (bridge pushState/replaceState hook + popstate/hashchange listeners re-detect in ~30 ms)
 Up to 800 ms of previous token's live panel + native chart lines on the wrong page.
 
 **O-15 · S3/S4 · applyBarOffset is a documented no-op; positions bar overlays host UI with 2-sample collision avoidance**
@@ -654,12 +654,12 @@ rounds-only stats (D-02) → red "Chain does not match local state" + the absurd
 "0 problems found · derived P&L differs by X SOL".
 
 **D-04 · S1 · "AI review" click disables and relabels the ADD NOTE button instead**
-`dashboard.js:781,734,670,672` · confirmed · open
+`dashboard.js:781,734,670,672` · confirmed · **fixed v1.3.0** (review button has its own data-review-id; failure restores state)
 Three buttons share `data-id`; `querySelector` grabs the first (Notes). Note button
 becomes permanently disabled "Analyzing…"; the review button never changes state.
 
 **D-05 · S1 · Replay button always reads "▶ 0 moments"**
-`dashboard.js:671`, `replay.js:73` · confirmed · open
+`dashboard.js:671`, `replay.js:73` · confirmed · **fixed v1.3.0** (label is plain Replay — the moment count was fabricated)
 `checkpoints` initialised `[]` and written NOWHERE in the codebase. Also zeroes that
 term of `dataFingerprint`.
 
@@ -669,7 +669,7 @@ Baseline changes without touching cashSol → fresh wallet + set 1 → "Total re
 +9 SOL (+900 %)". Negative values accepted (`Number(v) || 10` ignores min attr).
 
 **D-07 · S1 · Best/Worst tiles hardcode green/red and drop the sign**
-`dashboard.js:342-343` · confirmed · open — "Best round −0.20" in green; "Worst round
+`dashboard.js:342-343` · confirmed · **fixed v1.3.0** (tiles colored by sign; explicit +) — "Best round −0.20" in green; "Worst round
 0.5" in red missing its +.
 
 **D-08 · S1 · Open-position % and closed-round % use different denominators — the % jumps ~2×feeBps at close with no price move**
@@ -681,10 +681,10 @@ open
 denominator, 0 to the numerator; the exact bug `weightedUsd` guards against elsewhere.
 
 **D-10 · S1 · Quick-sell presets accept >100 % → a "500%" button that sells 100 %**
-`dashboard.js:2039`, `content.js:3464-3471`, `engine.js:284` · confirmed · open
+`dashboard.js:2039`, `content.js:3464-3471`, `engine.js:284` · confirmed · **fixed v1.3.0** (sell presets validated 1..100, deduped, capped 8)
 
 **D-11 · S1 · Negative fee/slippage accepted — buys mint free SOL**
-`dashboard.js:2043-2044`, `engine.js:214-215` · confirmed · open
+`dashboard.js:2043-2044`, `engine.js:214-215` · confirmed · **fixed v1.3.0** (feeBps 0..1000, slippageBps 0..2000, integers; coercions reported)
 `feeBps: -100` → net > gross, feesPaidSol goes negative; `slippageBps: -100` sells
 above the tick.
 
@@ -710,14 +710,14 @@ Also zero shape validation beyond `typeof === 'object'` → `{pt_state:{}}` acce
 then detonates the dashboard (D-16).
 
 **D-15 · S2 · A failed/empty storage read makes the dashboard fabricate a fresh wallet — and can PERSIST it over the real one**
-`dashboard.js:36-39,137-141,161-169` · confirmed · open
+`dashboard.js:36-39,137-141,161-169` · confirmed · **fixed v1.3.0** (store.get null on lastError; failed read banner; saves refused until a good read)
 No lastError check (content.js and background.js both guard this; dashboard doesn't).
 Missing pt_state → renders empty wallet → any note-save/AI-review write commits the
 empty wallet at seq+1, destroying the real state.
 
 **D-16 · S2 · init() unawaited and uncaught — any throw = permanently blank dashboard, no message**
 `dashboard.js:44-65,2135`; reachable throws on legacy/restored state via sessionStats,
-rounds.filter, drawEquityCurve, renderCoach · confirmed · open
+rounds.filter, drawEquityCurve, renderCoach · confirmed · **fixed v1.3.0** (init failures render a visible error card)
 
 **D-17 · S2 · Session AI review answer is never persisted and is wiped seconds later by the refresh**
 `dashboard.js:1923-1936,195-218,1772` · confirmed · open
@@ -740,7 +740,7 @@ whole-object overwrite.
 `dashboard.js:741-778,110-118,82` · confirmed · open
 
 **D-21 · S2 · sendMessage rejections hang the AI UI forever**
-`dashboard.js:792,1933` · confirmed · open — unhandled rejection, no error UI; note
+`dashboard.js:792,1933` · confirmed · **fixed v1.3.0** (sendMessage rejections surface and restore button state) — unhandled rejection, no error UI; note
 button stuck disabled "Analyzing…" (with D-04, the wrong button at that).
 
 **D-22 · S2 · saveState() is read-modify-write, no CAS/retry — dashboard and tab at seq N both write N+1, loser vanishes**
@@ -748,15 +748,15 @@ button stuck disabled "Analyzing…" (with D-04, the wrong button at that).
 open
 
 **D-23 · S2 · slippageBps ≥ 10000 makes every sell throw "No live price available"**
-`engine.js:196,291`, no upper bound in UI · confirmed · open — feed error shown for a
+`engine.js:196,291`, no upper bound in UI · confirmed · **fixed v1.3.0** (slippage clamp makes the misleading error unreachable) — feed error shown for a
 config problem.
 
 **D-24 · S2 · Settings tab renders completely blank on non-array presetsBuy/sellPcts — and Save is never bound so the user can't repair it**
 `dashboard.js:1948,1952`, `engine.js:133` (mergeSettings does no type validation) ·
-confirmed · open
+confirmed · **fixed v1.3.0** (renderSettings guards non-array lists)
 
 **D-25 · S2 · A settings-save failure is completely invisible**
-`dashboard.js:2071-2078` · confirmed · open
+`dashboard.js:2071-2078` · confirmed · **fixed v1.3.0** (save failures render in the save status element)
 
 **D-26 · S2 · replayTimer leaks when replays go empty → TypeError loop every 1.1 s forever**
 `dashboard.js:1084-1086,933-938` · confirmed · open — repro: start frame playback,
@@ -774,18 +774,18 @@ rebuilds the section, new scroll container at scrollTop 0. The "constantly refre
 complaint, unfixed (header comment blames the old timer).
 
 **D-29 · S3 · "Test AI endpoint" silently commits the ENTIRE unsaved form — without the pt_settings_changed broadcast Save sends**
-`dashboard.js:2020-2034` · confirmed · open
+`dashboard.js:2020-2034` · confirmed · **fixed v1.3.0** (test button sends form values as overrides through the SSRF gate; zero storage writes)
 
-**D-30 · S3 · Popup toggle label goes stale on the fallback path** — `popup.js:108-116` · confirmed · open
+**D-30 · S3 · Popup toggle label goes stale on the fallback path** — `popup.js:108-116` · confirmed · **fixed v1.3.0** (fallback path re-runs load())
 
 **D-31 · S3 · Post-reset equity canvas drawn at fallback 760×260 while hidden, then never redrawn**
 `dashboard.js:2018,379-380,212` · confirmed · open
 
 **D-32 · S3 · Journal "Market cap" column mixes units — `$240.0K MC` and `0.0₅123 SOL` under one header; `— SOL` on non-positive**
-`dashboard.js:2094-2099` · confirmed · open
+`dashboard.js:2094-2099` · confirmed · **fixed v1.3.0** (mcap column renders mcap or an em-dash, never a mislabeled SOL price)
 
 **D-33 · S3 · Calendar best/worst-day month label breaks in many locales ("202…")**
-`dashboard.js:562-563` · confirmed · open
+`dashboard.js:562-563` · confirmed · **fixed v1.3.0** (locale-safe month: short form)
 
 **D-34 · S3 · ANY focused input freezes the entire dashboard refresh — including the replay scrubber which keeps focus after a drag**
 `dashboard.js:110-118,1171` · confirmed · open
@@ -801,7 +801,7 @@ overlay/presets/lines/visibility/size/bar; needs-reload (silently): panelFocusMo
 sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · confirmed
 · open
 **D-38 · S4 · Reset uses the saved starting balance, ignoring the value typed in the form**
-`dashboard.js:2009` · confirmed · open
+`dashboard.js:2009` · confirmed · **fixed v1.3.0** (reset adopts a valid form balance and persists it in the same write)
 **D-39 · S4 · loadRecordings reopens IndexedDB + holds all video blobs in memory on every 4 s poll; races revoke URLs bound to a mounted video**
 `dashboard.js:150-154,882,885`, `recordings.js:119,132` · confirmed · open
 **D-40 · S4 · Replay scrub rebuilds the entire replay model at 60 fps — twice per frame**
@@ -809,7 +809,7 @@ sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · con
 **D-41 · S4 · Backup omits IndexedDB recordings — restored wallets show unplayable recording refs**
 `popup.js:150` · confirmed · open
 **D-42 · S4 · Silent input coercions: balanceStartSol 0→10, empty preset lists→defaults, no count cap (500 presets = 500 overlay buttons)**
-`dashboard.js:2042,2045,2051` · confirmed · open
+`dashboard.js:2042,2045,2051` · confirmed · **fixed v1.3.0** (validated with visible coercion notes; caps at 8 entries)
 **D-43 · S4 · 4 s refresh interval never cleared; deserializes up to 80 base64 frames every tick for the tab's lifetime**
 `dashboard.js:64` · confirmed · open (was HANDOFF should-fix #1)
 
@@ -850,6 +850,8 @@ All four Phase 1 code audits complete (2026-08-05): **139 findings**
 death / lost data). Phase 1 exit criterion additionally requires the live-site visual
 sweep (Phase 4 prep) — code-side register is DONE.
 
-Fixed so far: **6** — v1.2.18 closed O-01, O-02, F-04, F-15, D-13, D-14
-(the wrong-token navigation pair, the double-sell, the stale row-buy fill, and both
-seq-protocol holes).
+Fixed so far: **47** — v1.2.18 closed O-01, O-02, F-04, F-15, D-13, D-14; the
+v1.3.0 wave closed the fill-staleness ladder (F-01/13/20), per-mint price
+integrity (F-02/03/05), feed survival (F-06/07/08/10/16/19, F-11 partial),
+site gating + manifest narrowing + pump.fun (O-09..O-14, F-24), and dashboard
+wave 1 (D-04/05/07/10/11/15/16/21/23/24/25/29/30/32/33/38/42/47/51/52).

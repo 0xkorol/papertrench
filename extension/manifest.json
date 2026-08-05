@@ -20,7 +20,21 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://*.tinyastro.io/*",
+        "https://gmgn.ai/*",
+        "https://*.gmgn.ai/*",
+        "https://*.bullx.io/*",
+        "https://dexscreener.com/*",
+        "https://*.dexscreener.com/*",
+        "https://birdeye.so/*",
+        "https://*.birdeye.so/*",
+        "https://jup.ag/*",
+        "https://*.jup.ag/*",
+        "https://pump.fun/*",
+        "https://*.pump.fun/*"
       ],
       "js": [
         "price-bridge.js"
@@ -31,7 +45,21 @@
     },
     {
       "matches": [
-        "<all_urls>"
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://*.tinyastro.io/*",
+        "https://gmgn.ai/*",
+        "https://*.gmgn.ai/*",
+        "https://*.bullx.io/*",
+        "https://dexscreener.com/*",
+        "https://*.dexscreener.com/*",
+        "https://birdeye.so/*",
+        "https://*.birdeye.so/*",
+        "https://jup.ag/*",
+        "https://*.jup.ag/*",
+        "https://pump.fun/*",
+        "https://*.pump.fun/*"
       ],
       "js": [
         "engine.js",
@@ -66,7 +94,15 @@
         "price-bridge.js"
       ],
       "matches": [
-        "<all_urls>"
+        "https://axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://*.tinyastro.io/*",
+        "https://gmgn.ai/*",
+        "https://*.bullx.io/*",
+        "https://dexscreener.com/*",
+        "https://birdeye.so/*",
+        "https://jup.ag/*",
+        "https://pump.fun/*"
       ]
     }
   ],

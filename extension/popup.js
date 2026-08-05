@@ -110,6 +110,10 @@ async function toggleOverlay() {
   const newSettings = { ...settings, overlayEnabled: !settings.overlayEnabled };
   await chrome.storage.local.set({ pt_settings: newSettings });
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  // D-30: the button label ("Enable overlay"/"Disable overlay") is rendered
+  // by load() from stored settings; without re-running it the label kept
+  // describing the state this click just flipped away from.
+  await load();
   $('status').textContent = tab
     ? 'Updated — the overlay will respond once you reload this page.'
     : 'Updated.';

@@ -403,15 +403,20 @@
   }
 
   function sessionStats(state, settings) {
+    // D-52: a break-even round (pnlSol === 0) is neither a win nor a loss —
+    // the old `<= 0` filter branded scratched trades as losses and dragged
+    // the win rate down. Break-evens count in neither bucket, and the win
+    // rate is judged over decided rounds only (wins + losses).
     const wins = state.rounds.filter((r) => r.pnlSol > 0).length;
-    const losses = state.rounds.filter((r) => r.pnlSol <= 0).length;
+    const losses = state.rounds.filter((r) => r.pnlSol < 0).length;
+    const decided = wins + losses;
     const totalPnl = state.rounds.reduce((s, r) => s + r.pnlSol, 0);
     const eq = equitySol(state);
     return {
       rounds: state.rounds.length,
       wins,
       losses,
-      winRate: state.rounds.length ? (wins / state.rounds.length) * 100 : null,
+      winRate: decided > 0 ? (wins / decided) * 100 : 0,
       realizedPnlSol: totalPnl,
       openPositions: Object.keys(state.positions).length,
       unrealizedSol: Object.values(state.positions).reduce((s, p) => s + unrealizedPnl(p), 0),
