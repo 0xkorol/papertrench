@@ -773,7 +773,9 @@ test("one gallery on the extension origin: the overlay rides pt_cardbg_* through
   }
   assert.match(bg, /CARDBG_DB_NAME = 'pt-cardmedia'/, "same database the dashboard reads");
   assert.match(dashJs, /CARD_DB_NAME = 'pt-cardmedia'/, "dashboard still reads it directly");
-  assert.match(bg, /importScripts\([^)]*'pnlcard\.js'\)/, "the worker imports the pure admission check");
+  // Membership, not position: the import list grows (attest.js et al) and
+  // pnlcard.js only needs to be IN it, not last.
+  assert.match(bg, /importScripts\([^)]*'pnlcard\.js'/, "the worker imports the pure admission check");
 
   // Admission is re-checked worker-side BEFORE the put — no future call path
   // can slip past the 2 MB / 10-image doctrine by skipping the overlay check.
