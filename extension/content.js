@@ -601,7 +601,6 @@
     renderPosition();
     renderBalance();
     renderLiveDot();
-    renderSparkline();
     // The on-screen token may also be held; keep its chip in step with the card.
     renderPositionsBar();
   }
@@ -2295,7 +2294,6 @@
      * Toggle is settings.panelFocusMode (Dashboard → Settings). The class
      * rides on .pt-box so every rule below scopes to the panel. */
     .pt-box.pt-focus .pt-banner,
-    .pt-box.pt-focus .pt-spark,
     .pt-box.pt-focus .pt-footer,
     .pt-box.pt-focus #pt-thesis,
     .pt-box.pt-focus #pt-closed { display: none; }
@@ -2317,7 +2315,6 @@
        amount slims down; with one-tap presets on, the big BUY button goes
        too — the chips ARE the buttons, and Enter in the amount box buys.
        Everything that remains is a chip row, like the terminal's own widget. */
-    .pt-box.pt-focus .pt-balance { display: none; }
     .pt-box.pt-focus.pt-focus-instant .pt-buy { display: none; }
     /* Round 3 (toshi_100x: "small sleek simple", "less info and few
        keywords"): the header slims to the drag strip it really is — the
@@ -2425,7 +2422,7 @@
       background: var(--pt-raised); border: 1px solid var(--pt-line);
       border-radius: 999px;
     }
-    .pt-price { text-align: right; flex: none; }
+    .pt-price { text-align: right; flex: none; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
     .pt-price .num {
       font-size: 15px; font-weight: 800; letter-spacing: -0.3px;
       font-family: var(--pt-mono);
@@ -2434,30 +2431,10 @@
     .pt-price .usd { margin-top: 3px; font-size: 10.5px; color: var(--pt-dim); }
     .pt-price-stale { color: var(--pt-amber) !important; }
 
-    /* live sparkline */
-    .pt-spark { height: 26px; margin: 0 0 11px; opacity: 0.95; }
-    .pt-spark svg { display: block; width: 100%; height: 26px; overflow: visible; }
-    .pt-spark:empty { display: none; }
-
-    /* ---------------- balance hero ---------------- */
-
-    .pt-balance {
-      position: relative; overflow: hidden;
-      padding: 11px 13px; margin-bottom: 13px;
-      background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
-      border: 1px solid var(--pt-line); border-radius: var(--pt-r-md);
-    }
-    .pt-balance .lab {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 9.5px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase;
-      color: var(--pt-faint);
-    }
-    .pt-balance .amt {
-      margin-top: 3px;
-      font-size: 23px; font-weight: 800; letter-spacing: -0.7px;
-      font-feature-settings: "tnum";
-    }
-    .pt-delta { margin-top: 2px; font-size: 11px; font-weight: 650; color: var(--pt-dim); }
+    /* Wave 2 (F-B3/F-H2): the sparkline duplicated the chart the panel
+       floats over, and the 23px balance hero out-shouted the live P&L.
+       Both cards are gone: cash rides the Buy label, the type-scale crown
+       belongs to the position's P&L, and the live dot sits by the price. */
 
     /* live status dot */
     .pt-dot {
@@ -2626,10 +2603,12 @@
     }
     .pt-pos .row-pnl .k { display: block; margin-bottom: 4px; }
     .pt-pos .pnl {
-      display: block; width: 100%; padding: 5px 9px; border-radius: 8px;
-      font-size: 12.5px; font-weight: 800;
+      display: block; width: 100%; padding: 5px 9px; border-radius: var(--pt-r-sm);
+      /* Wave 2 (F-H1/H2): the live P&L wears the type-scale crown the old
+         balance hero used to — mid-trade, this IS the panel's biggest number. */
+      font-size: 21px; font-weight: 850; letter-spacing: -0.5px;
       text-align: left; white-space: normal; overflow: visible;
-      line-height: 1.35;
+      line-height: 1.25; font-feature-settings: "tnum";
     }
     /* USD sits on its own line at narrow widths rather than being truncated. */
     .pt-pos .pnl .usd-part { opacity: 0.85; }
@@ -3239,14 +3218,9 @@
           <div class="pt-body">
             <div class="pt-token-row">
               <div class="pt-token"><div id="pt-token-name">—</div><div class="pt-mint" id="pt-token-mint">waiting for token</div></div>
-              <div class="pt-price"><div class="num ${!token || (!token.priceNative && !token.priceUsd) ? 'pt-price-stale' : ''}" id="pt-price">—</div><div class="usd" id="pt-price-usd"></div></div>
+              <div class="pt-price"><span class="pt-dot" id="pt-live-dot"></span><div class="num ${!token || (!token.priceNative && !token.priceUsd) ? 'pt-price-stale' : ''}" id="pt-price">—</div><div class="usd" id="pt-price-usd"></div></div>
             </div>
-            <div class="pt-spark" id="pt-spark"></div>
-            <div class="pt-balance">
-              <div class="lab"><span class="pt-dot" id="pt-live-dot"></span>Paper balance</div>
-              <div class="amt" id="pt-balance">— SOL</div>
-              <div class="pt-delta" id="pt-delta"></div>
-            </div>
+            <div id="pt-position"></div>
             <div class="pt-label" id="pt-buy-label">Quick buy (SOL)</div>
             <div class="pt-presets" id="pt-buy-presets"></div>
             <div class="pt-costs" id="pt-costs" title="Your simulated costs — click to edit"></div>
@@ -3266,7 +3240,6 @@
             </div>
             <input class="pt-custom" id="pt-custom" type="number" min="0" step="0.01" placeholder="Or type a custom SOL amount…" />
             <button class="pt-buy" id="pt-buy">BUY</button>
-            <div id="pt-position"></div>
             <div id="pt-thesis"></div>
             <div id="pt-closed"></div>
           </div>
@@ -3303,7 +3276,6 @@
     els.tokenMint = shadow.getElementById('pt-token-mint');
     els.price = shadow.getElementById('pt-price');
     els.priceUsd = shadow.getElementById('pt-price-usd');
-    els.balance = shadow.getElementById('pt-balance');
     els.buyPresets = shadow.getElementById('pt-buy-presets');
     els.buyLabel = shadow.getElementById('pt-buy-label');
     els.custom = shadow.getElementById('pt-custom');
@@ -3321,7 +3293,6 @@
     els.closed = shadow.getElementById('pt-closed');
     els.effects = shadow.getElementById('pt-effects');
     els.footSite = shadow.getElementById('pt-site');
-    els.spark = shadow.getElementById('pt-spark');
     els.subtitle = shadow.getElementById('pt-subtitle');
     els.bar = shadow.getElementById('pt-bar');
     els.barGrip = shadow.getElementById('pt-bar-grip');
@@ -3332,7 +3303,6 @@
     els.barTab = shadow.getElementById('pt-bar-tab');
     els.liveDot = shadow.getElementById('pt-live-dot');
     els.visibility = shadow.getElementById('pt-visibility');
-    els.delta = shadow.getElementById('pt-delta');
     els.pillText = shadow.getElementById('pt-pill-text');
     els.resize = shadow.getElementById('pt-resize');
 
@@ -3525,13 +3495,9 @@
    * balance card is hidden there ("the less information in the tab the
    * better"), but cash on hand is execution information, not decoration. */
   function buyLabelText() {
-    const presetsOn = settings.panelBuyEnabled !== false && settings.panelPresetsEnabled !== false;
-    const instant = settings.instantBuyEnabled !== false;
-    if (settings.panelFocusMode === true) {
-      return `Buy (SOL) · ${E.fmt(state.cashSol, 2)} cash`;
-    }
-    // "Tap to fill" only reads honestly while the tappable row is visible.
-    return presetsOn && instant ? 'Quick buy — tap to fill (SOL)' : 'Quick buy (SOL)';
+    // Wave 2 (F-B6/F-H2): the balance CARD is gone — cash rides here in
+    // every mode, and the label stops narrating what the chips already say.
+    return `Buy (SOL) · ${E.fmt(state.cashSol, 2)} cash`;
   }
 
   /** The simulated-cost strip under the presets: fee, gas, tip, slippage at
@@ -3808,7 +3774,6 @@
     renderClosedPnl();
     renderSiteStatus();
     renderLiveDot();
-    renderSparkline();
     updateOverlayVisibility();
     renderPositionsBar();
     // Event-driven, not per-tick: renderAll runs on boot, nav and fills.
@@ -3963,29 +3928,13 @@
   }
 
   function renderBalance() {
-    if (els.balance) els.balance.textContent = `${E.fmt(state.cashSol, 2)} SOL`;
-    // Focus mode carries cash on the Buy label (the balance card is hidden
-    // there); a fill must update it in the same beat.
-    if (els.buyLabel && settings.panelFocusMode === true
-      && settings.panelBuyEnabled !== false) {
+    // Wave 2 (F-H2): the 23px balance CARD is gone — the biggest number on
+    // the panel was the least urgent one. Cash rides the Buy label in every
+    // mode; a fill updates it in the same beat. Equity-vs-start lives on
+    // the dashboard sidebar, where "am I actually up" is a browsing
+    // question, not a mid-trade one.
+    if (els.buyLabel && settings.panelBuyEnabled !== false) {
       els.buyLabel.textContent = buyLabelText();
-    }
-
-    // Equity (cash + open positions marked live) against the starting stake:
-    // the one number that answers "am I actually up?" at a glance.
-    if (els.delta) {
-      const equity = E.equitySol(state);
-      const start = Number(settings.balanceStartSol) || 0;
-      const diff = equity - start;
-      if (!start) {
-        els.delta.textContent = '';
-      } else {
-        const pct = (diff / start) * 100;
-        els.delta.textContent =
-          `Equity ${E.fmt(equity, 2)} SOL · ${diff >= 0 ? '+' : ''}${E.fmt(diff, 2)} (${diff >= 0 ? '+' : ''}${pct.toFixed(1)}%)`;
-        els.delta.classList.toggle('pt-green', diff > 0);
-        els.delta.classList.toggle('pt-red', diff < 0);
-      }
     }
   }
 
@@ -4673,34 +4622,8 @@
    * Colored by move direction across the window, with a soft area fill and a
    * pulsing head so the newest tick is obvious in peripheral vision.
    */
-  function renderSparkline() {
-    if (!els.spark) return;
-    const pts = series.slice(-64).map((s) => Number(s.p)).filter((p) => p > 0);
-    if (pts.length < 3) { els.spark.textContent = ''; return; }
-
-    const w = 100, h = 26, pad = 2;
-    const min = Math.min(...pts), max = Math.max(...pts);
-    const span = max - min || max || 1;
-    const step = w / (pts.length - 1);
-    const y = (p) => pad + (h - pad * 2) * (1 - (p - min) / span);
-
-    const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(2)},${y(p).toFixed(2)}`).join(' ');
-    const up = pts[pts.length - 1] >= pts[0];
-    const stroke = up ? '#34D399' : '#FF5F56';
-    const headY = y(pts[pts.length - 1]).toFixed(2);
-
-    els.spark.innerHTML =
-      `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">` +
-        `<defs><linearGradient id="ptSparkFill" x1="0" y1="0" x2="0" y2="1">` +
-          `<stop offset="0%" stop-color="${stroke}" stop-opacity="0.32"/>` +
-          `<stop offset="100%" stop-color="${stroke}" stop-opacity="0"/>` +
-        `</linearGradient></defs>` +
-        `<path d="${line} L${w},${h} L0,${h} Z" fill="url(#ptSparkFill)" stroke="none"/>` +
-        `<path d="${line}" fill="none" stroke="${stroke}" stroke-width="1.6" ` +
-          `stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` +
-        `<circle cx="${w}" cy="${headY}" r="2" fill="${stroke}"/>` +
-      `</svg>`;
-  }
+  /* renderSparkline is gone (Wave 2, F-B3): a 26px copy of the chart the
+   * panel floats over was decoration, not signal. */
 
   /**
    * Render the position card.

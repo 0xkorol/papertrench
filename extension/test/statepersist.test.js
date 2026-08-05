@@ -487,7 +487,9 @@ test('focus mode strips the decoration via the pt-focus class', async () => {
   const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
   // Wave 1: the diagonal watermark is gone entirely — the banner is the
   // panel's single honesty cue, so focus mode has one less thing to hide.
-  for (const selector of ['.pt-banner', '.pt-spark', '.pt-footer', '#pt-thesis', '#pt-closed']) {
+  // Wave 2: the sparkline and balance card are gone from EVERY mode, so the
+  // focus list shrinks again — it hides only what still exists.
+  for (const selector of ['.pt-banner', '.pt-footer', '#pt-thesis', '#pt-closed']) {
     assert.ok(content.includes(`.pt-box.pt-focus ${selector}`),
       `focus mode must hide ${selector}`);
   }

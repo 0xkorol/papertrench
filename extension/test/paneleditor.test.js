@@ -81,7 +81,9 @@ test('the editor validates through the shared parser and persists via store.set'
 
 test('compact focus mode: balance card and big BUY go; Enter still buys', () => {
   const src = read('content.js');
-  assert.match(src, /\.pt-box\.pt-focus \.pt-balance \{ display: none; \}/,
+  // Wave 2: the balance card no longer exists in ANY mode — cash rides the
+  // Buy label everywhere, so there is nothing left for focus to hide.
+  assert.doesNotMatch(src, /pt-balance/,
     'the balance card is decoration in focus — cash rides on the Buy label');
   assert.match(src, /\.pt-box\.pt-focus\.pt-focus-instant \.pt-buy \{ display: none; \}/,
     'the big BUY hides ONLY under one-tap presets (chips are the buttons)');
@@ -90,7 +92,8 @@ test('compact focus mode: balance card and big BUY go; Enter still buys', () => 
   assert.match(src, /event\.key === 'Enter'\) els\.btnBuy\.click\(\)/,
     'Enter in the amount box buys — the hidden button still owns the flow');
   const labelFn = src.slice(src.indexOf('function buyLabelText('), src.indexOf('\n  }', src.indexOf('function buyLabelText(')));
-  assert.match(labelFn, /panelFocusMode === true/, 'focus mode swaps the label to the cash line');
+  // Wave 2: the cash line is the label in EVERY mode now, not a focus swap.
+  assert.doesNotMatch(labelFn, /panelFocusMode/, 'no mode branch — one label, always with cash');
   assert.match(labelFn, /cash/, 'cash on hand is execution info, not decoration');
 });
 
