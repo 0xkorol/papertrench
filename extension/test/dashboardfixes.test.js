@@ -23,6 +23,26 @@
  *   D-51  dashboard reset double-bumped seq (engine owns the bump)
  *   D-52  sessionStats counted break-even rounds as losses
  *
+ * Wave 2 (accounting semantics + refresh architecture):
+ *
+ *   D-01  equity curve floated above true equity by cumulative buy fees
+ *   D-02  "Realized P&L" was rounds-only while calendar/journal counted
+ *         partial exits — same trade, three different numbers
+ *   D-03  the chain replay disagreed with honest local state (gross vs net
+ *         buy cost + partial exits), flagging untampered wallets as edited,
+ *         with the absurd "0 problems found · derived P&L differs" line
+ *   D-08  open-position % (net-of-fee) vs closed-round % (gross invested)
+ *   D-17  session AI review answer wiped by the staged refresh
+ *   D-18  leaderboard verification flickered to "Checking…" ~1/s, re-running
+ *         SHA-256 over the whole chain; in-flight verifies landed detached
+ *   D-19  settings save clobbered every content-script settings write
+ *   D-20  open round-note editor destroyed the moment focus left it
+ *   D-22  saveState was read-modify-write with no conflict handling
+ *   D-26  emptying replays mid-playback → TypeError loop every 1.1 s
+ *   D-27  fingerprint blind to in-place round mutations (review/note/thesis)
+ *   D-28  tables reset scroll/hover ~1/s (marks + timeAgo churn)
+ *   D-34  any focused input froze the ENTIRE dashboard refresh
+ *
  * Engine fixes are exercised behaviourally through the real API; the
  * background override path is driven through the real service worker in a vm
  * sandbox; dashboard.js/popup.js (no DOM harness exists) are pinned with
@@ -40,6 +60,7 @@ const ROOT = path.join(__dirname, '..');
 global.window = global.window || {};
 require('../engine.js');
 const E = global.window.PaperEngine;
+const AT = require('../attest.js');
 
 const dashJs = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
 const popupJs = fs.readFileSync(path.join(ROOT, 'popup.js'), 'utf8');
@@ -271,8 +292,11 @@ test('D-21: both AI sendMessage calls handle rejection and restore the UI', () =
   const session = fnBlock(dashJs, 'async function runSessionReview()');
   assert.match(session, /try \{\s*\n\s*resp = await chrome\.runtime\.sendMessage/,
     'the session review call must be wrapped');
-  assert.match(session, /catch \(err\) \{[\s\S]*out\.textContent = 'Error: '[\s\S]*out\.classList\.add\('error'\)/,
-    'a rejected session review must land in the output element as an error');
+  // (D-17 moved the output into module state: setSessionReview stores the
+  // text/error pair and re-renders the coach section from it, so the error
+  // both shows immediately AND survives later refreshes.)
+  assert.match(session, /catch \(err\) \{[\s\S]*setSessionReview\('Error: '[\s\S]*true\);/,
+    'a rejected session review must land in the persisted output state as an error');
 });
 
 /* ---------------- D-05: replay button label ------------------------------- */
@@ -344,9 +368,12 @@ test('D-15: dashboard storage reads fail soft and failed reads block writes', ()
   assert.match(load, /storageReadFailed = true;/, 'the failure must latch a module flag');
   assert.match(load, /renderStorageErrorBanner\(\)/, 'the failure must be visible');
 
-  const saveStateBlock = fnBlock(dashJs, 'async function saveState()');
-  assert.match(saveStateBlock, /if \(storageReadFailed\) \{\s*\n\s*throw new Error/,
-    'saveState must refuse while storage is unreadable — persisting a fabricated wallet destroys the real one');
+  // D-22 restructured saveState() into mutateState(); the D-15 refusal must
+  // survive the restructure — writing while blind is still how a fabricated
+  // wallet destroys the real one.
+  const saveStateBlock = fnBlock(dashJs, 'async function mutateState(');
+  assert.match(saveStateBlock, /if \(storageReadFailed\) throw unreadable\(\);/,
+    'mutateState must refuse while storage is unreadable — persisting a fabricated wallet destroys the real one');
   const saveSettingsBlock = fnBlock(dashJs, 'async function saveSettings()');
   assert.match(saveSettingsBlock, /if \(storageReadFailed\) \{\s*\n\s*throw new Error/,
     'saveSettings must refuse for the same reason');
@@ -471,4 +498,515 @@ test('D-51: dashboard reset does not double-bump seq — the engine owns the bum
 test('D-51 companion: engine resetState advances seq past the inherited base', () => {
   const fresh = E.resetState(E.defaultSettings(), 41);
   assert.equal(fresh.seq, 42, 'resetState owns the single seq bump');
+});
+
+/* ======================= wave 2 ======================= */
+
+function wave2Settings(over) {
+  return Object.assign(E.defaultSettings(), { balanceStartSol: 10, feeBps: 100, slippageBps: 0 }, over || {});
+}
+
+/* ---------------- D-02: realized P&L includes partial exits --------------- */
+
+test('D-02: a partial exit shows up in realized P&L everywhere, immediately', () => {
+  const settings = wave2Settings();
+  const state = E.defaultState(settings);
+  const t0 = 1_700_000_000_000;
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  const { trade } = E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 0.5, priceNative: 0.002 });
+
+  const stats = E.sessionStats(state, settings);
+  assert.equal(stats.rounds, 0, 'no round has closed — the old rounds-only sum reported +0 here');
+  assert.ok(trade.pnlSol > 0, 'the partial exit banked real profit');
+  assert.ok(Math.abs(stats.realizedPnlSol - trade.pnlSol) < 1e-9,
+    'sessionStats must report the banked partial, not the rounds-only 0');
+  assert.ok(Math.abs(stats.realizedPnlSol - state.stats.realizedPnlSol) < 1e-9,
+    'the figure IS the per-sell accumulator sell() maintains');
+
+  // Close the rest: the total stays the per-sell definition — the same one
+  // the calendar and journal sum — so one trade shows ONE number.
+  E.sell(state, settings, { ts: t0 + 2000, mint: 'MintA', qtyFraction: 1, priceNative: 0.002 });
+  const closed = E.sessionStats(state, settings);
+  const perSellSum = state.journal
+    .filter((t) => t.side === 'sell')
+    .reduce((s, t) => s + t.pnlSol, 0);
+  assert.ok(Math.abs(closed.realizedPnlSol - perSellSum) < 1e-9,
+    'realized P&L must equal the sum of per-sell results (the calendar definition)');
+  // The rounds-only sum differs by exactly the buy fee (net cost basis);
+  // that fee is reported separately in feesPaidSol, not hidden inside P&L.
+  const roundSum = state.rounds.reduce((s, r) => s + r.pnlSol, 0);
+  const buyFees = state.journal.filter((t) => t.side === 'buy').reduce((s, t) => s + t.feeSol, 0);
+  assert.ok(Math.abs((closed.realizedPnlSol - roundSum) - buyFees) < 1e-9,
+    'the definitions differ by the buy fee — the accumulator uses the net cost basis');
+});
+
+test('D-02: a legacy state without the accumulator falls back to the journal', () => {
+  const settings = wave2Settings();
+  const state = E.defaultState(settings);
+  const t0 = 1_700_000_000_000;
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  const { trade } = E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 0.5, priceNative: 0.002 });
+
+  delete state.stats.realizedPnlSol; // restored backup from an older build
+  const stats = E.sessionStats(state, settings);
+  assert.ok(Math.abs(stats.realizedPnlSol - trade.pnlSol) < 1e-9,
+    'the journal sells carry the same per-sell definition and must back-fill it');
+});
+
+test('D-02: the popup uses the same per-sell definition', () => {
+  const block = fnBlock(popupJs, 'function computeStats(state, settings)');
+  assert.doesNotMatch(block, /rounds\.reduce\(\(s, r\) => s \+ \(r\.pnlSol \|\| 0\), 0\)/,
+    'the rounds-only sum reported +0 for a trade the dashboard calendar showed as +2');
+  assert.match(block, /state\.stats \|\| \{\}\)\.realizedPnlSol/,
+    'the popup must read the per-sell accumulator');
+  assert.match(block, /t\.side === 'sell' \? \(Number\(t\.pnlSol\) \|\| 0\) : 0/,
+    'with the journal fallback for legacy states');
+});
+
+/* ---------------- D-03: the chain agrees with honest local state ---------- */
+
+/** Build a verifiable chain from the engine journal (oldest first). */
+async function chainFromJournal(state) {
+  const chain = [];
+  let prev = AT.GENESIS;
+  for (const t of [...state.journal].reverse()) {
+    const link = await AT.appendFill(prev, t);
+    link.seq = chain.length;
+    chain.push(link);
+    prev = link.hash;
+  }
+  return chain;
+}
+
+test('D-03: partial exits and fees no longer read as TAMPERING', async () => {
+  const settings = wave2Settings(); // 1% per side — the default
+  const state = E.defaultState(settings);
+  const t0 = 1_700_000_000_000;
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 0.5, priceNative: 0.002 });
+
+  // Mid-round, partial exit banked, fees paid — an honest wallet.
+  let chain = await chainFromJournal(state);
+  let stats = E.sessionStats(state, settings);
+  let match = AT.claimMatchesChain(
+    { realizedPnlSol: stats.realizedPnlSol }, chain, settings.balanceStartSol, 1e-6
+  );
+  assert.equal(match.ok, true,
+    `an untampered wallet must verify mid-round; derived differs by ${match.diff} SOL`);
+
+  // And after the round closes, with a second position still open.
+  E.sell(state, settings, { ts: t0 + 2000, mint: 'MintA', qtyFraction: 1, priceNative: 0.0015 });
+  E.buy(state, settings, { ts: t0 + 3000, mint: 'MintB', symbol: 'Y', priceNative: 0.005, solAmount: 2 });
+  chain = await chainFromJournal(state);
+  stats = E.sessionStats(state, settings);
+  match = AT.claimMatchesChain(
+    { realizedPnlSol: stats.realizedPnlSol }, chain, settings.balanceStartSol, 1e-6
+  );
+  assert.equal(match.ok, true,
+    `the chain replay must agree by construction; derived differs by ${match.diff} SOL`);
+
+  // Actual tampering is still caught.
+  const inflated = AT.claimMatchesChain(
+    { realizedPnlSol: stats.realizedPnlSol + 5 }, chain, settings.balanceStartSol, 1e-6
+  );
+  assert.equal(inflated.ok, false, 'an edited claim must still be flagged');
+});
+
+test('D-03: replayChain books buy cost at the NET amount, like the engine', async () => {
+  // Buy 1 gross (0.99 net after the 1% fee), sell all for 1.9602 net.
+  const buyLink = await AT.appendFill(AT.GENESIS, {
+    id: 'b', mint: 'MintA', side: 'buy', qty: 990, priceNative: 0.001,
+    solGross: 1, solNet: 0.99, ts: 1,
+  });
+  const sellLink = await AT.appendFill(buyLink.hash, {
+    id: 's', mint: 'MintA', side: 'sell', qty: 990, priceNative: 0.002,
+    solGross: 1.98, solNet: 1.9602, ts: 2,
+  });
+  const replayed = AT.replayChain([buyLink, sellLink], 10);
+  // Engine definition: net proceeds − net cost = 1.9602 − 0.99 = 0.9702.
+  // The old gross-cost replay derived 0.9602 — off by the buy fee, so every
+  // fee-paying wallet was branded tampered.
+  assert.ok(Math.abs(replayed.realizedPnlSol - 0.9702) < 1e-9,
+    `expected the net-cost realized 0.9702, got ${replayed.realizedPnlSol}`);
+  // Cash still moves by the committed cash-basis amounts (gross out, net in).
+  assert.ok(Math.abs(replayed.cashSol - (10 - 1 + 1.9602)) < 1e-9);
+});
+
+test('D-03: a mismatch renders as one coherent sentence', () => {
+  assert.doesNotMatch(dashJs, /found · derived P&L differs by/,
+    'the absurd "0 problems found · derived P&L differs by X SOL" line must be gone');
+  const view = fnBlock(dashJs, 'function lbVerifyView(chain, stats)');
+  assert.match(view, /every hash verifies, but the displayed realized P&L differs from the chain-derived result by/,
+    'a value mismatch on an intact chain must say exactly that');
+  assert.match(view, /found in the chain, and the P&L it derives differs from the displayed figure by/,
+    'broken links plus a value mismatch must read as one sentence');
+  assert.match(view, /found in the chain`/,
+    'broken links alone must not drag in a P&L clause');
+});
+
+/* ---------------- D-01: the equity curve converges on equitySol ----------- */
+
+test('D-01: the curve final point equals equitySol, open positions included', () => {
+  const settings = wave2Settings();
+  const state = E.defaultState(settings);
+  const t0 = 1_700_000_000_000;
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'A', priceNative: 0.001, solAmount: 1 });
+  E.buy(state, settings, { ts: t0 + 1000, mint: 'MintB', symbol: 'B', priceNative: 0.002, solAmount: 2 });
+  E.markPosition(state, 'MintA', 0.0015);
+  E.sell(state, settings, { ts: t0 + 2000, mint: 'MintA', qtyFraction: 1, priceNative: 0.0015 });
+  E.markPosition(state, 'MintB', 0.001); // open position, halved
+
+  const pts = E.equityCurvePoints(state, settings.balanceStartSol, { now: t0 + 3000 });
+  const last = pts[pts.length - 1].eq;
+  assert.ok(Math.abs(last - E.equitySol(state)) < 1e-9,
+    `the curve must land on equitySol; got ${last} vs ${E.equitySol(state)}`);
+
+  // The old accumulation (sell pnlSol only, no buy-fee debit) floated above
+  // true equity by exactly the cumulative buy fees.
+  const buyFees = state.journal.filter((t) => t.side === 'buy').reduce((s, t) => s + t.feeSol, 0);
+  const naive = settings.balanceStartSol
+    + state.journal.filter((t) => t.side === 'sell').reduce((s, t) => s + t.pnlSol, 0)
+    + Object.values(state.positions).reduce((s, p) => s + E.unrealizedPnl(p), 0);
+  assert.ok(buyFees > 0, 'the scenario must actually pay buy fees');
+  assert.ok(Math.abs((naive - last) - buyFees) < 1e-9,
+    'the divergence being fixed is exactly the cumulative buy fees');
+
+  // Fully closed: the curve ends on cash, which IS equity with nothing open.
+  E.sell(state, settings, { ts: t0 + 4000, mint: 'MintB', qtyFraction: 1, priceNative: 0.001 });
+  const flat = E.equityCurvePoints(state, settings.balanceStartSol, { now: t0 + 5000 });
+  assert.ok(Math.abs(flat[flat.length - 1].eq - state.cashSol) < 1e-9,
+    'with all positions closed the curve must end exactly on cash');
+});
+
+test('D-01: legacy buys without feeSol fall back to solGross − solNet', () => {
+  const settings = wave2Settings();
+  const state = E.defaultState(settings);
+  const t0 = 1_700_000_000_000;
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'A', priceNative: 0.001, solAmount: 1 });
+  E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 1, priceNative: 0.002 });
+
+  const withFee = E.equityCurvePoints(state, settings.balanceStartSol, { now: t0 + 2000 });
+  for (const t of state.journal) if (t.side === 'buy') delete t.feeSol; // pre-feeSol journal
+  const legacy = E.equityCurvePoints(state, settings.balanceStartSol, { now: t0 + 2000 });
+  assert.ok(Math.abs(withFee[withFee.length - 1].eq - legacy[legacy.length - 1].eq) < 1e-9,
+    'the solGross − solNet fallback must reproduce the same curve');
+  assert.ok(Math.abs(legacy[legacy.length - 1].eq - state.cashSol) < 1e-9,
+    'and still converge on equity');
+});
+
+test('D-01: the dashboard draws the engine curve, not its own walk', () => {
+  const draw = fnBlock(dashJs, 'function drawEquityCurve()');
+  assert.match(draw, /E\.equityCurvePoints\(state, start\)/,
+    'the canvas must plot the fee-correct engine points');
+  assert.doesNotMatch(draw, /pnl \+= \(t\.pnlSol \|\| 0\)/,
+    'the old sell-only accumulation floated above equity by the buy fees');
+});
+
+/* ---------------- D-08: one percentage basis, open and closed ------------- */
+
+test('D-08: open % uses the gross-invested basis; only the sell fee moves it at close', () => {
+  const settings = wave2Settings(); // 1% per side
+  const state = E.defaultState(settings);
+  const t0 = 1_700_000_000_000;
+
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', priceNative: 0.001, solAmount: 1 });
+  const pos = state.positions.MintA;
+
+  // Flat market: the position is worth its NET cost against a GROSS spend —
+  // the buy fee is already a real 1% loss, exactly what a closed flat round
+  // reports (minus the exit fee). The old pnl/costSol basis said 0%.
+  const flatPct = E.positionPnlPct(pos);
+  const expectedFlat = ((pos.qty * pos.lastPriceNative) / pos.investedSol - 1) * 100;
+  assert.ok(Math.abs(flatPct - expectedFlat) < 1e-9);
+  assert.ok(Math.abs(flatPct - (-settings.feeBps / 100)) < 1e-6,
+    `a flat open position is down exactly the buy fee; got ${flatPct}%`);
+
+  // A partial exit at an unchanged price must not move the percentage: the
+  // surviving stack keeps its proportional gross basis.
+  E.markPosition(state, 'MintA', 0.002);
+  const beforePartial = E.positionPnlPct(pos);
+  E.sell(state, settings, { ts: t0 + 1000, mint: 'MintA', qtyFraction: 0.5, priceNative: 0.002 });
+  const afterPartial = E.positionPnlPct(pos);
+  assert.ok(Math.abs(beforePartial - afterPartial) < 1e-9,
+    'selling half at the same price must not change the remaining stack\'s %');
+
+  // Full close at the same price: the % moves by the SELL fees alone — a
+  // real cost — never by the ~2×feeBps accounting jump of the old bases.
+  const beforeClose = E.positionPnlPct(pos);
+  const { round } = E.sell(state, settings, { ts: t0 + 2000, mint: 'MintA', qtyFraction: 1, priceNative: 0.002 });
+  const sellFees = state.journal.filter((t) => t.side === 'sell').reduce((s, t) => s + t.feeSol, 0);
+  const expectedJump = (sellFees / round.investedSol) * 100;
+  assert.ok(Math.abs((beforeClose - round.pnlPct) - expectedJump) < 1e-6,
+    `the close must move the % by the sell fees only; open ${beforeClose}%, closed ${round.pnlPct}%`);
+});
+
+test('D-08: the dashboard open-positions % goes through the shared basis', () => {
+  const open = fnBlock(dashJs, 'function renderOpenPositions()');
+  assert.match(open, /E\.positionPnlPct\(p\)/,
+    'the open % must come from the engine, on the gross-invested basis');
+  assert.doesNotMatch(open, /pnl \/ p\.costSol/,
+    'the net-of-fee denominator is what made the % jump ~2×feeBps at close');
+});
+
+/* ---------------- D-22: mutate-with-retry state writes -------------------- */
+
+/** Run the SHIPPED mutateState against a scriptable storage stub. */
+function mutateHarness(initialState) {
+  const src = fnBlock(dashJs, 'async function mutateState(');
+  const stored = { pt_state: initialState };
+  const calls = { gets: 0, sets: 0 };
+  let interfere = null;
+  const store = {
+    get: async () => {
+      calls.gets += 1;
+      if (interfere) interfere(calls.gets, stored);
+      if (stored.pt_state === null) return null; // simulated unreadable storage
+      return { pt_state: JSON.parse(JSON.stringify(stored.pt_state)) };
+    },
+    set: async (obj) => { calls.sets += 1; stored.pt_state = obj.pt_state; },
+  };
+  const sandbox = { store };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `let storageReadFailed = false; let state = null;\n${src}\nthis.mutateState = mutateState; this.adopted = () => state;`,
+    sandbox
+  );
+  return {
+    mutate: (fn, retries) => sandbox.mutateState(fn, retries),
+    adopted: () => sandbox.adopted(),
+    stored, calls,
+    setInterfere: (fn) => { interfere = fn; },
+  };
+}
+
+test('D-22: a clean write reads fresh state, applies the mutation, bumps seq once', async () => {
+  const h = mutateHarness({ seq: 5, rounds: [{ id: 'r1' }], journal: [], positions: {} });
+  await h.mutate((fresh) => { fresh.rounds[0].note = { text: 'lesson', t: 1 }; });
+  assert.equal(h.stored.pt_state.seq, 6, 'exactly one seq bump per write');
+  assert.equal(h.stored.pt_state.rounds[0].note.text, 'lesson');
+  assert.equal(h.adopted().seq, 6, 'the written state is adopted locally');
+});
+
+test('D-22: a concurrent seq bump triggers re-read and re-apply, not a lost write', async () => {
+  const h = mutateHarness({ seq: 5, rounds: [{ id: 'r1' }], journal: [], positions: {} });
+  // Between the base read (get #1) and the pre-write check (get #2), a
+  // trading tab lands a fill: seq moves and a new round appears — exactly
+  // the write the old blind read-modify-write would have destroyed.
+  h.setInterfere((n, stored) => {
+    if (n === 2) {
+      stored.pt_state.seq = 6;
+      stored.pt_state.rounds.unshift({ id: 'r2' });
+    }
+  });
+  let applications = 0;
+  await h.mutate((fresh) => {
+    applications += 1;
+    const target = fresh.rounds.find((r) => r.id === 'r1');
+    target.note = { text: 'kept', t: 1 };
+  });
+  assert.equal(applications, 2, 'the mutation must be re-applied on the fresher state');
+  assert.equal(h.stored.pt_state.seq, 7, 'written strictly above the concurrent write');
+  assert.equal(h.stored.pt_state.rounds.length, 2, 'the concurrent fill survives');
+  assert.equal(h.stored.pt_state.rounds.find((r) => r.id === 'r1').note.text, 'kept',
+    'and the note survives WITH it — nobody loses');
+});
+
+test('D-22: retries are bounded and an unreadable read refuses to write', async () => {
+  const contended = mutateHarness({ seq: 1, rounds: [], journal: [], positions: {} });
+  contended.setInterfere((n, stored) => {
+    if (n % 2 === 0) stored.pt_state.seq += 1; // every check sees a newer seq
+  });
+  await assert.rejects(
+    () => contended.mutate((fresh) => { fresh.touched = true; }),
+    /NOT saved/,
+    'endless contention must surface, not spin forever'
+  );
+  assert.equal(contended.calls.sets, 0, 'nothing may be written under contention');
+
+  const unreadable = mutateHarness(null);
+  await assert.rejects(
+    () => unreadable.mutate((fresh) => { fresh.touched = true; }),
+    /unreadable/,
+    'a failed read must refuse the write (D-15) — never fabricate and persist'
+  );
+});
+
+test('D-22: the AI review write goes through the same retry path', () => {
+  const review = fnBlock(dashJs, 'async function runReview(roundId)');
+  assert.match(review, /await mutateState\(\(fresh\) => \{/,
+    'the review annotation must be a retried mutation');
+  assert.doesNotMatch(review, /await saveState\(\)/,
+    'the blind read-modify-write saveState is gone');
+});
+
+/* ---------------- D-27/D-28: the fingerprint sees what matters ------------ */
+
+/** Run the SHIPPED dataFingerprint against synthetic module state. */
+function fingerprintOf(stateObj) {
+  const src = fnBlock(dashJs, 'function dataFingerprint()');
+  const sandbox = {
+    state: stateObj, frames: [], replays: [], recordings: {}, settings: {},
+    JSON, Number, Object,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(`${src}\nthis.fp = dataFingerprint();`, sandbox);
+  return sandbox.fp;
+}
+
+function fpState(over) {
+  return Object.assign({
+    cashSol: 9,
+    journal: [{ id: 't1' }],
+    rounds: [{ id: 'r1' }],
+    positions: { MintA: { mint: 'MintA', qty: 100, lastPriceNative: 0.001 } },
+  }, over || {});
+}
+
+test('D-28: heartbeat price marks do not churn the fingerprint', () => {
+  const a = fingerprintOf(fpState());
+  const b = fingerprintOf(fpState({
+    positions: { MintA: { mint: 'MintA', qty: 100, lastPriceNative: 0.002 } },
+  }));
+  assert.equal(a, b,
+    'a live mark moves every 800 ms; including it rebuilt the visible table each second');
+
+  const c = fingerprintOf(fpState({
+    positions: { MintA: { mint: 'MintA', qty: 50, lastPriceNative: 0.001 } },
+  }));
+  assert.notEqual(a, c, 'a QUANTITY change is a real fill and must repaint');
+});
+
+test('D-27: in-place round mutations move the fingerprint', () => {
+  const base = fingerprintOf(fpState());
+  const cases = {
+    aiReview: { id: 'r1', aiReview: { t: 123, text: 'x', ok: true } },
+    note: { id: 'r1', note: { text: 'lesson', t: 124 } },
+    thesis: { id: 'r1', thesis: { text: 'momentum', tags: ['momentum'] } },
+    recordingFile: { id: 'r1', recordingFile: 'clip.webm' },
+    recording: { id: 'r1', recording: { id: 'rec1' } },
+  };
+  for (const [field, round] of Object.entries(cases)) {
+    const fp = fingerprintOf(fpState({ rounds: [round] }));
+    assert.notEqual(fp, base,
+      `a ${field} written in place must repaint — with D-13 fixed these writes land, but the dashboard never showed them`);
+  }
+});
+
+test('D-28: live values update in place — no section rebuild on a price tick', () => {
+  const live = fnBlock(dashJs, 'function updateOpenPositionMarks()');
+  assert.match(live, /node\.textContent = /, 'live P&L is a text-node update');
+  assert.doesNotMatch(live, /innerHTML/, 'the updater must never rebuild markup');
+
+  const times = fnBlock(dashJs, 'function updateRelativeTimes()');
+  assert.match(times, /dataset\.relTs/, 'relative labels refresh from their own timestamp');
+  assert.doesNotMatch(times, /innerHTML/);
+
+  const derived = fnBlock(dashJs, 'function refreshLiveDerived()');
+  assert.match(derived, /renderSidebar\(\)/);
+  assert.match(derived, /updateOpenPositionMarks\(\)/);
+  assert.match(derived, /updateRelativeTimes\(\)/);
+
+  const journal = fnBlock(dashJs, 'function renderJournal(el)');
+  assert.match(journal, /data-rel-ts="\$\{Number\(t\.ts\) \|\| 0\}"/,
+    'journal timestamps carry their ts so the label can refresh without a rebuild');
+  const open = fnBlock(dashJs, 'function renderOpenPositions()');
+  assert.match(open, /data-pos-row/, 'position rows are addressable for in-place updates');
+  assert.match(open, /data-pos-pnl/, 'the live P&L node is addressable');
+});
+
+/* ---------------- D-20/D-34: per-section busy ----------------------------- */
+
+test('D-20/D-34: busy is judged per section; an open note editor counts by presence', () => {
+  const busy = fnBlock(dashJs, 'function isUserBusy()');
+  assert.match(busy, /section && section\.contains\(active\)/,
+    'a focused input only freezes the section that contains it (D-34)');
+  assert.match(busy, /querySelector\('\.note-input'\)/,
+    'an open note editor freezes rounds by DOM presence, focus or not (D-20)');
+  assert.match(busy, /currentSection === 'rounds'/,
+    'the editor check is scoped to the rounds section');
+});
+
+/* ---------------- D-17: the session review answer survives refreshes ------ */
+
+test('D-17: the session review lives in module state and is re-injected on render', () => {
+  const coach = fnBlock(dashJs, 'function renderCoach(el)');
+  assert.match(coach, /sessionReview \? esc\(sessionReview\.text\) : ''/,
+    'the staged coach markup must carry the stored answer — live-DOM-only writes were wiped');
+
+  const helper = fnBlock(dashJs, 'function setSessionReview(text, error)');
+  assert.match(helper, /sessionReview = \{ text, error: Boolean\(error\) \};/,
+    'every stage of the review persists in module state');
+  assert.match(helper, /renderSection\('coach'\)/,
+    'the render path paints it, attached or not');
+
+  const session = fnBlock(dashJs, 'async function runSessionReview()');
+  assert.doesNotMatch(session, /out\.textContent/,
+    'the answer must never be written into the live DOM alone');
+});
+
+/* ---------------- D-18: memoized chain verification ----------------------- */
+
+test('D-18: verification is memoized by chain fingerprint and lands via re-render', () => {
+  const keyFn = fnBlock(dashJs, 'function lbVerifyKey(chain, stats)');
+  assert.match(keyFn, /chain\.length/, 'the fingerprint covers the length');
+  assert.match(keyFn, /chain\[chain\.length - 1\]\.hash/,
+    'and the head hash — each link commits to its predecessor, so head pins content');
+
+  const bind = fnBlock(dashJs, 'async function bindLeaderboard(el)');
+  assert.match(bind, /if \(lbVerifyCache && lbVerifyCache\.key === key\) return;/,
+    'a cache hit must skip SHA-256 over the whole chain entirely');
+  assert.match(bind, /lbVerifyInFlightKey === key\) return;/,
+    'a verify already in flight for this chain must not be duplicated');
+  assert.doesNotMatch(bind, /box\.innerHTML/,
+    'the verdict must never be written into a possibly-detached node');
+  assert.match(bind, /if \(currentSection === 'leaderboard'\) renderSection\('leaderboard'\);/,
+    'the landing re-renders from the cache instead — the rebind cache hit stops recursion');
+
+  const render = fnBlock(dashJs, 'function renderLeaderboard(el)');
+  assert.match(render, /lbVerifyView\(chain, stats\)/,
+    'the staged markup paints the memoized verdict synchronously, so "Checking…" never flickers back');
+});
+
+/* ---------------- D-19: settings save merges over a FRESH read ------------ */
+
+test('D-19: save lays only form-controlled keys over freshly read settings', () => {
+  const save = fnBlock(dashJs, 'async function saveFromForm()');
+  assert.match(save, /await store\.get\(\['pt_settings'\]\)/,
+    'the save must re-read pt_settings at save time — the module copy is frozen while the tab is open');
+  assert.match(save, /E\.mergeSettings\(stored\.pt_settings\)/,
+    'the fresh stored copy is the base');
+  assert.match(save, /\{ \.\.\.freshSettings, \.\.\.gatherSettingsFromForm\(notes, freshSettings\) \}/,
+    'only the form keys are laid over it');
+  assert.match(save, /if \(stored === null\) \{/,
+    'an unreadable read must refuse the save (D-15 discipline)');
+
+  const gather = fnBlock(dashJs, 'function gatherSettingsFromForm(');
+  assert.doesNotMatch(gather, /\.\.\.settings/,
+    'gather spreading the stale module settings is what reverted every content-script write');
+  for (const key of ['overlayWidth', 'overlayHeight', 'positionsBarLeft', 'positionsBarTop', 'positionsBarHidden', 'leaderboardIdentity']) {
+    assert.ok(!gather.includes(key),
+      `${key} is content-script/leaderboard state, not a form field — the form must not carry it`);
+  }
+});
+
+/* ---------------- D-26: replay teardown ----------------------------------- */
+
+test('D-26: emptying replays mid-playback stops the timer instead of looping TypeErrors', () => {
+  const render = fnBlock(dashJs, 'function renderReplay(el)');
+  const emptyBranch = render.slice(render.indexOf('if (!replays.length)'), render.indexOf('let replay ='));
+  assert.match(emptyBranch, /stopReplayPlayback\(\);/,
+    'the empty branch must stop frame playback before dropping the shell');
+  assert.match(emptyBranch, /releaseReplayShell\(\);/,
+    'and release the shell (which clears replayTimer and the video-sync rAF)');
+
+  const toggle = fnBlock(dashJs, 'function toggleReplayPlayback()');
+  assert.match(toggle, /const replay = currentReplay\(\);\s*\n\s*if \(!replay\) \{ stopReplayPlayback\(\); return; \}/,
+    'the 1.1 s tick must stop itself when the current replay has vanished');
+
+  const build = fnBlock(dashJs, 'function buildReplayView(replay)');
+  assert.match(build, /if \(!replay\) \{/,
+    'a missing replay degrades to an empty view, never a TypeError');
 });

@@ -42,10 +42,22 @@ function computeStats(state, settings) {
   const rounds = state.rounds || [];
   const openValue = positions.reduce((s, p) => s + (p.qty || 0) * (p.lastPriceNative || 0), 0);
   const equity = (state.cashSol || 0) + openValue;
+  // D-02: realized P&L is the engine's per-sell accumulator, which credits
+  // partial exits the moment they happen — the same definition the dashboard
+  // sidebar, calendar, journal, and the attest chain replay use. The old
+  // rounds-only sum showed +0 here while the calendar showed the banked
+  // partial. Legacy states can miss the accumulator; the journal's per-sell
+  // pnlSol entries are the same definition and back-fill it.
+  let realized = Number((state.stats || {}).realizedPnlSol);
+  if (!Number.isFinite(realized)) {
+    realized = (state.journal || []).reduce(
+      (s, t) => s + (t.side === 'sell' ? (Number(t.pnlSol) || 0) : 0), 0
+    );
+  }
   return {
     equitySol: equity,
     openPositions: positions.length,
-    realizedPnlSol: rounds.reduce((s, r) => s + (r.pnlSol || 0), 0),
+    realizedPnlSol: realized,
     rounds: rounds.length,
     equityVsStart: equity - settings.balanceStartSol,
   };

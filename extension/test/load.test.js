@@ -501,9 +501,12 @@ test('post-close notes let the lesson be written after the outcome', () => {
 
   // The seq-durability rule applies to notes too: a fill can land while the
   // note is being written, so the save annotates the FRESHEST state.
+  // (D-22: the loadAll-then-saveState read-modify-write became
+  // mutateState(), which re-reads fresh state INSIDE its retry loop and
+  // re-applies the note on a concurrent seq bump instead of losing a write.)
   const saveBody = dashboardSrc.slice(dashboardSrc.indexOf('function editRoundNote'));
-  assert.match(saveBody, /await loadAll\(\)[\s\S]*?if \(text\) target\.note = \{ text, t: Date\.now\(\) \};/,
-    'saving a note must reload state first so it can never clobber a fill');
+  assert.match(saveBody, /await mutateState\(\(fresh\) => \{[\s\S]*?if \(text\) target\.note = \{ text, t: Date\.now\(\) \};/,
+    'saving a note must annotate the freshly read state so it can never clobber a fill');
   assert.match(saveBody, /else delete target\.note;/,
     'clearing the text must remove the note entirely');
 

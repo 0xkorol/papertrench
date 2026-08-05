@@ -194,7 +194,19 @@
         cash -= amount;
         const held = positions.get(link.mint) || { qty: 0, cost: 0 };
         held.qty += qty;
-        held.cost += amount;
+        // D-02/D-03: the cost basis accumulates at the NET amount (gross
+        // minus the buy fee) because that is exactly how the engine books it
+        // (sell(): pnl = net proceeds − net cost share, accumulated into
+        // stats.realizedPnlSol). Replaying at GROSS cost made the derived
+        // realized P&L sit below an honest client's displayed figure by its
+        // cumulative buy fees, so claimMatchesChain flagged every untampered
+        // wallet as edited the moment it paid a fee. Every link stores
+        // solNet; only `amount` (gross on buys) is hash-committed, which is
+        // acceptable under the stated trust model — the chain is evidence,
+        // not proof, and a server re-verifies every fill against real price
+        // history anyway. Links without solNet (foreign/minimal fills) fall
+        // back to the committed gross amount, preserving old behaviour.
+        held.cost += Number(link.solNet) > 0 ? Number(link.solNet) : amount;
         positions.set(link.mint, held);
       } else if (link.side === 'sell') {
         const held = positions.get(link.mint);

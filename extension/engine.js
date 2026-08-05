@@ -228,6 +228,7 @@
         qty: 0,
         costSol: 0,          // net SOL spent on the open stack
         investedSol: 0,      // gross SOL spent (incl. fees) on this round
+        netInvestedSol: 0,   // net SOL (gross minus buy fees) spent on this round
         peakPnlSol: 0,
         troughPnlSol: 0,
         openedAt: o.ts,
@@ -242,6 +243,12 @@
     pos.qty += qty;
     pos.costSol += net;
     pos.investedSol += sol;
+    // D-08: total NET invested never shrinks (mirrors investedSol). costSol
+    // DOES shrink proportionally on partial sells, so costSol/netInvestedSol
+    // is the surviving fraction of the stack — which lets grossOpenCostSol()
+    // recover the gross cost of what is still open. Legacy positions predate
+    // the field; `|| 0` upgrades them in place on their next buy.
+    pos.netInvestedSol = (Number(pos.netInvestedSol) || 0) + net;
     pos.lastPriceNative = px;
     pos.lastPriceUsd = o.priceUsd || pos.lastPriceUsd;
 
@@ -394,6 +401,87 @@
     return eq;
   }
 
+  /**
+   * D-01: the realized-equity timeline the dashboard curve draws.
+   *
+   * The old curve accumulated journal sell pnlSol only. That figure is net of
+   * SELL fees but not BUY fees (sell(): pnl = net proceeds − NET cost share),
+   * so the curve sat above true equity by the cumulative buy fees and
+   * diverged monotonically from the equitySol KPI on the same screen.
+   *
+   * Each BUY therefore debits its fee as it is walked (trade.feeSol, falling
+   * back to solGross − solNet for fills recorded before feeSol existed), and
+   * each SELL credits its per-sell pnlSol. With the buy fee accounted at buy
+   * time and open positions marked with the same net-basis unrealizedPnl(),
+   * the identity is exact: the final point equals equitySol(state)
+   * (cash + marked positions) whenever the journal covers every fill.
+   */
+  function equityCurvePoints(state, startSol, opts) {
+    const start = Number(startSol) || 0;
+    const journal = ((state && state.journal) || []).slice().sort((a, b) => a.ts - b.ts);
+    const startedAt = Number(state && state.startedAt)
+      || (journal[0] ? Number(journal[0].ts) : Date.now());
+    const pts = [{ t: startedAt, eq: start }];
+    let pnl = 0;
+    for (const t of journal) {
+      if (t.side === 'buy') {
+        const feeRaw = Number(t.feeSol);
+        const fee = Number.isFinite(feeRaw) && feeRaw >= 0
+          ? feeRaw
+          : (Number.isFinite(Number(t.solNet))
+            ? Math.max(0, (Number(t.solGross) || 0) - Number(t.solNet))
+            : 0);
+        pnl -= fee;
+      } else if (t.side === 'sell') {
+        pnl += Number(t.pnlSol) || 0;
+      }
+      pts.push({ t: t.ts, eq: start + pnl });
+    }
+    let openPnl = 0;
+    const positions = (state && state.positions) || {};
+    for (const mint of Object.keys(positions)) openPnl += unrealizedPnl(positions[mint]);
+    pts.push({ t: Number(opts && opts.now) || Date.now(), eq: start + pnl + openPnl });
+    return pts;
+  }
+
+  /**
+   * D-08: the gross (fee-inclusive) cost of what is still open in a position.
+   *
+   * Closed rounds measure their percentage against GROSS invested
+   * (closeRound: returned / investedSol − 1). The open-position percentage
+   * used pnl / costSol — a NET-of-buy-fee denominator (and numerator) — so
+   * the same trade's % dropped ~2×feeBps at the moment of close with no
+   * price move at all.
+   *
+   * costSol shrinks proportionally on partial sells while netInvestedSol
+   * (total net ever invested) does not, so costSol / netInvestedSol is the
+   * surviving fraction of the stack and invested × that fraction is its
+   * gross cost. Legacy positions predate netInvestedSol: without partial
+   * sells costSol === net invested and the full investedSol is exact, so it
+   * is the fallback.
+   */
+  function grossOpenCostSol(pos) {
+    if (!pos) return 0;
+    const invested = Number(pos.investedSol) || 0;
+    const cost = Number(pos.costSol) || 0;
+    const netInvested = Number(pos.netInvestedSol) || 0;
+    if (netInvested > 0) return invested * (cost / netInvested);
+    return invested;
+  }
+
+  /**
+   * D-08: open-position P&L percentage on the same gross-invested basis as
+   * closed rounds, so the % no longer jumps ~2×feeBps at close. The residual
+   * move at close is the SELL fee alone — a real cost, not an accounting
+   * artifact.
+   */
+  function positionPnlPct(pos) {
+    if (!pos) return 0;
+    const value = (Number(pos.qty) || 0) * (Number(pos.lastPriceNative) || 0);
+    const gross = grossOpenCostSol(pos);
+    return gross > 0 ? (value / gross - 1) * 100 : 0;
+  }
+
   function solUsdRate(state, settings) {
     for (const mint of Object.keys(state.positions)) {
       const p = state.positions[mint];
@@ -410,19 +498,34 @@
     const wins = state.rounds.filter((r) => r.pnlSol > 0).length;
     const losses = state.rounds.filter((r) => r.pnlSol < 0).length;
     const decided = wins + losses;
-    const totalPnl = state.rounds.reduce((s, r) => s + r.pnlSol, 0);
+    // D-02: realized P&L is the PER-SELL accumulator sell() maintains
+    // (state.stats.realizedPnlSol), which credits partial exits the moment
+    // they happen. The old rounds-only sum reported +0 for a trade that had
+    // banked +2 on a 50% exit, while the calendar and journal — both fed by
+    // per-sell pnlSol — showed the +2: the same trade, three numbers. The
+    // attest chain replay (attest.js replayChain) computes exactly this
+    // per-sell figure, so the leaderboard honesty check agrees by
+    // construction. Legacy/restored states can miss the accumulator; the
+    // journal's sell pnlSol entries are the same definition and back-fill it.
+    const st = state.stats || {};
+    let realized = Number(st.realizedPnlSol);
+    if (!Number.isFinite(realized)) {
+      realized = (state.journal || []).reduce(
+        (s, t) => s + (t.side === 'sell' ? (Number(t.pnlSol) || 0) : 0), 0
+      );
+    }
     const eq = equitySol(state);
     return {
       rounds: state.rounds.length,
       wins,
       losses,
       winRate: decided > 0 ? (wins / decided) * 100 : 0,
-      realizedPnlSol: totalPnl,
+      realizedPnlSol: realized,
       openPositions: Object.keys(state.positions).length,
       unrealizedSol: Object.values(state.positions).reduce((s, p) => s + unrealizedPnl(p), 0),
       equitySol: eq,
       equityVsStart: eq - settings.balanceStartSol,
-      feesPaidSol: state.stats.feesPaidSol,
+      feesPaidSol: Number(st.feesPaidSol) || 0,
       trades: state.journal.length,
     };
   }
@@ -988,6 +1091,9 @@
     markPosition,
     unrealizedPnl,
     equitySol,
+    equityCurvePoints,
+    grossOpenCostSol,
+    positionPnlPct,
     solUsdRate,
     sessionStats,
     pnlCalendar,

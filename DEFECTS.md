@@ -637,18 +637,18 @@ Community report covered: "things not properly displaying on the dashboards".
 ### S1 — displayed number is wrong
 
 **D-01 · S1 · Equity curve sits above true equity by cumulative buy fees — two disagreeing numbers on one screen**
-`dashboard.js:386-396` vs :268, `engine.js:215-216,243,299` · confirmed · open
+`dashboard.js:386-396` vs :268, `engine.js:215-216,243,299` · confirmed · **fixed v1.3.0** (E.equityCurvePoints debits buy fees; final point equals equitySol exactly, proven by test)
 Curve accumulates journal `pnlSol` (cost basis net of buy fees) → curve = equity +
 Σ buyFees, diverging monotonically from the `equitySol` KPI. 50 round trips of 1 SOL at
 default fees ≈ 0.5 SOL gap.
 
 **D-02 · S1 · "Realized P&L" omits partial exits; the calendar counts them — same trade, three different numbers**
-`engine.js:408` (rounds-only) vs :713-721 (per-sell) · confirmed · open
+`engine.js:408` (rounds-only) vs :713-721 (per-sell) · confirmed · **fixed v1.3.0** (realized P&L from the per-sell accumulator everywhere; calendar/sidebar/popup/leaderboard agree)
 Sidebar/leaderboard/standings/popup use rounds-only; calendar/journal use per-sell.
 Buy 1, sell 50 % at +2: sidebar +0, calendar +2.00, journal +2.
 
 **D-03 · S1 · Leaderboard accuses the user of tampering after any partial exit**
-`dashboard.js:1731-1746`, `attest.js:199-215` · confirmed · open
+`dashboard.js:1731-1746`, `attest.js:199-215` · confirmed · **fixed v1.3.0** (replayChain books net buy cost matching the engine recurrence; coherent mismatch wording)
 `replayChain` credits realized on every sell link incl. partials; compared against
 rounds-only stats (D-02) → red "Chain does not match local state" + the absurd line
 "0 problems found · derived P&L differs by X SOL".
@@ -720,16 +720,16 @@ empty wallet at seq+1, destroying the real state.
 rounds.filter, drawEquityCurve, renderCoach · confirmed · **fixed v1.3.0** (init failures render a visible error card)
 
 **D-17 · S2 · Session AI review answer is never persisted and is wiped seconds later by the refresh**
-`dashboard.js:1923-1936,195-218,1772` · confirmed · open
+`dashboard.js:1923-1936,195-218,1772` · confirmed · **fixed v1.3.0** (session review persisted in module state and re-injected on render)
 Answer written to live DOM only; staged-vs-live equality check then always fails →
 replaceChildren discards it. With an open position the fingerprint churns ~1 s.
 
 **D-18 · S2 · Leaderboard verification flickers back to "Checking…" ~1×/s, re-running SHA-256 over the whole chain each time**
-`dashboard.js:1699-1752,212` · confirmed · open — same mechanism as D-17; in-flight
+`dashboard.js:1699-1752,212` · confirmed · **fixed v1.3.0** (chain verification memoized by chain fingerprint; cached verdict paints synchronously) — same mechanism as D-17; in-flight
 verify can also land in a detached node → placeholder sticks forever.
 
 **D-19 · S2 · Dashboard settings save clobbers every content-script settings write made while the tab was open**
-`dashboard.js:2071-2078,110-118,139` · confirmed · open
+`dashboard.js:2071-2078,110-118,139` · confirmed · **fixed v1.3.0** (save re-reads fresh settings and lays only form-controlled keys)
 `isUserBusy()` is unconditionally true on the Settings tab → `settings` frozen at
 dashboard-load time → Save writes `{...stale, ...form}`. Silently reverted: panel
 position, bar position/hidden, overlay size, auto-hide — the user's dragged layout
@@ -737,7 +737,7 @@ snaps back. `pt_settings` has no seq/revision guard at all; every writer is a bl
 whole-object overwrite.
 
 **D-20 · S2 · Open round-note editor destroyed by refresh the moment focus leaves — typed text lost**
-`dashboard.js:741-778,110-118,82` · confirmed · open
+`dashboard.js:741-778,110-118,82` · confirmed · **fixed v1.3.0** (an open note editor marks the rounds section busy by DOM presence)
 
 **D-21 · S2 · sendMessage rejections hang the AI UI forever**
 `dashboard.js:792,1933` · confirmed · **fixed v1.3.0** (sendMessage rejections surface and restore button state) — unhandled rejection, no error UI; note
@@ -759,17 +759,17 @@ confirmed · **fixed v1.3.0** (renderSettings guards non-array lists)
 `dashboard.js:2071-2078` · confirmed · **fixed v1.3.0** (save failures render in the save status element)
 
 **D-26 · S2 · replayTimer leaks when replays go empty → TypeError loop every 1.1 s forever**
-`dashboard.js:1084-1086,933-938` · confirmed · open — repro: start frame playback,
+`dashboard.js:1084-1086,933-938` · confirmed · **fixed v1.3.0** (empty-replays branch stops playback and releases the shell; timer guards a vanished replay) — repro: start frame playback,
 reset wallet from popup.
 
 ### S3 — stale rendering / wrong presence
 
 **D-27 · S3 · dataFingerprint cannot see in-place round mutations (aiReview, note, recording, thesis)**
-`dashboard.js:75-90` · confirmed · open — with D-13, THE "reviews don't display" pair.
+`dashboard.js:75-90` · confirmed · **fixed v1.3.0** (fingerprint carries per-round mutation markers) — with D-13, THE "reviews don't display" pair.
 
 **D-28 · S3 · Table scroll position and hover reset ~once per second**
 `dashboard.js:82,215`, `timeAgo` churn :638,:2101, storage listener :126-135 ·
-confirmed · open — fingerprint includes lastPriceNative; every 800 ms heartbeat
+confirmed · **fixed v1.3.0** (live marks out of the fingerprint; in-place text-node updater for P&L and timestamps) — fingerprint includes lastPriceNative; every 800 ms heartbeat
 rebuilds the section, new scroll container at scrollTop 0. The "constantly refreshing"
 complaint, unfixed (header comment blames the old timer).
 
@@ -788,7 +788,7 @@ complaint, unfixed (header comment blames the old timer).
 `dashboard.js:562-563` · confirmed · **fixed v1.3.0** (locale-safe month: short form)
 
 **D-34 · S3 · ANY focused input freezes the entire dashboard refresh — including the replay scrubber which keeps focus after a drag**
-`dashboard.js:110-118,1171` · confirmed · open
+`dashboard.js:110-118,1171` · confirmed · **fixed v1.3.0** (isUserBusy is per-section)
 
 ### S4 — friction
 

@@ -33,6 +33,17 @@ let preferFrameOverVideo = false;
 let lastFingerprint = '';
 let replayShell = null;   // persistent replay DOM, so the video survives updates
 let replayRaf = null;     // requestAnimationFrame handle for video-driven sync
+// D-17: the session AI review lives in module state and is re-injected into
+// the staged markup on every render. It used to be written into the live DOM
+// only, so the next staged refresh (whose markup still held the empty box)
+// wiped the answer seconds after it appeared.
+let sessionReview = null; // { text, error }
+// D-18: chain verification is memoized by a cheap fingerprint (length + head
+// hash + the claim inputs). Without it every staged leaderboard render showed
+// the "Checking…" placeholder again and re-ran SHA-256 over the WHOLE chain
+// ~once a second — and an in-flight verify could land in a detached node.
+let lbVerifyCache = null;      // { key, valid, problems, ok, diff, derivedPnlSol }
+let lbVerifyInFlightKey = null;
 /**
  * Storage access that fails soft — same contract as content.js's store helper:
  * get() resolves null when the read FAILED (chrome.runtime.lastError or a
@@ -94,7 +105,10 @@ async function init() {
   // values (relative timestamps, live position marks) and is skipped entirely
   // when nothing is actually different.
   watchDashboardStorage();
-  setInterval(refreshIfChanged, 4000);
+  // D-28: live-derived values (open-position P&L, relative timestamps, the
+  // sidebar equity) update IN PLACE after each change check — they never
+  // rebuild a section, so scroll and hover survive the 800 ms heartbeat.
+  setInterval(() => { refreshIfChanged().then(refreshLiveDerived).catch(() => {}); }, 4000);
 }
 
 /**
@@ -144,8 +158,23 @@ function dataFingerprint() {
     (state.journal || []).length,
     (state.rounds || []).length,
     positions.length,
-    // Live marks move while a position is open, so include them.
-    positions.map((p) => `${p.mint}:${p.lastPriceNative}`).join(','),
+    // D-28: position IDENTITY and SIZE only — never the live price mark.
+    // lastPriceNative moves on every 800 ms heartbeat, so including it made
+    // the fingerprint churn ~1/s and renderSection replaceChildren'd the
+    // visible table constantly (scroll and hover reset each second). Live
+    // P&L is painted in place by refreshLiveDerived() instead.
+    positions.map((p) => `${p.mint}:${p.qty}`).join(','),
+    // D-27: in-place round mutations (AI review, note, thesis, recording
+    // refs) change no array length, so the fingerprint could not see them —
+    // with D-13 fixed those writes land in storage but the dashboard never
+    // repainted. Cheap per-round markers (timestamps/lengths) catch them.
+    (state.rounds || []).map((r) => [
+      r.aiReview ? (Number(r.aiReview.t) || 1) : 0,
+      r.note && r.note.text ? `${Number(r.note.t) || 1}.${r.note.text.length}` : 0,
+      r.thesis ? ((r.thesis.text || '').length + ((r.thesis.tags || []).length)) : 0,
+      r.recordingFile || '',
+      r.recording ? 1 : 0,
+    ].join(':')).join(','),
     Number(state.cashSol).toFixed(6),
     frames.length,
     replays.length,
@@ -168,15 +197,77 @@ async function refreshIfChanged() {
 }
 
 /**
- * True while the user is mid-interaction with the current section.
+ * D-28: paint live-derived values IN PLACE — no section is ever rebuilt here.
+ *
+ * The heartbeat moves open-position marks every ~800 ms and relative
+ * timestamps age every second; rebuilding a table for either reset scroll and
+ * hover ~once a second. These updaters touch text nodes (and the sidebar,
+ * which contains no interactive state) and nothing else.
+ */
+function refreshLiveDerived() {
+  renderSidebar(); // has its own identical-markup guard
+  updateOpenPositionMarks();
+  updateRelativeTimes();
+  // The curve's head point carries live unrealized P&L; a canvas redraw
+  // destroys no DOM state.
+  if (currentSection === 'overview') drawEquityCurve();
+}
+
+/** D-28: live open-position P&L — update the marked text nodes, never rebuild. */
+function updateOpenPositionMarks() {
+  document.querySelectorAll('[data-pos-row]').forEach((row) => {
+    const p = (state.positions || {})[row.dataset.posRow];
+    if (!p) return; // closed — the fingerprint change rebuilds the section
+    const node = row.querySelector('[data-pos-pnl]');
+    if (!node) return;
+    const pnl = E.unrealizedPnl(p);
+    // D-08: gross-invested basis, same as closed rounds.
+    const pct = E.positionPnlPct(p);
+    const win = pnl >= 0;
+    node.classList.toggle('green', win);
+    node.classList.toggle('red', !win);
+    node.textContent = `${win ? '+' : ''}${fmt(pnl)} SOL (${win ? '+' : ''}${pct.toFixed(1)}%)`;
+    const qtyNode = row.querySelector('[data-pos-qty]');
+    if (qtyNode) qtyNode.textContent = `${fmt(p.qty, 2)} tokens`;
+  });
+}
+
+/**
+ * D-28: relative timestamps ("12s", "3m") are refreshed in place on the
+ * change-check timer. Rendering them as churning markup made every staged
+ * rebuild differ from the live DOM by nothing but the clock.
+ */
+function updateRelativeTimes() {
+  document.querySelectorAll('[data-rel-ts]').forEach((node) => {
+    const ts = Number(node.dataset.relTs);
+    if (!(ts > 0)) return;
+    const label = timeAgo(ts);
+    if (node.textContent !== label) node.textContent = label;
+  });
+}
+
+/**
+ * True while the user is mid-interaction with the CURRENT section.
  *
  * Rebuilding under a focused input destroys what they are typing; rebuilding a
  * playing video restarts it. Neither is ever worth a refresh.
+ *
+ * D-34: busy is judged per section. Only the visible section is ever
+ * rebuilt by a refresh, so only interactions INSIDE it may freeze it — a
+ * focused replay scrubber must not freeze the journal, and a focused input
+ * that lives outside the sections (the share-card modal) must not freeze
+ * anything at all.
  */
 function isUserBusy() {
+  const section = document.getElementById(currentSection);
   const active = document.activeElement;
-  if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
+  if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)
+      && section && section.contains(active)) return true;
   if (currentSection === 'replay' && replayPlaying()) return true;
+  // D-20: an OPEN round-note editor counts as busy by its DOM presence,
+  // focus or not. The focus-only check meant one click outside the textarea
+  // let the next refresh destroy the editor and everything typed into it.
+  if (currentSection === 'rounds' && section && section.querySelector('.note-input')) return true;
   // Settings is a form: rebuilding it would silently discard unsaved edits,
   // and nothing on that screen benefits from a background refresh anyway.
   if (currentSection === 'settings') return true;
@@ -196,7 +287,8 @@ function watchDashboardStorage() {
     const relevant = ['pt_state', 'pt_settings', 'pt_frames', RP.STORAGE_KEY]
       .some((key) => key in changes);
     if (!relevant) return;
-    refreshIfChanged().catch(() => {});
+    // D-28: heartbeat writes carry fresh live marks; paint them in place.
+    refreshIfChanged().then(refreshLiveDerived).catch(() => {});
   });
 }
 
@@ -260,19 +352,56 @@ async function saveSettings() {
   await store.set({ pt_settings: settings });
 }
 
-async function saveState() {
-  // D-15: same refusal as saveSettings — persisting the in-memory state after
-  // a failed read is how a note-save destroys the real wallet.
-  if (storageReadFailed) {
-    throw new Error('Storage is unreadable — the wallet was NOT saved. Reload the dashboard and try again.');
+/**
+ * D-22: every dashboard state write goes through mutate-with-retry.
+ *
+ * The old saveState() was a blind read-modify-write: the dashboard and a
+ * trading tab both holding seq N would each write N+1 and the loser's change
+ * simply vanished. This mirrors the philosophy of content.js's persistSoon
+ * writer: read the FRESHEST stored state, apply the mutation to that copy,
+ * bump seq exactly once, and re-check the stored seq immediately before
+ * writing — if another writer bumped it in between, re-read and re-apply the
+ * mutation on the newer state (bounded retries).
+ *
+ * `mutate(fresh)` receives the freshly read state and edits it in place; a
+ * throw inside it aborts the save. On success the written state is adopted
+ * as the module's own.
+ */
+async function mutateState(mutate, retries = 3) {
+  const unreadable = () => new Error(
+    'Storage is unreadable — the wallet was NOT saved. Reload the dashboard and try again.'
+  );
+  // D-15: never write over storage we could not read — persisting a
+  // fabricated in-memory state is how a note-save destroys the real wallet.
+  if (storageReadFailed) throw unreadable();
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const stored = await store.get(['pt_state']);
+    if (stored === null) throw unreadable();
+    const fresh = stored.pt_state;
+    if (!fresh || typeof fresh !== 'object') {
+      // A successful read with nothing stored: there is no wallet to
+      // annotate, and writing one from here would fabricate it (D-15).
+      throw new Error('No saved wallet found to update.');
+    }
+    const baseSeq = Number(fresh.seq) || 0;
+    mutate(fresh);
+    // Bump the write counter exactly once: every writer must advance seq, or
+    // a lagging content tab (which only adopts when storage's seq is strictly
+    // greater) clobbers this write with a stale copy.
+    fresh.seq = baseSeq + 1;
+    fresh.updatedAt = Date.now();
+    // Conflict check: if another writer advanced seq between our read and
+    // now, our base is stale — loop and re-apply the mutation on the newer
+    // state instead of overwriting it.
+    const check = await store.get(['pt_state']);
+    if (check === null) throw unreadable();
+    const checkSeq = Number(check.pt_state && check.pt_state.seq) || 0;
+    if (checkSeq !== baseSeq) continue;
+    await store.set({ pt_state: fresh });
+    state = fresh;
+    return fresh;
   }
-  // Bump the write counter: every writer must advance seq, or a lagging
-  // content tab (which only adopts when storage's seq is strictly greater)
-  // can clobber this write with a stale copy — e.g. a note silently vanishing
-  // under the next heartbeat mark.
-  state.seq = (Number(state.seq) || 0) + 1;
-  state.updatedAt = Date.now();
-  await store.set({ pt_state: state });
+  throw new Error('Another tab kept writing the wallet — the change was NOT saved. Try again.');
 }
 
 function bindNav() {
@@ -476,7 +605,13 @@ function statTile(label, value, tone, sub) {
 
 /**
  * Equity curve, drawn crisply on a device-pixel-ratio-scaled canvas.
- * Cumulative realized P&L per fill, plus live unrealized on open positions.
+ *
+ * D-01: the points come from E.equityCurvePoints, which debits buy-side fees
+ * as the journal is walked. The old accumulation summed sell pnlSol alone —
+ * net of sell fees but NOT buy fees — so the curve floated above true equity
+ * by the cumulative buy fees, visibly disagreeing with the equitySol KPI on
+ * the same screen. The final point now equals E.equitySol (cash + marked
+ * positions) exactly.
  */
 function drawEquityCurve() {
   const cvs = document.getElementById('eq-canvas');
@@ -494,18 +629,9 @@ function drawEquityCurve() {
   ctx.clearRect(0, 0, cssW, cssH);
 
   const start = Number(settings.balanceStartSol) || 0;
-  const sorted = [...state.journal].sort((a, b) => a.ts - b.ts);
-  const pts = [{ t: state.startedAt, eq: start }];
-  let pnl = 0;
-  for (const t of sorted) {
-    if (t.side === 'sell') pnl += (t.pnlSol || 0);
-    pts.push({ t: t.ts, eq: start + pnl });
-  }
-  let openPnl = 0;
-  for (const mint of Object.keys(state.positions || {})) openPnl += E.unrealizedPnl(state.positions[mint]);
-  pts.push({ t: Date.now(), eq: start + pnl + openPnl });
+  const pts = E.equityCurvePoints(state, start);
 
-  if (sorted.length === 0) {
+  if ((state.journal || []).length === 0) {
     ctx.fillStyle = '#5A6273';
     ctx.textAlign = 'center';
     ctx.font = '500 12px ui-sans-serif, system-ui, sans-serif';
@@ -610,19 +736,24 @@ function renderOpenPositions() {
   return mints.map((m) => {
     const p = state.positions[m];
     const pnl = E.unrealizedPnl(p);
-    const pct = p.costSol > 0 ? (pnl / p.costSol) * 100 : 0;
+    // D-08: percentage on the gross-invested basis — the same denominator
+    // closed rounds use (engine closeRound: returned/investedSol − 1). The
+    // old pnl/costSol (net-of-fee) basis made the % jump ~2×feeBps at the
+    // moment of close with no price move.
+    const pct = E.positionPnlPct(p);
     const win = pnl >= 0;
+    // D-28: data-pos-row/-pnl/-qty mark the nodes refreshLiveDerived updates
+    // in place on each heartbeat — the section itself is never rebuilt for a
+    // price tick.
     return `
-      <div class="stat" style="align-items:center">
+      <div class="stat" style="align-items:center" data-pos-row="${esc(p.mint)}">
         <span style="min-width:0;color:var(--text)">
           <strong style="font-size:14px">${esc(p.symbol)}</strong>
           <span class="dim mono" style="display:block;font-size:10.5px;margin-top:2px">${esc(E.short(p.mint))} · ${esc(p.site)}</span>
         </span>
         <span style="text-align:right;white-space:nowrap">
-          <span class="mono" style="font-size:12px">${fmt(p.qty, 2)} tokens</span>
-          <span class="${win ? 'green' : 'red'}" style="display:block;margin-top:3px;font-weight:800;font-size:14px">
-            ${win ? '+' : ''}${fmt(pnl)} SOL (${win ? '+' : ''}${pct.toFixed(1)}%)
-          </span>
+          <span class="mono" style="font-size:12px" data-pos-qty>${fmt(p.qty, 2)} tokens</span>
+          <span class="${win ? 'green' : 'red'}" style="display:block;margin-top:3px;font-weight:800;font-size:14px" data-pos-pnl>${win ? '+' : ''}${fmt(pnl)} SOL (${win ? '+' : ''}${pct.toFixed(1)}%)</span>
         </span>
       </div>`;
   }).join('');
@@ -750,7 +881,7 @@ function renderJournal(el) {
       <td class="num ${t.pnlSol === undefined ? 'dim' : t.pnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">
         ${t.pnlSol !== undefined ? (t.pnlSol >= 0 ? '+' : '') + fmt(t.pnlSol) : '—'}
       </td>
-      <td class="dim">${timeAgo(t.ts)}</td>
+      <td class="dim"><span data-rel-ts="${Number(t.ts) || 0}" title="${esc(formatDateTime(t.ts))}">${timeAgo(t.ts)}</span></td>
     </tr>`).join('');
   el.innerHTML = `
     <div class="card"><h3>All fills <span class="tag">${(state.journal || []).length}</span></h3>
@@ -887,20 +1018,26 @@ function editRoundNote(button) {
   cancel.addEventListener('click', () => renderSection('rounds'));
   save.addEventListener('click', async () => {
     const text = input.value.trim();
-    // A fill can land while the note is being written: annotate the freshest
-    // state so saving a note can never clobber a trade.
-    await loadAll();
-    const target = (state.rounds || []).find((r) => r.id === roundId) || round;
-    if (text) target.note = { text, t: Date.now() };
-    else delete target.note;
     try {
-      await saveState();
+      // D-22: mutate-with-retry. A fill can land while the note is being
+      // written; mutateState re-reads the FRESHEST state inside its retry
+      // loop and re-applies the note on it, so saving a note can never
+      // clobber a trade (and a concurrent seq bump triggers a re-apply
+      // instead of a lost write).
+      await mutateState((fresh) => {
+        const target = (fresh.rounds || []).find((r) => r.id === roundId);
+        if (!target) throw new Error('round no longer exists');
+        if (text) target.note = { text, t: Date.now() };
+        else delete target.note;
+      });
     } catch (err) {
       // D-15/D-25: keep the editor (and the typed text) on screen instead of
       // silently dropping the note when storage is unreadable/unwritable.
       save.textContent = 'Save failed — retry';
       return;
     }
+    lastFingerprint = dataFingerprint();
+    renderSidebar();
     renderSection('rounds');
   });
 }
@@ -943,21 +1080,23 @@ async function runReview(roundId) {
     const messages = buildCoachMessages(round, trades, roundFrames);
     const resp = await chrome.runtime.sendMessage({ type: 'pt_ai_chat', messages, maxTokens: 2000 });
     // The AI call takes seconds, and a fill can land in storage while it runs.
-    // Annotate the FRESHEST state — reloaded just before the write — so saving
-    // the review can never clobber a trade the user made mid-review.
-    await loadAll();
-    const freshRound = (state.rounds || []).find((r) => r.id === roundId);
-    const target = freshRound || round;
-    target.aiReview = {
-      t: Date.now(),
-      text: resp?.reply || ('Error: ' + (resp?.error || 'unknown')),
-      ok: !resp?.error,
-    };
-    await saveState();
+    // D-22: mutateState annotates the FRESHEST state inside its retry loop —
+    // and retries on a concurrent seq bump — so saving the review can never
+    // clobber a trade the user made mid-review.
+    await mutateState((fresh) => {
+      const target = (fresh.rounds || []).find((r) => r.id === roundId);
+      if (!target) throw new Error('round no longer exists');
+      target.aiReview = {
+        t: Date.now(),
+        text: resp?.reply || ('Error: ' + (resp?.error || 'unknown')),
+        ok: !resp?.error,
+      };
+    });
   } catch (err) {
     fail(err);
     return;
   }
+  lastFingerprint = dataFingerprint();
   renderSection('rounds');
 }
 
@@ -1087,10 +1226,15 @@ function toggleReplayPlayback() {
   const view = buildReplayView(currentReplay());
   if (replayCursor >= view.events.length - 1) replayCursor = 0;
   replayTimer = setInterval(() => {
-    const current = buildReplayView(currentReplay());
+    // D-26: replays can empty mid-playback (wallet reset from the popup).
+    // Without this guard the tick called buildReplayView(undefined) and threw
+    // a TypeError every 1.1 s forever.
+    const replay = currentReplay();
+    if (!replay) { stopReplayPlayback(); return; }
+    const current = buildReplayView(replay);
     if (replayCursor >= current.events.length - 1) stopReplayPlayback();
     else replayCursor += 1;
-    updateReplayView(buildReplayView(currentReplay()));
+    updateReplayView(buildReplayView(replay));
   }, 1100);
   updateReplayView(buildReplayView(currentReplay()));
 }
@@ -1238,7 +1382,12 @@ function replayFrames(replay) {
  */
 function renderReplay(el) {
   if (!replays.length) {
-    replayShell = null;
+    // D-26: replays can empty while frame playback runs (wallet reset from
+    // the popup). Nulling the shell alone left replayTimer firing
+    // buildReplayView(undefined) every 1.1 s — stop playback and release the
+    // shell (which clears the timer and the video-sync rAF) first.
+    stopReplayPlayback();
+    releaseReplayShell();
     el.innerHTML = `
       <div class="card">
         <h3>Session replay</h3>
@@ -1273,6 +1422,11 @@ function renderReplay(el) {
 
 /** Everything the replay needs for the current cursor position. */
 function buildReplayView(replay) {
+  // D-26: a missing replay (list emptied mid-playback) degrades to an empty
+  // view instead of a TypeError — callers stop or render the empty state.
+  if (!replay) {
+    return { replay: null, round: null, events: [], event: null, at: 0, relatedFrame: null, recording: null };
+  }
   const round = replayRound(replay);
   const trades = replayTrades(replay);
   const frames = replayFrames(replay);
@@ -1753,6 +1907,66 @@ function bindShareCard() {
  * that chain and shows the user exactly what a verifier would compute. If the
  * two disagree, stored state has been altered.
  */
+/**
+ * D-18: the cheap fingerprint chain verification is memoized by. Length plus
+ * head hash pins the chain contents (each link commits to its predecessor),
+ * and the claim inputs are included because claimMatchesChain depends on
+ * them. SHA-256 over the whole chain only re-runs when this key changes.
+ */
+function lbVerifyKey(chain, stats) {
+  const head = chain.length ? String(chain[chain.length - 1].hash || '') : '';
+  return [
+    chain.length,
+    head,
+    Number(stats.realizedPnlSol) || 0,
+    Number(settings.balanceStartSol) || 0,
+  ].join('|');
+}
+
+/**
+ * The verify panel's markup for the CURRENT cache state, rendered
+ * synchronously into the staged section. When the memoized result matches
+ * the live chain the resolved verdict is painted directly — no "Checking…"
+ * placeholder ever flickers back (D-18) — and a mismatch reads as one
+ * coherent sentence instead of the absurd "0 problems found · derived P&L
+ * differs by X SOL" (D-03).
+ */
+function lbVerifyView(chain, stats) {
+  if (!chain.length) {
+    return {
+      cls: 'lb-verify',
+      html: '<div class="lb-badge">·</div><div><div class="t">No trades committed yet</div><div class="s">Your first paper fill will start the chain.</div></div>',
+      derivedHtml: '<span class="dim">—</span>',
+    };
+  }
+  const cached = lbVerifyCache && lbVerifyCache.key === lbVerifyKey(chain, stats)
+    ? lbVerifyCache : null;
+  if (!cached) {
+    return {
+      cls: 'lb-verify',
+      html: '<div class="lb-badge">…</div><div><div class="t">Checking your trade chain…</div><div class="s">Re-deriving your result from committed fills.</div></div>',
+      derivedHtml: '<span class="dim">…</span>',
+    };
+  }
+  const ok = cached.valid && cached.ok;
+  const diffText = `${fmt(cached.diff, 4)} SOL`;
+  let detail;
+  if (ok) {
+    detail = `${chain.length} fills verified · displayed P&L matches the committed history`;
+  } else if (!cached.valid && !cached.ok) {
+    detail = `${cached.problems} problem${cached.problems === 1 ? '' : 's'} found in the chain, and the P&L it derives differs from the displayed figure by ${diffText}`;
+  } else if (!cached.valid) {
+    detail = `${cached.problems} problem${cached.problems === 1 ? '' : 's'} found in the chain`;
+  } else {
+    detail = `every hash verifies, but the displayed realized P&L differs from the chain-derived result by ${diffText}`;
+  }
+  return {
+    cls: 'lb-verify ' + (ok ? 'ok' : 'bad'),
+    html: `<div class="lb-badge">${ok ? '✓' : '!'}</div><div><div class="t">${ok ? 'Chain intact' : 'Chain does not match local state'}</div><div class="s">${detail}</div></div>`,
+    derivedHtml: `<span class="${cached.derivedPnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">${cached.derivedPnlSol >= 0 ? '+' : ''}${fmt(cached.derivedPnlSol, 3)} SOL</span>`,
+  };
+}
+
 function renderLeaderboard(el) {
   const chain = Array.isArray(state.attestChain) ? state.attestChain : [];
   const stats = E.sessionStats(state, settings);
@@ -1762,19 +1976,17 @@ function renderLeaderboard(el) {
   const roiPct = settings.balanceStartSol > 0
     ? (stats.realizedPnlSol / settings.balanceStartSol) * 100
     : 0;
+  const verify = lbVerifyView(chain, stats);
 
   el.innerHTML = `
     <div class="grid2">
       <div class="card">
         <h3>Verified record</h3>
-        <div id="lb-verify" class="lb-verify">
-          <div class="lb-badge">…</div>
-          <div><div class="t">Checking your trade chain…</div><div class="s">Re-deriving your result from committed fills.</div></div>
-        </div>
+        <div id="lb-verify" class="${verify.cls}">${verify.html}</div>
         <div class="stat" style="margin-top:14px"><span>Committed fills</span><span style="font-weight:750">${chain.length}</span></div>
         <div class="stat"><span>Claimed realized P&amp;L</span><span class="${stats.realizedPnlSol >= 0 ? 'green' : 'red'}" style="font-weight:750">${stats.realizedPnlSol >= 0 ? '+' : ''}${fmt(stats.realizedPnlSol, 3)} SOL · ${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(1)}% ROI</span></div>
         <div class="stat"><span>Declared starting bankroll</span><span style="font-weight:750">${fmt(settings.balanceStartSol, 2)} SOL</span></div>
-        <div class="stat" id="lb-derived"><span>Derived from chain</span><span class="dim">…</span></div>
+        <div class="stat" id="lb-derived"><span>Derived from chain</span>${verify.derivedHtml}</div>
         <h4>Chain head</h4>
         <div class="lb-proof" id="lb-head">${chain.length
           ? esc(chain[chain.length - 1].hash)
@@ -1879,38 +2091,46 @@ async function bindLeaderboard(el) {
   }
 
   const chain = Array.isArray(state.attestChain) ? state.attestChain : [];
-  const box = el.querySelector('#lb-verify');
-  const derived = el.querySelector('#lb-derived');
-  if (!box) return;
-
-  const result = await AT.verifyChain(chain);
+  if (!chain.length) return;
   const stats = E.sessionStats(state, settings);
-  const match = AT.claimMatchesChain(
-    { realizedPnlSol: stats.realizedPnlSol }, chain, settings.balanceStartSol, 1e-6
-  );
-
-  const ok = result.valid && match.ok;
-  box.className = 'lb-verify ' + (ok ? 'ok' : chain.length ? 'bad' : '');
-  box.innerHTML = `
-    <div class="lb-badge">${ok ? '✓' : chain.length ? '!' : '·'}</div>
-    <div>
-      <div class="t">${ok ? 'Chain intact' : chain.length ? 'Chain does not match local state' : 'No trades committed yet'}</div>
-      <div class="s">${ok
-        ? `${result.length} fills verified · displayed P&L matches the committed history`
-        : chain.length
-          ? `${result.problems.length} problem${result.problems.length === 1 ? '' : 's'} found · derived P&L differs by ${fmt(match.diff, 4)} SOL`
-          : 'Your first paper fill will start the chain.'}</div>
-    </div>`;
-
-  if (derived) {
-    const value = match.replayed.realizedPnlSol;
-    derived.innerHTML = `<span>Derived from chain</span><span class="${value >= 0 ? 'green' : 'red'}" style="font-weight:750">${value >= 0 ? '+' : ''}${fmt(value, 3)} SOL</span>`;
+  const key = lbVerifyKey(chain, stats);
+  // D-18: memoized — the render already painted the resolved verdict for
+  // this exact chain, so there is nothing to hash again.
+  if (lbVerifyCache && lbVerifyCache.key === key) return;
+  // A verify for this same chain is already in flight; it re-renders on
+  // landing, so starting another would only burn CPU.
+  if (lbVerifyInFlightKey === key) return;
+  lbVerifyInFlightKey = key;
+  try {
+    const result = await AT.verifyChain(chain);
+    const match = AT.claimMatchesChain(
+      { realizedPnlSol: stats.realizedPnlSol }, chain, settings.balanceStartSol, 1e-6
+    );
+    lbVerifyCache = {
+      key,
+      valid: result.valid,
+      problems: result.problems.length,
+      ok: match.ok,
+      diff: match.diff,
+      derivedPnlSol: match.replayed.realizedPnlSol,
+    };
+  } finally {
+    lbVerifyInFlightKey = null;
   }
+  // D-18: this await can outlive the markup it was bound to (a staged refresh
+  // replaced the section, or the user navigated away). Never write into a
+  // possibly-detached node — re-render from the cache instead, which paints
+  // the resolved verdict synchronously. The rebind's cache hit above stops
+  // any recursion.
+  if (currentSection === 'leaderboard') renderSection('leaderboard');
 }
 
 /* ---------- coach ---------- */
 
 function renderCoach(el) {
+  // D-17: #coach-session-out is filled FROM module state (sessionReview), so
+  // the answer is part of every staged render — a background refresh can no
+  // longer wipe it seconds after it lands.
   const reviewed = (state.rounds || []).filter((r) => r.aiReview);
   const reviewedCount = reviewed.length;
   const summary = buildSummaryForCoach();
@@ -1926,7 +2146,7 @@ function renderCoach(el) {
           across trades rather than one-off outcomes.
         </p>
         <button class="btn" id="coach-session">Run session review</button>
-        <div id="coach-session-out" style="margin-top:14px" class="review"></div>
+        <div id="coach-session-out" style="margin-top:14px" class="review${sessionReview && sessionReview.error ? ' error' : ''}">${sessionReview ? esc(sessionReview.text) : ''}</div>
       </div>
       <div class="card">
         <h3>Session stats</h3>
@@ -2077,12 +2297,21 @@ function avgHold() {
   return (rounds.reduce((s, r) => s + r.heldMs, 0) / rounds.length / 60000).toFixed(1);
 }
 
+/**
+ * D-17: every stage of the session review goes through module state, and the
+ * coach section is re-rendered FROM that state. The old flow wrote the answer
+ * into the live DOM only; the next staged refresh (whose markup still held an
+ * empty box) discarded it seconds after it rendered.
+ */
+function setSessionReview(text, error) {
+  sessionReview = { text, error: Boolean(error) };
+  if (currentSection === 'coach') renderSection('coach');
+}
+
 async function runSessionReview() {
-  const out = document.getElementById('coach-session-out');
-  out.textContent = 'Analyzing session…';
-  out.className = 'review';
+  setSessionReview('Analyzing session…', false);
   const summary = buildSummaryForCoach();
-  if (!summary) { out.textContent = 'No closed round trips yet.'; return; }
+  if (!summary) { setSessionReview('No closed round trips yet.', false); return; }
   const messages = [
     { role: 'system', content: 'You are a Solana memecoin trading coach. Given a set of paper-trade round trips, identify recurring patterns and the #1 bad habit hurting the trader. Suggest one drill or rule to fix the habit. Be concise and specific.' },
     { role: 'user', content: `Here are all my round trips:\n${summary.roundText}\n\nWin avg: ${summary.avgWin.toFixed(1)}%, loss avg: ${summary.avgLoss.toFixed(1)}%, avg hold: ${summary.avgHold.toFixed(1)}m.\n\nWhat is my biggest bad habit, and what is one concrete rule to fix it?` },
@@ -2093,12 +2322,10 @@ async function runSessionReview() {
   } catch (err) {
     // D-21: a service-worker failure used to reject unhandled, leaving the
     // box stuck at "Analyzing session…" forever. Land it in the output.
-    out.textContent = 'Error: ' + ((err && err.message) ? err.message : String(err));
-    out.classList.add('error');
+    setSessionReview('Error: ' + ((err && err.message) ? err.message : String(err)), true);
     return;
   }
-  out.textContent = resp?.reply || ('Error: ' + (resp?.error || 'unknown'));
-  if (resp?.error) out.classList.add('error');
+  setSessionReview(resp?.reply || ('Error: ' + (resp?.error || 'unknown')), Boolean(resp?.error));
 }
 
 /* ---------- settings ---------- */
@@ -2254,8 +2481,16 @@ function bindSettings() {
  * that lie, and `Number(v) || 10` silently turned an invalid (or 0) balance
  * into 10. Every coercion or rejection is appended to `notes` so the save
  * status can SAY what happened instead of silently altering the input.
+ *
+ * D-19: returns ONLY the keys this form controls — it must never spread the
+ * module `settings` object in. That object is frozen at dashboard-load time
+ * while the Settings tab is open (the tab counts as busy), so spreading it
+ * baked every stale value in and Save reverted whatever the content script
+ * had written meanwhile: panel position, bar position/hidden, overlay size,
+ * auto-hide. The caller lays these keys over a FRESH storage read instead.
+ * `base` supplies the saved fallback for a rejected balance.
  */
-function gatherSettingsFromForm(notes = []) {
+function gatherSettingsFromForm(notes = [], base = settings) {
   const clampInt = (id, min, max, fallback, label) => {
     const raw = document.getElementById(id).value;
     const n = Math.round(Number(raw));
@@ -2282,8 +2517,8 @@ function gatherSettingsFromForm(notes = []) {
 
   // D-42/D-06: an invalid balance keeps the SAVED value and says so — it
   // must never silently become 10 (or anything else the user did not type).
-  const savedBalance = Number(settings.balanceStartSol) >= 0.1
-    ? Number(settings.balanceStartSol)
+  const savedBalance = Number(base.balanceStartSol) >= 0.1
+    ? Number(base.balanceStartSol)
     : DEFAULTS.balanceStartSol;
   const balanceRaw = document.getElementById('set-balance').value;
   const balanceNum = Number(balanceRaw);
@@ -2297,7 +2532,6 @@ function gatherSettingsFromForm(notes = []) {
   if (!sellPcts.length) notes.push('quick-sell presets were empty — defaults restored');
 
   return {
-    ...settings,
     balanceStartSol,
     // D-11: integers 0..1000 only — a negative fee inverts the arithmetic.
     feeBps: clampInt('set-fee', 0, 1000, DEFAULTS.feeBps, 'fee bps'),
@@ -2333,9 +2567,6 @@ let saveStatusTimer = null;
 
 async function saveFromForm() {
   const notes = [];
-  // Merge form values into the existing settings object so fields that are not
-  // exposed in the form (like overlay size) are not wiped.
-  settings = { ...settings, ...gatherSettingsFromForm(notes) };
   // D-47: the save flow reports into its OWN status element — it used to
   // write "Saved." into the AI-test output span and never clear it.
   const status = document.getElementById('save-status');
@@ -2352,6 +2583,19 @@ async function saveFromForm() {
       }, 2500);
     }
   };
+  // D-19: re-read pt_settings FRESH at save time and lay only the
+  // form-controlled keys over that copy. The module `settings` object is
+  // frozen at dashboard-load time while this tab is open (the Settings tab
+  // counts as busy), so `{...stale, ...form}` silently reverted every
+  // content-script settings write made meanwhile — the user's dragged panel
+  // and bar positions, overlay size, bar hidden state, auto-hide.
+  const stored = await store.get(['pt_settings']);
+  if (stored === null) {
+    show('Save failed: storage is unreadable — nothing was saved. Reload the dashboard and try again.', true);
+    return;
+  }
+  const freshSettings = E.mergeSettings(stored.pt_settings);
+  settings = { ...freshSettings, ...gatherSettingsFromForm(notes, freshSettings) };
   try {
     await saveSettings();
   } catch (err) {
