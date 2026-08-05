@@ -213,7 +213,19 @@ async function init() {
   // D-28: live-derived values (open-position P&L, relative timestamps, the
   // sidebar equity) update IN PLACE after each change check — they never
   // rebuild a section, so scroll and hover survive the 800 ms heartbeat.
-  setInterval(() => { refreshIfChanged().then(refreshLiveDerived).catch(() => {}); }, 4000);
+  // D-43: storage.onChanged (watchDashboardStorage) is the PRIMARY refresh
+  // path — every relevant write in this profile fires it instantly. This
+  // interval is only a safety net for a missed event, so it runs at 30 s,
+  // not 4 s, and never while the tab is hidden: a background dashboard
+  // deserializing the full state plus up to 80 base64 frames every 4 s
+  // bought nothing. Returning to the tab refreshes immediately.
+  setInterval(() => {
+    if (document.hidden) return;
+    refreshIfChanged().then(refreshLiveDerived).catch(() => {});
+  }, 30_000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshIfChanged().then(refreshLiveDerived).catch(() => {});
+  });
 
   // The overlay's Flex button lands here: #flex=<mint> opens the share
   // composer for that coin — the open position if one exists (the partial-
@@ -439,12 +451,22 @@ async function loadAll() {
   // stalled database left the ENTIRE dashboard blank, with no error to explain
   // it. Kick the load off without blocking the first paint, then repaint the
   // Replay view only if recordings actually arrived.
-  loadRecordings()
-    .then(() => {
-      if (Object.keys(recordings).length && currentSection === 'replay') renderSection('replay');
-    })
-    .catch(() => {});
+  //
+  // D-39: recordings only change when a new replay lands — reopening the
+  // database on every refresh bought nothing. Reload them only when the
+  // replay list itself changed; replay-section ENTRY also refreshes (bindNav)
+  // for videos that finish saving after their replay row appeared.
+  const replayFingerprint = replays.map((r) => r.sessionId).join('|');
+  if (replayFingerprint !== lastRecordingsFingerprint) {
+    lastRecordingsFingerprint = replayFingerprint;
+    loadRecordings()
+      .then(() => {
+        if (Object.keys(recordings).length && currentSection === 'replay') renderSection('replay');
+      })
+      .catch(() => {});
+  }
 }
+let lastRecordingsFingerprint = null;
 
 /**
  * D-15: a visible, plain-DOM banner while storage is unreadable, removed the
@@ -548,6 +570,13 @@ function bindNav() {
     b.addEventListener('click', () => {
       currentSection = b.dataset.section;
       if (currentSection !== 'replay') { stopReplayPlayback(); releaseReplayShell(); }
+      // D-39: entering Replay refreshes recordings once — a video that
+      // finished saving after its replay row appeared is picked up here.
+      if (currentSection === 'replay') {
+        loadRecordings()
+          .then(() => { if (currentSection === 'replay') renderSection('replay'); })
+          .catch(() => {});
+      }
       document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
       SECTIONS.forEach((id) => document.getElementById(id).classList.toggle('hidden', id !== currentSection));
       renderSection(currentSection);

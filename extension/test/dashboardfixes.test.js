@@ -1425,3 +1425,26 @@ test('D-50: frame data URLs are escaped into src attributes', () => {
     'no unescaped interpolation remains');
   assert.doesNotMatch(dashJs, /src="\$\{f\.dataUrl\}"/);
 });
+
+test('D-43: the poll is a 30s hidden-gated safety net; storage events stay primary', () => {
+  // The 4s full-storage deserialize (state + up to 80 base64 frames) ran for
+  // the tab's lifetime, hidden or not, duplicating the onChanged path.
+  assert.doesNotMatch(dashJs, /refreshLiveDerived\).catch\(\(\) => \{\}\); \}, 4000\)/,
+    'the 4s always-on poll must be gone');
+  assert.match(dashJs, /if \(document\.hidden\) return;\s*\n\s*refreshIfChanged\(\)\.then\(refreshLiveDerived\)/,
+    'the safety-net poll must skip hidden tabs');
+  assert.match(dashJs, /\}, 30_000\)/, 'the safety net runs at 30s');
+  assert.match(dashJs, /visibilitychange/,
+    'returning to the tab must refresh immediately instead of waiting out the net');
+  assert.match(dashJs, /some\(\(key\) => key in changes\)/,
+    'the event-driven refresh path must remain the primary');
+});
+
+test('D-39: recordings reload only when the replay list changes, plus on Replay entry', () => {
+  const loadAllFn = fnBlock(dashJs, 'async function loadAll()');
+  assert.match(loadAllFn, /replayFingerprint !== lastRecordingsFingerprint/,
+    'an unchanged replay list must not reopen IndexedDB');
+  const nav = fnBlock(dashJs, 'function bindNav()');
+  assert.match(nav, /currentSection === 'replay'\) \{\s*\n\s*loadRecordings\(\)/,
+    'entering Replay refreshes recordings for late-saving videos');
+});
