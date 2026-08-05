@@ -73,6 +73,9 @@ video evidence doing the heavy lifting.
 - **The positions bar respects late headers.** It now measures the site
   header until it settles, so slow-painting headers no longer end up
   underneath it.
+- **The dashboard stopped re-reading everything every 4 seconds.** It now
+  refreshes the instant your data changes, naps while hidden, and leaves
+  the recordings database alone unless a new replay landed.
 
 ## v2.6.0 — 2026-08-05
 
