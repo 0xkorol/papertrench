@@ -1497,6 +1497,9 @@
     // A fill in ANOTHER tab changes the portfolio too; without this the bar
     // would keep showing a chip for a position that is already closed.
     renderPositionsBar();
+    // A close adopted from another tab moves the discipline streaks too —
+    // this event-driven refresh is what keeps streak math out of the tick path.
+    refreshTrenchCache();
     syncAveragePriceLines();
   }
 
@@ -1856,6 +1859,49 @@
   // 75% total leaves the position, silently, with two success toasts.
   let sellInFlight = false;
 
+  /* ------------- Trench: close-time derived display (GAMIFY.md) -------------
+   * Streaks and grades are O(rounds)-per-call scans over up to 500 stored
+   * rounds. They are computed ONLY when state actually changes shape (a close
+   * here, an external close adopted, a full renderAll) — never inside the
+   * per-tick render path, which is the F-18 starvation class in the ISOLATED
+   * world. Renderers read the cache; the cache never writes state.
+   */
+  let trenchStreaks = null;
+  let trenchRoundsKey = null;
+
+  function refreshTrenchCache() {
+    const G = window.PTGamify;
+    if (!G) { trenchStreaks = null; updateTrenchBarChip(); return; }
+    // adoptState fires on every ~800 ms persist echo while a position's mark
+    // moves — not only on closes. Streaks depend ONLY on the closed-rounds
+    // list (newest-first, engine unshift), so a cheap shape key gates the
+    // O(rounds²) scan: it changes exactly when a round lands, never on a
+    // mark/seq-only echo. Same fingerprint discipline as D-27/D-28.
+    const rounds = state.rounds || [];
+    const key = `${rounds.length}|${rounds[0] ? Number(rounds[0].closedAt) || 0 : 0}`;
+    if (key === trenchRoundsKey) return;
+    trenchRoundsKey = key;
+    trenchStreaks = G.streaks(state);
+    updateTrenchBarChip();
+  }
+
+  /** Streak chip on the positions bar: visible from 3 up — below that it is
+   *  noise, not fire. Built into the bar template; textContent-only updates. */
+  function updateTrenchBarChip() {
+    if (!els.barStreak) return;
+    const st = trenchStreaks;
+    const parts = [];
+    if (st && st.journal.current >= 3) parts.push(`🔥${st.journal.current} journal`);
+    if (st && st.cleanExit.current >= 3) parts.push(`🔥${st.cleanExit.current} clean`);
+    if (!parts.length) {
+      els.barStreak.classList.add('pt-hidden');
+      els.barStreak.textContent = '';
+      return;
+    }
+    els.barStreak.classList.remove('pt-hidden');
+    els.barStreak.textContent = parts.join(' · ');
+  }
+
   async function doSell(fraction) {
     if (!token) return toast('No token detected on this page');
     if (sellInFlight) return toast('Sell already in progress…');
@@ -1907,7 +1953,22 @@
         const pnl = result.trade.pnlSol;
         const exitMcap = mcapAtPrice(result.trade.priceNative);
         toast(`Sold ${Math.round(fraction * 100)}%${exitMcap ? ` at ${fmtMoney(exitMcap)} MC` : ''} — ${pnl >= 0 ? '+' : ''}${E.fmt(pnl)} SOL paper`);
-        if (result.round) toast(`Round closed: ${result.round.pnlSol >= 0 ? '+' : ''}${E.fmt(result.round.pnlSol)} SOL (${result.round.pnlPct.toFixed(1)}%)`);
+        if (result.round) {
+          toast(`Round closed: ${result.round.pnlSol >= 0 ? '+' : ''}${E.fmt(result.round.pnlSol)} SOL (${result.round.pnlPct.toFixed(1)}%)`);
+          // The grade toast judges PROCESS, decoupled from P&L on purpose: a
+          // disciplined red earns its praise, a lucky win gets named as luck
+          // (GAMIFY.md). Plain text — toast() renders textContent only.
+          const grade = window.PTGamify ? window.PTGamify.roundGrade(state, result.round) : null;
+          if (grade) {
+            const red = result.round.pnlSol < 0;
+            const flavor = grade.luckyWin
+              ? 'that habit pays until it doesn’t'
+              : red && (grade.letter === 'S' || grade.letter === 'A')
+                ? 'that’s the job'
+                : grade.parts.length ? grade.parts[0].note : 'clean process';
+            toast(`${red ? 'Red round' : 'Green round'}, ${grade.letter} process — ${flavor}`);
+          }
+        }
       }
     } catch (err) { toast(err.message || 'Sell failed'); }
     renderAll();
@@ -2526,6 +2587,17 @@
     }
     .pt-closed-pnl { font-size: 21px; font-weight: 850; letter-spacing: -0.6px; line-height: 1.2; }
     .pt-closed-meta { margin-top: 3px; font-size: 10px; color: var(--pt-dim); }
+    /* Process grade chip (GAMIFY.md): grades judge process, never P&L. */
+    .pt-grade {
+      margin-right: 6px; padding: 2px 7px; border-radius: 999px;
+      font-family: var(--pt-mono); font-size: 9px; font-weight: 800; letter-spacing: 0.6px;
+      border: 1px solid var(--pt-line-2); color: var(--pt-dim);
+    }
+    .pt-grade-s { color: #C9B2FF; border-color: rgba(183, 134, 255, 0.45); }
+    .pt-grade-a { color: var(--pt-green); border-color: rgba(52, 211, 153, 0.4); }
+    .pt-grade-b { color: #9CC2FF; border-color: rgba(106, 169, 255, 0.4); }
+    .pt-grade-c { color: var(--pt-amber); border-color: rgba(255, 157, 69, 0.4); }
+    .pt-grade-d, .pt-grade-f { color: var(--pt-red); border-color: rgba(255, 95, 86, 0.4); }
 
     /* ---------------- sell row ---------------- */
 
@@ -2758,6 +2830,14 @@
       font-family: var(--pt-mono); font-size: 12.5px; font-weight: 800;
       letter-spacing: -0.2px;
     }
+    /* Discipline streak chip (GAMIFY.md): visible from 3 up, text-only. */
+    .pt-bar-streak {
+      display: flex; align-items: center; flex: none;
+      padding: 0 11px; border-right: 1px solid var(--pt-line);
+      font-family: var(--pt-mono); font-size: 10px; font-weight: 700;
+      letter-spacing: 0.3px; color: var(--pt-amber); white-space: nowrap;
+    }
+    .pt-bar-streak.pt-hidden { display: none; }
 
     /* scrolling chip rail */
     .pt-bar-rail {
@@ -3047,6 +3127,7 @@
             <span class="pt-bar-label">Paper</span>
           </div>
           <div class="pt-bar-total" id="pt-bar-total"></div>
+          <div class="pt-bar-streak pt-hidden" id="pt-bar-streak" title="Discipline streaks — journal · clean exits (from 3 up)"></div>
           <div class="pt-bar-rail" id="pt-bar-rail"></div>
           <div class="pt-bar-actions">
             <button class="pt-bar-btn" id="pt-bar-hide" title="Hide positions bar">${ICONS.minimize}</button>
@@ -3156,6 +3237,7 @@
     els.bar = shadow.getElementById('pt-bar');
     els.barGrip = shadow.getElementById('pt-bar-grip');
     els.barTotal = shadow.getElementById('pt-bar-total');
+    els.barStreak = shadow.getElementById('pt-bar-streak');
     els.barRail = shadow.getElementById('pt-bar-rail');
     els.barTab = shadow.getElementById('pt-bar-tab');
     els.liveDot = shadow.getElementById('pt-live-dot');
@@ -3616,6 +3698,8 @@
     renderSparkline();
     updateOverlayVisibility();
     renderPositionsBar();
+    // Event-driven, not per-tick: renderAll runs on boot, nav and fills.
+    refreshTrenchCache();
   }
 
   /**
@@ -4585,6 +4669,27 @@
     const status = document.createElement('span');
     status.className = 'pt-closed-badge';
     status.textContent = badge;
+    // Process grade chip (GAMIFY.md) — computed HERE, inside the once-per-
+    // close keyed build, so the O(rounds) grade scan never rides a heartbeat.
+    // Full closes only: partial exits are not rounds and are never graded.
+    if (closed.kind === 'round' && window.PTGamify && token) {
+      const gradedRound = (state.rounds || []).find(
+        (r) => r.mint === token.mint && Number(r.closedAt) === Number(closed.closedAt));
+      const grade = gradedRound ? window.PTGamify.roundGrade(state, gradedRound) : null;
+      if (grade) {
+        const chip = document.createElement('span');
+        chip.className = `pt-grade pt-grade-${grade.letter.toLowerCase()}`;
+        chip.textContent = grade.luckyWin ? `${grade.letter} · LUCKY` : grade.letter;
+        chip.title = grade.parts.length
+          ? grade.parts.map((p) => p.note).join(' ')
+          : (closed.pnlSol < 0 ? 'Red round, clean process — that’s the job.' : 'Clean process.');
+        // right is still empty here — status/flex are appended below, so a
+        // plain append yields chip → status → flex. (insertBefore(chip,
+        // status) threw NotFoundError in real DOM: status was not yet a
+        // child. The fake-DOM harness is lenient exactly where Chrome isn't.)
+        right.appendChild(chip);
+      }
+    }
     // Flex the result — wins AND losses ("people might wanna flex their
     // losses also"). The composer floats right here, centered over the page
     // — no tab switch. It cards the newest round for the mint, or the open
@@ -4639,6 +4744,7 @@
   let flexModel = null;
   let flexPrefs = null;    // working copy of settings.cardPrefs while open
   let flexMedia = null;    // Image element for an uploaded background
+  let flexTrench = null;   // PTGamify-derived rank/grade/badges for the open card
   let flexUploads = [];    // [{id, name, dataUrl}] served by the worker
 
   const FLEX_FLAGS = [
@@ -4649,6 +4755,7 @@
     ['showUsd', 'USD sub-lines'],
     ['showDate', 'Date'],
     ['showAfter', 'After-exit line'],
+    ['showTrench', 'Rank & grade'],
   ];
 
   function onFlexKeydown(e) {
@@ -4745,6 +4852,7 @@
     if (!PC || !shadow || !mint) return;
     const pos = state.positions && state.positions[mint];
     let source = null;
+    let trenchRound = null;
     if (pos) {
       source = PC.positionCardSource(pos, state.journal, {
         pnlSol: E.unrealizedPnl(pos),
@@ -4755,8 +4863,27 @@
       // state.rounds is newest-first (engine unshifts on close).
       const round = (state.rounds || []).find((r) => r.mint === mint);
       if (round) source = PC.roundCardSource(round, state.journal);
+      trenchRound = round || null;
     }
     if (!source) return;
+
+    // Same derived-display shape the dashboard composer passes — one
+    // implementation (PTGamify), two callers, zero drift (GAMIFY.md).
+    flexTrench = null;
+    if (window.PTGamify) {
+      const G = window.PTGamify;
+      const grade = trenchRound ? G.roundGrade(state, trenchRound) : null;
+      const r = G.rank(state);
+      const earned = G.badges(state).filter((b) => b.earned).slice(0, 4).map((b) => b.label);
+      if (grade || r || earned.length) {
+        flexTrench = {
+          gradeLetter: grade ? grade.letter : null,
+          luckyWin: Boolean(grade && grade.luckyWin),
+          rankName: r ? r.name : null,
+          badges: earned,
+        };
+      }
+    }
 
     flexSource = source;
     flexPrefs = { ...(settings.cardPrefs || {}) };
@@ -4783,6 +4910,7 @@
     flexModel = PC.cardModel(flexSource, {
       handle: (settings.leaderboardIdentity || {}).handle || '',
       prefs: flexPrefs || settings.cardPrefs || {},
+      trench: flexTrench,
     });
     if (!flexModel) return false;
     PC.drawCard(ctx2d, flexModel, flexMedia);

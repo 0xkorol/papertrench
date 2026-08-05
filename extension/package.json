@@ -1,6 +1,6 @@
 {
   "name": "papertrench",
-  "version": "2.9.1",
+  "version": "2.10.0",
   "private": true,
   "description": "Paper-trade Solana memecoins on Axiom, Padre, Photon, GMGN, BullX and more.",
   "scripts": {

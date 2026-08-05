@@ -222,7 +222,8 @@ test('BRAND LOCK: drawCard calls drawBranding unconditionally, as its final act'
 test('BRAND LOCK: the brand line and URL are the doctrine strings', () => {
   assert.equal(PC.BRAND_TEXT, 'PaperTrench');
   assert.match(PC.BRAND_TAGLINE, /paper trading — not financial advice/);
-  assert.equal(PC.SITE_URL, 'onlyterp.github.io/papertrench');
+  // v2.10.0: the site moved to its own domain — the card advertises it.
+  assert.equal(PC.SITE_URL, 'papertrench.com');
 });
 
 /* ================= customization flags ================= */

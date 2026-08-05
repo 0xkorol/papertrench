@@ -18,6 +18,30 @@
 
   const RELEASES = [
     {
+      v: '2.10.0', date: 'Aug 5, 2026', iso: '2026-08-05',
+      tags: ['feature'],
+      title: 'Trench Rank — discipline is now the game',
+      blurb: 'Every closed round gets a process grade, S to F. A disciplined red grades S. A lucky win grades F — and gets called lucky.',
+      article: 'news-trench-rank.html',
+      points: [
+        '<b>Process grades on every closed round.</b> Graded on your plan, your exit, your sizing, and whether the entry was revenge — never on P&amp;L. The grade lands on the close toast, the rounds table, the calendar, and the share card.',
+        '<b>The Trench Rank ladder.</b> Six tiers from Fresh Meat to Graduated, staged over the graduation criteria with live progress bars. The summit is the graduation bar itself — the game ends on purpose.',
+        '<b>Discipline streaks, daily drills, reps and badges.</b> Streak flames from 3 up; one rotating drill a day measured from your actual rounds; reps diminish after 10 a day because tired reps don’t count. Badges exist for the things that predict survival — deliberately none for profit, win streaks, or volume.',
+        '<b>Zero new stored data.</b> Everything is derived live from the journal you already have. Your numbers are untouched — this update changes what gets celebrated, not what gets counted.',
+        '<b>Also fixed:</b> the graduation bar’s thesis criterion could never pass (it counted a legacy data shape) — real journalers now measure true.',
+      ],
+    },
+    {
+      v: '2.9.1', date: 'Aug 5, 2026', iso: '2026-08-05',
+      tags: ['fix'],
+      title: 'The average line tells the truth again',
+      blurb: 'Multichart layouts could land the average line a supply-factor off — and freeze it there.',
+      points: [
+        '<b>Average fill/exit lines no longer jump to absurd levels on mcap charts.</b> If you ran a multichart layout (or flipped a chart between price and market-cap mode), the level math trusted whichever data series ticked last — even when it was the same token in a different unit. Level math now vets every close by unit before using it, and draws no line at all rather than a wrong one until the right-unit data arrives.',
+        '<b>DCA moves the line immediately.</b> Averaging in while the line was still being created no longer leaves it at the old average.',
+      ],
+    },
+    {
       v: '2.9.0', date: 'Aug 5, 2026', iso: '2026-08-05',
       tags: ['feature'],
       title: 'The quick fixes live on the trading tab',

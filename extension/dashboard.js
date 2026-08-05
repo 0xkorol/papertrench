@@ -321,6 +321,11 @@ function dataFingerprint() {
     replays.reduce((sum, r) => sum + (r.checkpoints ? r.checkpoints.length : 0), 0),
     Object.keys(recordings).length,
     JSON.stringify(settings),
+    // The Trench Rank card renders day-keyed values (today's drill, today's
+    // reps) that change at local midnight with NO state change — the C-10
+    // rule says the fingerprint must cover everything rendered, so the local
+    // day joins it (same bucketing as gamify.dayKey / the calendar, D-49).
+    new Date().toDateString(),
   ].join('|');
 }
 
@@ -909,6 +914,7 @@ function renderOverview(el) {
       ${statTile('Best round', best ? `${best.pnlSol >= 0 ? '+' : ''}${fmt(best.pnlSol, 3)} SOL` : '—', best && best.pnlSol < 0 ? 'red' : 'green', best ? `${best.symbol} · ${best.pnlPct >= 0 ? '+' : ''}${best.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
       ${statTile('Worst round', worst ? `${worst.pnlSol >= 0 ? '+' : ''}${fmt(worst.pnlSol, 3)} SOL` : '—', worst && worst.pnlSol >= 0 ? 'green' : 'red', worst ? `${worst.symbol} · ${worst.pnlPct >= 0 ? '+' : ''}${worst.pnlPct.toFixed(1)}%` : 'No closed rounds yet')}
     </div>
+    ${renderTrenchRank()}
     <div class="grid2">
       <div class="card"><h3>Equity curve</h3><canvas class="chart" id="eq-canvas"></canvas></div>
       <div class="card"><h3>Recent round trips</h3><div id="rounds-mini"></div></div>
@@ -934,6 +940,86 @@ function statTile(label, value, tone, sub) {
       <div class="lab" style="font-size:9.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:var(--faint)">${esc(label)}</div>
       <div class="${tone}" style="margin-top:5px;font-size:23px;font-weight:800;letter-spacing:-0.6px">${esc(value)}</div>
       <div class="dim" style="margin-top:3px;font-size:11.5px">${esc(sub || '')}</div>
+    </div>`;
+}
+
+/* ---------------- Trench Rank (docs/GAMIFY.md UI pass) ---------------- */
+
+/** A thin progress bar; done bars go green, working bars amber. */
+function rankBar(progress, done) {
+  const pct = Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * 100);
+  return `<div class="rank-bar"><div class="rank-bar-fill${done ? ' done' : ''}" style="width:${pct}%"></div></div>`;
+}
+
+/** One streak stat: flame only from 3 up — below that it is noise, not fire. */
+function streakStat(label, s) {
+  const cur = s && Number.isFinite(s.current) ? s.current : 0;
+  const best = s && Number.isFinite(s.best) ? s.best : 0;
+  const flame = cur >= 3 ? '🔥 ' : '';
+  return `
+    <div class="stat" title="${esc(`Best: ${best}`)}">
+      <span class="dim">${esc(label)}</span>
+      <span class="mono">${flame}${cur > 0 ? cur : '—'}</span>
+    </div>`;
+}
+
+/**
+ * The Trench Rank card: rank + level, the next gate's progress, discipline
+ * streaks, today's drill, and the badge case. Everything is derived live by
+ * PTGamify from the same journal every other surface reads — this card can
+ * disagree with nothing (GAMIFY.md doctrine 2/4). Soft-degrades to nothing
+ * when gamify.js is absent, like the graduation panel does (D-16 class).
+ */
+function renderTrenchRank() {
+  const G = window.PTGamify;
+  if (!G) return '';
+  const r = G.rank(state);
+  if (!r) return '';
+  const now = Date.now();
+  const rep = G.reps(state, now);
+  const st = G.streaks(state);
+  const drill = G.drills(state, now);
+  const badges = G.badges(state);
+
+  const gates = r.next ? r.next.requirements.map((g) => `
+      <div class="rank-gate" title="${esc(g.label)}">
+        <span class="rank-gate-label">${g.done ? '<span class="green">✓</span> ' : ''}${esc(g.label)}</span>
+        ${rankBar(g.progress, g.done)}
+      </div>`).join('') : '';
+
+  const badgeCase = badges.map((b) => {
+    const when = b.earnedAt ? ` — ${formatDateTime(b.earnedAt)}` : '';
+    return `<span class="tag badge${b.earned ? ' earned' : ''}" title="${esc(b.detail + (b.earned ? when : ''))}">${esc(b.label)}</span>`;
+  }).join('');
+
+  const repsLine = rep.today.capped
+    ? 'Rep cap reached — tired reps don’t count. Review, don’t grind.'
+    : rep.today.diminished
+      ? `Rep ${rep.today.count} today — past ${G.REP_FULL_PER_DAY} they count half.`
+      : `${rep.today.count} of ${G.REP_FULL_PER_DAY} full-credit reps used today.`;
+
+  return `
+    <div class="card" style="margin-top:16px">
+      <h3>Trench Rank
+        <span style="margin-left:auto;font-weight:700;color:var(--amber)">TIER ${r.tier} · ${esc(r.name.toUpperCase())}</span>
+      </h3>
+      <div class="dim" style="font-size:11.5px;margin-bottom:10px">
+        LVL ${rep.level} · ${fmt(rep.total, 1)} reps — ${esc(repsLine)}
+      </div>
+      ${r.next ? `
+      <div class="lab" style="font-size:9.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:var(--faint);margin-bottom:6px">Next: ${esc(r.next.name)}</div>
+      ${gates}` : `
+      <div class="green" style="font-size:12.5px;margin-bottom:6px">Graduated — the bar is passed. The next step is not in this extension.</div>`}
+      <div class="rank-streaks">
+        ${streakStat('Journal streak', st.journal)}
+        ${streakStat('Clean exits', st.cleanExit)}
+        ${streakStat('No revenge', st.noRevenge)}
+      </div>
+      <div class="stat" title="${esc(drill.detail)}">
+        <span class="dim">Today’s drill: ${esc(drill.label)}</span>
+        <span class="mono">${drill.done ? '<span class="green">DONE</span>' : drill.progress >= drill.target ? '<span class="red">NOT MET</span>' : `${drill.progress}/${drill.target}`}</span>
+      </div>
+      <div class="rank-badges">${badgeCase}</div>
     </div>`;
 }
 
@@ -1148,6 +1234,44 @@ function renderCalendar(el) {
   const header = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     .map((d) => `<div class="cal-head">${d}</div>`).join('') + '<div class="cal-head cal-week-head">Week</div>';
 
+  // Dominant PROCESS grade per day (GAMIFY.md): bucketed by the LOCAL day of
+  // closedAt, the same bucketing the calendar itself uses (D-49 class) — a
+  // UTC bucket here would pin dots on the wrong cell across midnight. Grades
+  // come from one pass over the month's rounds; ties round DOWN to the worse
+  // letter — a split day is not rounded up to the better story.
+  const G = window.PTGamify;
+  const dayGrades = new Map();
+  if (G) {
+    for (const r of state.rounds || []) {
+      if (!(Number(r.closedAt) > 0)) continue;
+      const d = new Date(r.closedAt);
+      if (d.getFullYear() !== view.year || d.getMonth() !== view.month) continue;
+      const g = G.roundGrade(state, r);
+      if (!g) continue;
+      const list = dayGrades.get(d.getDate()) || [];
+      list.push(g.letter);
+      dayGrades.set(d.getDate(), list);
+    }
+  }
+  const GRADE_ORDER = ['S', 'A', 'B', 'C', 'D', 'F'];
+  const GRADE_DOT = { S: 'var(--violet)', A: 'var(--green)', B: 'var(--blue)', C: 'var(--amber)', D: 'var(--red)', F: 'var(--red)' };
+  const gradeDot = (day) => {
+    const letters = dayGrades.get(day);
+    if (!letters || !letters.length) return '';
+    const counts = {};
+    for (const l of letters) counts[l] = (counts[l] || 0) + 1;
+    let pick = null;
+    for (const l of GRADE_ORDER) {
+      if (!counts[l]) continue;
+      if (!pick || counts[l] > counts[pick] || (counts[l] === counts[pick] && GRADE_ORDER.indexOf(l) > GRADE_ORDER.indexOf(pick))) pick = l;
+    }
+    const isTie = Object.keys(counts).some((l) => l !== pick && counts[l] === counts[pick]);
+    const tip = isTie
+      ? `Process: split day — ties round down to ${pick} (${letters.length} rounds)`
+      : `Process: mostly ${pick} (${letters.length} round${letters.length > 1 ? 's' : ''})`;
+    return `<span class="cal-grade" style="background:${GRADE_DOT[pick]}" title="${esc(tip)}"></span>`;
+  };
+
   const body = cal.weeks.map((week) => {
     const cells = week.days.map((c) => {
       if (!c) return '<div class="cal-day blank" aria-hidden="true"></div>';
@@ -1160,7 +1284,7 @@ function renderCalendar(el) {
       if (c.buys) parts.push(`${c.buys} buy${c.buys > 1 ? 's' : ''}`);
       if (c.sells) parts.push(`${c.sells} sell${c.sells > 1 ? 's' : ''}`);
       return `<div class="cal-day ${tone}${today}"${tip ? ` title="${esc(tip)}"` : ''}>
-        <span class="cal-date">${c.day}</span>
+        <span class="cal-date">${c.day}</span>${gradeDot(c.day)}
         ${c.sells
           ? `<span class="cal-pnl">${signed(c.realizedSol)}</span>`
           : '<span class="cal-pnl cal-zero">0</span>'}
@@ -1257,6 +1381,12 @@ function renderAfterCell(r) {
 }
 
 function renderRounds(el) {
+  // Grades are computed in ONE pass over the table's rounds: roundGrade scans
+  // priors per call, so a naive per-cell call inside nested templates is the
+  // O(n²)-of-O(n) shape that starves renders at the 500-round cap.
+  const G = window.PTGamify;
+  const gradeById = new Map();
+  if (G) for (const r of state.rounds || []) gradeById.set(r.id, G.roundGrade(state, r));
   const rows = (state.rounds || []).map((r) => {
     const replay = RP.findReplay(replays, r.sessionId || '');
     const win = r.pnlSol >= 0;
@@ -1275,6 +1405,7 @@ function renderRounds(el) {
         <td class="num">${fmt(r.returnedSol, 4)}</td>
         <td class="num ${win ? 'green' : 'red'}" style="font-weight:800">${win ? '+' : ''}${fmt(r.pnlSol)}</td>
         <td class="num ${win ? 'green' : 'red'}">${win ? '+' : ''}${r.pnlPct.toFixed(1)}%</td>
+        <td>${renderGradeCell(gradeById.get(r.id), r)}</td>
         <td class="num" style="font-size:11.5px"><span class="green">+${fmt(r.peakPnlSol)}</span> <span class="dim">/</span> <span class="red">${fmt(r.troughPnlSol)}</span></td>
         <td>${renderAfterCell(r)}</td>
         <td>${renderExitCell(r)}</td>
@@ -1290,8 +1421,8 @@ function renderRounds(el) {
     <div class="card"><h3>Closed round trips <span class="tag">${(state.rounds || []).length}</span>
       <button class="btn-sec" id="rounds-export" style="margin-left:auto" ${(state.rounds || []).length ? '' : 'disabled'}>Export CSV</button></h3>
       <div class="log"><table>
-        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>After (1h)</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="16">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
+        <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th>Grade</th><th class="num">Peak/Worst</th><th>After (1h)</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="17">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
       </table></div>
     </div>`;
   // Handlers are attached in rebindSection() after the element is live.
@@ -1304,6 +1435,28 @@ function renderRounds(el) {
  * A win on a broken plan is flagged as luck, because rewarding it teaches the
  * wrong lesson — which is the entire reason for journaling a thesis up front.
  */
+
+/**
+ * The round's PROCESS grade (PTGamify.roundGrade). The tooltip is the
+ * receipt: every deduction's note, or the clean statement. A red round can
+ * wear an S; a lucky win says so out loud (GAMIFY.md doctrine).
+ */
+function renderGradeCell(grade, round) {
+  if (!grade) return '<span class="dim">—</span>';
+  const tone = {
+    S: ['var(--violet)', 'rgba(167,139,250,.4)'],
+    A: ['var(--green)', 'rgba(52,211,153,.35)'],
+    B: ['var(--blue)', 'rgba(106,169,255,.35)'],
+    C: ['var(--amber)', 'rgba(255,157,69,.35)'],
+    D: ['var(--red)', 'rgba(255,95,86,.25)'],
+    F: ['var(--red)', 'rgba(255,95,86,.45)'],
+  }[grade.letter] || ['var(--dim)', 'var(--line)'];
+  const receipt = grade.parts.length
+    ? grade.parts.map((p) => p.note).join(' ')
+    : (round.pnlSol < 0 ? 'Red round, clean process — that’s the job.' : 'Clean process.');
+  const lucky = grade.luckyWin ? ' <span class="tag" style="color:var(--amber);border-color:rgba(255,157,69,.35)" title="Green P&L on broken process — that habit pays until it doesn’t.">lucky</span>' : '';
+  return `<span class="tag mono" style="font-weight:800;color:${tone[0]};border-color:${tone[1]}" title="${esc(receipt)}">${grade.letter}</span>${lucky}`;
+}
 
 /** How much of the available move the exit actually captured. */
 function renderExitCell(round) {
@@ -2156,7 +2309,31 @@ const CARD_FLAG_INPUTS = [
   ['card-flag-usd', 'showUsd'],
   ['card-flag-date', 'showDate'],
   ['card-flag-after', 'showAfter'],
+  ['card-flag-trench', 'showTrench'],
 ];
+
+let cardTrenchCurrent = null;  // PTGamify-derived rank/grade/badges for the open card
+
+/**
+ * Rank, badges and (for a closed round) the process grade for the card being
+ * composed — computed by PTGamify from the same state every surface reads,
+ * then passed into cardModel so the overlay composer and this one can never
+ * disagree (the one-derivation doctrine, extended to derived display).
+ */
+function trenchCardOpts(round) {
+  const G = window.PTGamify;
+  if (!G) return null;
+  const grade = round ? G.roundGrade(state, round) : null;
+  const r = G.rank(state);
+  const earned = G.badges(state).filter((b) => b.earned).slice(0, 4).map((b) => b.label);
+  if (!grade && !r && !earned.length) return null;
+  return {
+    gradeLetter: grade ? grade.letter : null,
+    luckyWin: Boolean(grade && grade.luckyWin),
+    rankName: r ? r.name : null,
+    badges: earned,
+  };
+}
 
 /* ---- background gallery store (IndexedDB) ----
  *
@@ -2268,6 +2445,7 @@ function openShareCardForPosition(mint) {
     avgBuyNative: (E.averageFillPrices(state, mint) || {}).avgBuyNative,
   }, Date.now());
   if (!cardSourceCurrent) return;
+  cardTrenchCurrent = trenchCardOpts(null); // open position: rank/badges, no grade yet
   cardPrefs = { ...(settings.cardPrefs || {}) };
 
   cardMedia = null;
@@ -2289,6 +2467,7 @@ function openShareCard(roundId) {
   // composer, so the same round cards identically everywhere.
   cardSourceCurrent = PC.roundCardSource(round, state.journal);
   if (!cardSourceCurrent) return;
+  cardTrenchCurrent = trenchCardOpts(round);
   // Absent key = everything shown; the working copy is adopted per-modal so
   // half-toggled prefs never leak into settings without a persist.
   cardPrefs = { ...(settings.cardPrefs || {}) };
@@ -2314,6 +2493,7 @@ function paintShareCard() {
   cardModelCurrent = PC.cardModel(cardSourceCurrent, {
     handle: (settings.leaderboardIdentity || {}).handle || '',
     prefs: cardPrefs || settings.cardPrefs || {},
+    trench: cardTrenchCurrent,
   });
   if (!cardModelCurrent) return false;
   PC.drawCard(canvas.getContext('2d'), cardModelCurrent, cardMedia);

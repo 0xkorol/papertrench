@@ -295,6 +295,19 @@
     .stat:last-child, .replay-kv:last-child { border-bottom: none; }
     .stat > span:first-child, .replay-kv > span:first-child { font-size: 12px; color: var(--dim); }
 
+    /* Trench Rank card (docs/GAMIFY.md) */
+    .rank-gate { display: flex; align-items: center; gap: 12px; padding: 5px 0; }
+    .rank-gate-label { flex: 0 0 58%; font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rank-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+    .rank-bar-fill { height: 100%; background: var(--amber); }
+    .rank-bar-fill.done { background: var(--green); }
+    .rank-streaks { display: flex; gap: 18px; margin-top: 8px; }
+    .rank-streaks .stat { flex: 1; border-bottom: none; padding: 4px 0; }
+    .rank-badges { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 4px; }
+    .tag.badge { opacity: 0.38; }
+    .tag.badge.earned { opacity: 1; border-color: var(--amber); color: var(--text); }
+    .cal-grade { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; }
+
     .empty {
       display: grid; place-items: center; gap: 8px;
       padding: 40px 20px; text-align: center; color: var(--faint);
@@ -558,6 +571,7 @@
     }
     .cal-week-head { text-align: right; }
     .cal-day {
+      position: relative; /* anchors the .cal-grade process dot */
       min-height: 60px; padding: 7px 8px;
       display: flex; flex-direction: column; gap: 2px;
       background: rgba(255, 255, 255, 0.018);
@@ -687,6 +701,7 @@
   <script src="recordings.js"></script>
   <script src="replay.js"></script>
   <script src="mastery.js"></script>
+  <script src="gamify.js"></script>
   <!-- The modal must exist before dashboard.js runs (D-53): bindShareCard
        silently disables the composer if #card-modal is missing, and the old
        order was safe only by accident of init() being async. -->
@@ -719,6 +734,7 @@
         <label><input type="checkbox" id="card-flag-usd"> USD sub-lines</label>
         <label><input type="checkbox" id="card-flag-date"> Date</label>
         <label><input type="checkbox" id="card-flag-after"> After-exit line</label>
+        <label><input type="checkbox" id="card-flag-trench"> Rank &amp; grade</label>
         <span class="card-accents" id="card-accents">
           <span class="dim" style="font-size:11px">Trim</span>
           <button class="accent-swatch" data-accent="amber" title="Amber" style="background:#FF9D45"></button>

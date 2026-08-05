@@ -27,7 +27,7 @@
   const WATERMARK_TEXT = 'PAPER';
   const BRAND_TEXT = 'PaperTrench';
   const BRAND_TAGLINE = '· paper trading — not financial advice';
-  const SITE_URL = 'onlyterp.github.io/papertrench';
+  const SITE_URL = 'papertrench.com';
   const BRAND_BAR_HEIGHT = 64;
 
   const COLORS = {
@@ -403,6 +403,15 @@
     const on = (flag) => flag !== false;
     const requestedBg = options.background || prefs.background || null;
 
+    // Trench rank / process grade / badges (GAMIFY.md UI pass): derived by
+    // the COMPOSER via PTGamify from the same state every surface reads, and
+    // passed in — never computed here, so both composers stay in lockstep.
+    const trench = options.trench && typeof options.trench === 'object' ? options.trench : null;
+    const gradeLetter = trench && /^[SABCDF]$/.test(String(trench.gradeLetter || '')) ? trench.gradeLetter : '';
+    const badgeLabels = trench && Array.isArray(trench.badges)
+      ? trench.badges.filter((b) => typeof b === 'string' && b.trim()).slice(0, 4)
+      : [];
+
     return {
       symbol: String(source.symbol || shortMint(source.mint) || '—'),
       mint: String(source.mint || ''),
@@ -432,6 +441,12 @@
       dateText: stampAt > 0 ? formatStamp(stampAt) : '',
       afterText,
       afterColor,
+      // Process grade: PAPER PROCESS wording keeps it unmistakable that the
+      // grade judges process on a paper trade, and a lucky win says so.
+      gradeText: gradeLetter ? `${gradeLetter} PROCESS${trench.luckyWin ? ' · LUCKY' : ''}` : '',
+      gradeColor: { S: '#B786FF', A: COLORS.green, B: '#6AA9FF', C: COLORS.amber, D: COLORS.red, F: COLORS.red }[gradeLetter] || COLORS.dim,
+      rankText: trench && trench.rankName ? String(trench.rankName).toUpperCase() : '',
+      badgesText: badgeLabels.join(' · ').toUpperCase(),
       // Semantic verdict color — never overridden by the accent pick.
       accent: win ? COLORS.green : COLORS.red,
       // Cosmetic trim only.
@@ -445,6 +460,7 @@
         usd: on(prefs.showUsd),
         date: on(prefs.showDate),
         after: on(prefs.showAfter),
+        trench: on(prefs.showTrench),
       },
       // Never optional: a shared paper trade must be labelled as one. These
       // fields exist for callers to read; drawBranding does not consult them.
@@ -558,6 +574,14 @@
       ctx.fillStyle = COLORS.dim;
       ctx.font = '700 18px Inter, ui-sans-serif, system-ui, sans-serif';
       ctx.fillText(model.handle, WIDTH - 64, rightY);
+      rightY += 28;
+    }
+    // 5b. Process grade, continuing the top-right stack (GAMIFY.md): the
+    // grade judges PROCESS, so it rides the meta stack, never the P&L hero.
+    if (show.trench !== false && model.gradeText) {
+      ctx.fillStyle = model.gradeColor || COLORS.dim;
+      ctx.font = '800 18px ui-monospace, "JetBrains Mono", Menlo, monospace';
+      ctx.fillText(model.gradeText, WIDTH - 64, rightY);
     }
     ctx.textAlign = 'left';
 
@@ -616,10 +640,31 @@
     if (model.entryText && model.entryText !== '—') journey.push('ENTRY ' + model.entryText);
     if (!model.open && model.exitText && model.exitText !== '—') journey.push('EXIT ' + model.exitText);
     if (model.heldText && model.heldText !== '0s') journey.push('HELD ' + model.heldText);
+    let journeyRightEdge = 64;
     if (journey.length) {
       ctx.fillStyle = COLORS.dim;
       ctx.font = '500 19px ui-monospace, "JetBrains Mono", Menlo, monospace';
-      ctx.fillText(journey.join('   ·   '), 64, 584);
+      const journeyText = journey.join('   ·   ');
+      ctx.fillText(journeyText, 64, 584);
+      journeyRightEdge = 64 + ctx.measureText(journeyText).width;
+    }
+
+    // 9b. Trench rank + badges, right-aligned on the journey row — but only
+    // when they FIT beside it. Collisions degrade honestly: drop badges
+    // first, then the rank, never overprint the journey.
+    if (show.trench !== false && (model.rankText || model.badgesText)) {
+      ctx.font = '700 17px ui-monospace, "JetBrains Mono", Menlo, monospace';
+      const roomFor = (text) => text
+        && ctx.measureText(text).width <= (WIDTH - 64) - journeyRightEdge - 40;
+      const combined = model.rankText && model.badgesText
+        ? `${model.rankText}   ·   ${model.badgesText}` : '';
+      const line = [combined, model.rankText, model.badgesText].find(roomFor) || '';
+      if (line) {
+        ctx.textAlign = 'right';
+        ctx.fillStyle = COLORS.amber;
+        ctx.fillText(line, WIDTH - 64, 584);
+        ctx.textAlign = 'left';
+      }
     }
 
     // 10. NON-NEGOTIABLE, LAST, UNCONDITIONAL. drawBranding takes only the

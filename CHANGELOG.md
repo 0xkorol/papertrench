@@ -3,6 +3,37 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.10.0 — 2026-08-05
+
+Trench Rank — discipline is now the game.
+
+- **Every closed round gets a process grade, S to F.** Graded on your plan,
+  your exit, your sizing, and whether the entry was revenge — never on
+  P&L. A disciplined red round grades S. A lucky win can grade F: it gets
+  called lucky in the rounds table and on the card, and the close toast
+  names the habit out loud ("that habit pays until it doesn't").
+- **Trench Rank ladder on the overview.** Six tiers from Fresh Meat to
+  Graduated, staged over the graduation criteria with live progress bars.
+  The summit is the graduation bar itself: the game ends on purpose.
+- **Discipline streaks.** Journal, clean-exit and no-revenge streaks with
+  flames from 3 up — on the dashboard and the positions bar.
+- **Daily drills and reps.** One rotating drill a day, measured from your
+  actual rounds; reps diminish after 10 a day because tired reps don't
+  count — that's a lesson too.
+- **Badges** for the things that predict survival (first thesis, cold
+  streak survived without sizing up, 80%+ captures, 25 rounds without
+  revenge). Deliberately none for profit, win streaks, or volume.
+- **The share card carries your rank, grade and badges** inside the same
+  PAPER frame — and now points at papertrench.com.
+- **Calendar shows a per-day process dot** (the day's dominant grade;
+  ties round DOWN to the worse letter).
+- Everything is derived live from the journal you already have. Zero new
+  stored data, nothing to migrate, nothing to cheat. Your numbers are
+  untouched — this update changes what gets celebrated, not what gets
+  counted.
+- Also fixed: the graduation bar's thesis criterion could never pass
+  (it counted a legacy data shape) — real journalers now measure true.
+
 ## v2.9.1 — 2026-08-05
 
 The average line tells the truth again.
