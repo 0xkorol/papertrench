@@ -725,30 +725,15 @@ function bindGame(el) {
 
 /* ---------- sidebar ---------- */
 
-/** Gaming Mode is a persona wall (maintainer, 2026-08-05): OFF means the
- *  Game tab and every gamified surface do not exist on this dashboard. */
-function gamingOn() {
-  return settings.gamingModeEnabled === true;
-}
-
-/** Show/hide the Game nav entry with the mode, and never strand the user on
- *  a tab that just stopped existing. Runs with every sidebar refresh, so a
- *  toggle in Settings applies without a reload. */
-function applyModeNav() {
-  const btn = document.querySelector('nav button[data-section="game"]');
-  if (btn) btn.classList.toggle('hidden', !gamingOn());
-  if (!gamingOn() && currentSection === 'game') {
-    currentSection = 'overview';
-    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x.dataset.section === 'overview'));
-    SECTIONS.forEach((id) => document.getElementById(id).classList.toggle('hidden', id !== 'overview'));
-    renderSection('overview');
-  }
-}
+/* Gaming Mode semantics (maintainer, corrected 2026-08-05): the wall is at
+ * the dashboard door, not inside it. The Game tab and every dashboard
+ * gamification surface are ALWAYS here — you opt in by navigating. The
+ * toggle governs the ON-CHART surfaces only (grade toasts, streak chips,
+ * ambient HUD), which is why no dashboard renderer consults it. */
 
 function renderSidebar() {
   const sb = document.getElementById('sidebar');
   if (!sb) return;
-  applyModeNav();
   const stats = E.sessionStats(state, settings);
   const up = stats.equityVsStart >= 0;
   const pct = settings.balanceStartSol ? (stats.equityVsStart / settings.balanceStartSol) * 100 : 0;
@@ -1015,7 +1000,7 @@ function streakStat(label, s) {
  */
 function renderTrenchRank() {
   const G = window.PTGamify;
-  if (!G || !gamingOn()) return '';
+  if (!G) return '';
   const r = G.rank(state);
   if (!r) return '';
   const now = Date.now();
@@ -1076,10 +1061,6 @@ function renderTrenchRank() {
  */
 function renderGame(el) {
   const G = window.PTGamify;
-  if (!gamingOn()) {
-    el.innerHTML = `<div class="card">${emptyState('Gaming Mode is off', 'Turn it on in Settings → Modes and this tab wakes up.')}</div>`;
-    return;
-  }
   if (!G) { el.innerHTML = `<div class="card">${emptyState('Game module not loaded', 'gamify.js is missing from this build.')}</div>`; return; }
   const r = G.rank(state);
   if (!r) { el.innerHTML = `<div class="card">${emptyState('Game module not ready', 'mastery.js is missing from this build.')}</div>`; return; }
@@ -1443,7 +1424,7 @@ function renderCalendar(el) {
   // UTC bucket here would pin dots on the wrong cell across midnight. Grades
   // come from one pass over the month's rounds; ties round DOWN to the worse
   // letter — a split day is not rounded up to the better story.
-  const G = gamingOn() ? window.PTGamify : null;
+  const G = window.PTGamify;
   const dayGrades = new Map();
   if (G) {
     for (const r of state.rounds || []) {
@@ -1588,8 +1569,7 @@ function renderRounds(el) {
   // Grades are computed in ONE pass over the table's rounds: roundGrade scans
   // priors per call, so a naive per-cell call inside nested templates is the
   // O(n²)-of-O(n) shape that starves renders at the 500-round cap.
-  // Gaming Mode off: the Grade column does not exist — not disabled, absent.
-  const G = gamingOn() ? window.PTGamify : null;
+  const G = window.PTGamify;
   const gradeById = new Map();
   if (G) for (const r of state.rounds || []) gradeById.set(r.id, G.roundGrade(state, r));
   const rows = (state.rounds || []).map((r) => {
@@ -2527,7 +2507,7 @@ let cardTrenchCurrent = null;  // PTGamify-derived rank/grade/badges for the ope
  */
 function trenchCardOpts(round) {
   const G = window.PTGamify;
-  if (!G || !gamingOn()) return null;
+  if (!G) return null;
   const grade = round ? G.roundGrade(state, round) : null;
   const r = G.rank(state);
   const earned = G.badges(state).filter((b) => b.earned).slice(0, 4).map((b) => b.label);
@@ -3645,7 +3625,7 @@ function renderSettings(el) {
     <div class="card" style="margin-bottom:16px">
       <h3>Modes</h3>
       <div class="dim" style="font-size:11.5px;margin-bottom:8px">PaperTrench is three tools in one — turn on only what you came for.</div>
-      <div class="field field-check"><label><input type="checkbox" id="set-gaming-mode" ${settings.gamingModeEnabled === true ? 'checked' : ''}> Gaming Mode</label><small>Grades, ranks, streaks, badges, and the Game tab with startable trading games. Off means none of it exists anywhere — no tab, no toasts, no chips.</small></div>
+      <div class="field field-check"><label><input type="checkbox" id="set-gaming-mode" ${settings.gamingModeEnabled === true ? 'checked' : ''}> Gaming on the charts</label><small>Grade toasts, streak chips and ambient game furniture on the trading sites. The Game tab here in the dashboard is always available either way — and a game you start from it always shows its HUD while it runs.</small></div>
       <div class="dim" style="font-size:11px;margin-top:2px">Paper trading lives in Overlay settings; the speed features (Instant links, warm viewers) live in Turbo — both below.</div>
     </div>
     <div class="grid2">

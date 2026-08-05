@@ -1870,19 +1870,22 @@
   let trenchRoundsKey = null;
   let gameHudStatus = null; // last session status shown, so terminal states toast once
 
-  /** Gaming Mode is a persona wall, not a feature flag: OFF means gamification
-   *  does not exist on this surface — no chip, no HUD, no grade toasts, no
-   *  closed-card grade. Speed-only and paper-only users never see it. */
+  /** Gaming Mode (corrected semantics, maintainer 2026-08-05): the toggle
+   *  governs AMBIENT gamification on the trading sites — streak chips,
+   *  grade toasts, closed-card grades. It does NOT govern the dashboard
+   *  (always full-featured) and it does NOT govern the HUD of a game the
+   *  user explicitly STARTED from the Game tab: a started session is a
+   *  request, not furniture, so its HUD rides until ended or dismissed. */
   function gamingOn() {
     return settings.gamingModeEnabled === true;
   }
 
   function refreshTrenchCache() {
     const G = window.PTGamify;
-    if (!G || !gamingOn()) {
+    if (!G) {
       trenchStreaks = null;
       trenchGauntlet = null;
-      trenchRoundsKey = null; // a later toggle-on recomputes from scratch
+      trenchRoundsKey = null;
       updateTrenchBarChip();
       updateGameHud(null);
       return;
@@ -1892,16 +1895,17 @@
     // list (newest-first, engine unshift), so a cheap shape key gates the
     // O(rounds²) scan: it changes exactly when a round lands, never on a
     // mark/seq-only echo. Same fingerprint discipline as D-27/D-28. The
-    // active-game pointer joins the key so start/end reflects immediately.
+    // active-game pointer and the ambient toggle join the key so start/end
+    // and a settings flip both reflect on the next event.
     const rounds = state.rounds || [];
     const game = state.activeGame;
-    const key = `${rounds.length}|${rounds[0] ? Number(rounds[0].closedAt) || 0 : 0}|${game ? `${game.id}@${game.startedAt}` : ''}`;
+    const key = `${rounds.length}|${rounds[0] ? Number(rounds[0].closedAt) || 0 : 0}|${game ? `${game.id}@${game.startedAt}` : ''}|${gamingOn() ? 1 : 0}`;
     if (key === trenchRoundsKey) return;
     trenchRoundsKey = key;
-    trenchStreaks = G.streaks(state);
+    trenchStreaks = gamingOn() ? G.streaks(state) : null;
     // gauntletRun/gameSession are Date-free by contract: day-bucketed games
     // are a dashboard concern, and the overlay harness stubs Date to {now}.
-    trenchGauntlet = typeof G.gauntletRun === 'function' ? G.gauntletRun(state) : null;
+    trenchGauntlet = gamingOn() && typeof G.gauntletRun === 'function' ? G.gauntletRun(state) : null;
     updateTrenchBarChip();
     updateGameHud(typeof G.gameSession === 'function' ? G.gameSession(state) : null);
   }

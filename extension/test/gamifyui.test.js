@@ -65,8 +65,8 @@ test('the Trench Rank card renders on the overview and soft-degrades like the gr
   const overview = fnBlock(dashJs, 'function renderOverview(el)');
   assert.match(overview, /\$\{renderTrenchRank\(\)\}/, 'the overview must interpolate the card');
   const card = fnBlock(dashJs, 'function renderTrenchRank()');
-  assert.match(card, /const G = window\.PTGamify;\s*\n\s*if \(!G \|\| !gamingOn\(\)\) return '';/,
-    'a missing module OR a disabled mode renders nothing — a throw here blanks the dashboard (D-16)');
+  assert.match(card, /const G = window\.PTGamify;\s*\n\s*if \(!G\) return '';/,
+    'a missing module renders nothing — a throw here blanks the dashboard (D-16)');
   assert.match(card, /G\.rank\(state\)/, 'the card consumes PTGamify.rank');
 });
 
@@ -105,7 +105,7 @@ test('calendar grade dots bucket by LOCAL day, like the calendar itself (D-49 cl
 /* ================= overlay: out of the tick path ================= */
 
 test('trench values are event-driven: cached at close/adopt/renderAll, never per tick', () => {
-  assert.match(contentBlock('function refreshTrenchCache()'), /trenchStreaks = G\.streaks\(state\);/,
+  assert.match(contentBlock('function refreshTrenchCache()'), /trenchStreaks = gamingOn\(\) \? G\.streaks\(state\) : null;/,
     'the cache is the only streaks call site');
   assert.match(contentBlock('function adoptState(next)'), /refreshTrenchCache\(\);/,
     'external closes from other tabs move streaks too');
@@ -199,34 +199,38 @@ test('cardModel derives trench display strings and the flag hides them (absent =
 
 /* ================= Gaming Mode: the persona wall ================= */
 
-test('Gaming Mode off means gamification does not exist on any surface', () => {
-  // Dashboard: every gamified renderer consults gamingOn().
-  assert.match(fnBlock(dashJs, 'function gamingOn()'), /settings\.gamingModeEnabled === true/,
-    'default-off: only an explicit true turns the mode on');
-  assert.match(fnBlock(dashJs, 'function renderTrenchRank()'), /!G \|\| !gamingOn\(\)/, 'overview card gated');
-  assert.match(fnBlock(dashJs, 'function renderRounds(el)'), /gamingOn\(\) \? window\.PTGamify : null/, 'grade column gated');
-  assert.match(fnBlock(dashJs, 'function renderCalendar(el)'), /gamingOn\(\) \? window\.PTGamify : null/, 'calendar dots gated');
-  assert.match(fnBlock(dashJs, 'function trenchCardOpts(round)'), /!G \|\| !gamingOn\(\)/, 'card trench line gated');
-  assert.match(fnBlock(dashJs, 'function renderGame(el)'), /Gaming Mode is off/, 'the tab explains itself when off');
-  assert.match(fnBlock(dashJs, 'function applyModeNav()'), /classList\.toggle\('hidden', !gamingOn\(\)\)/,
-    'the nav entry hides with the mode');
-  assert.match(fnBlock(dashJs, 'function renderSidebar()'), /applyModeNav\(\);/,
-    'nav visibility re-applies on every refresh so a settings toggle needs no reload');
-  // Overlay: one gate function feeds every gamified surface.
-  assert.match(contentBlock('function gamingOn()'), /settings\.gamingModeEnabled === true/);
-  assert.match(contentBlock('function refreshTrenchCache()'), /!G \|\| !gamingOn\(\)/, 'chip+HUD cache gated');
+test('Gaming Mode gates the CHARTS, never the dashboard (corrected semantics)', () => {
+  // Dashboard: ALWAYS full-featured — no renderer may consult the toggle.
+  for (const fn of ['function renderTrenchRank()', 'function renderRounds(el)',
+    'function renderCalendar(el)', 'function trenchCardOpts(round)', 'function renderGame(el)']) {
+    assert.doesNotMatch(fnBlock(dashJs, fn), /gamingOn\(\)/,
+      `${fn} is dashboard furniture — the wall is at the dashboard door, not inside it`);
+  }
+  assert.doesNotMatch(dashJs, /function applyModeNav\(\)/,
+    'the Game nav entry is permanent — nothing hides it');
+  // Overlay: the AMBIENT surfaces are gated…
+  assert.match(contentBlock('function gamingOn()'), /settings\.gamingModeEnabled === true/,
+    'default-off: only an explicit true turns ambient gamification on');
+  const cache = contentBlock('function refreshTrenchCache()');
+  assert.match(cache, /trenchStreaks = gamingOn\(\) \? G\.streaks\(state\) : null/, 'streak chip gated');
   const sell = contentBlock('async function doSellInner(fraction)');
   assert.match(sell, /gamingOn\(\) && window\.PTGamify/, 'grade toast gated');
   const closedCard = contentBlock('function renderClosedPnl()');
   assert.match(closedCard, /gamingOn\(\) && window\.PTGamify/, 'closed-card chip gated');
   const flex = contentBlock('function openFlexComposer(mint)');
   assert.match(flex, /gamingOn\(\) && window\.PTGamify/, 'flex card trench gated');
-  // Settings: the mode has a switch, and the engine defaults it OFF.
+  // …but a STARTED session's HUD is a request, not furniture: the session
+  // is computed unconditionally, so the HUD rides while a game runs.
+  assert.match(cache, /updateGameHud\(typeof G\.gameSession === 'function' \? G\.gameSession\(state\) : null\)/,
+    'the HUD of an explicitly started game ignores the ambient toggle');
+  assert.match(cache, /\$\{gamingOn\(\) \? 1 : 0\}/,
+    'the cache key carries the toggle so a settings flip clears chips on the next event');
+  // Settings: the toggle exists, persists, and defaults OFF.
   assert.match(dashJs, /id="set-gaming-mode"/, 'the Modes card offers the toggle');
   assert.match(dashJs, /gamingModeEnabled: document\.getElementById\('set-gaming-mode'\)\.checked/,
     'the toggle persists');
   const engine = read('engine.js');
-  assert.match(engine, /gamingModeEnabled: false/, 'gamification is invisible until asked for');
+  assert.match(engine, /gamingModeEnabled: false/, 'ambient gamification is opt-in');
 });
 
 test('game sessions: engine pointer, tab controls, Date-free session scoring for the HUD', () => {

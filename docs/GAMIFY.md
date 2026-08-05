@@ -27,13 +27,16 @@ dashboard, overlay, close toast, and PnL card.
    `state.activeGame = { id, startedAt }` — the pointer saying which game the
    user explicitly started and when. Results are still derived from the
    rounds closed since `startedAt`; the pointer stores no score.
-5. **Gaming Mode is a persona wall (maintainer, 2026-08-05).** Three kinds of
-   people share this extension: speed-only, paper-only, and paper+gaming.
-   `settings.gamingModeEnabled` (default OFF) gates EVERY gamified surface —
-   the Game tab, grades, streaks, toasts, chips, calendar dots, the card
-   line. Off does not mean disabled; it means none of it exists. Games are
-   SESSIONS: started from the Game tab, played on the live charts with the
-   overlay HUD riding along, ended or dismissed from the tab.
+5. **Gaming Mode is a wall at the dashboard door (maintainer, corrected
+   2026-08-05).** The dashboard's Game tab and every dashboard gamification
+   surface are ALWAYS available — navigating there is the opt-in.
+   `settings.gamingModeEnabled` (default OFF) gates the AMBIENT on-chart
+   surfaces only: grade toasts, streak chips, closed-card grades, the flex
+   composer's trench line. One exception by design: a game session the user
+   explicitly STARTED from the Game tab shows its HUD on the chart while it
+   runs regardless of the toggle — a started game is a request, not
+   furniture. Games are SESSIONS: started from the Game tab, played on the
+   live charts, ended or dismissed from the tab.
 
 ## Components (implemented in gamify.js)
 
