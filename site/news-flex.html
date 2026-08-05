@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Flex Pack — share cards that can never pass as a real trade · PaperTrench news</title>
+<meta name="description" content="v2.5.0–v2.5.2: a terminal-grade share composer with your own backgrounds, honest USD sub-lines, an observed-only After line, open-position cards — and a PAPER watermark drawn by a code path that reads no settings.">
+<meta property="og:title" content="The Flex Pack: share cards that can never pass as a real trade">
+<meta property="og:description" content="Flex the result, never fake it. The watermark and brand bar are drawn last, by code that reads no settings, verified by a test that drives every option combination.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta property="og:type" content="article">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* ---------- share card mock ---------- */
+  .fx-wrap { margin: 34px 0 12px; }
+  .fx {
+    position: relative; overflow: hidden;
+    border: 1px solid var(--line2); border-radius: var(--radius);
+    background:
+      radial-gradient(600px 300px at 82% 8%, rgba(255,157,69,0.16), transparent 65%),
+      radial-gradient(500px 320px at 10% 95%, rgba(52,211,153,0.10), transparent 65%),
+      #0a0d14;
+    padding: 26px 28px 0;
+  }
+  .fx-mark {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%) rotate(-18deg);
+    font-size: clamp(58px, 13vw, 116px); font-weight: 900; letter-spacing: 8px;
+    color: rgba(255,255,255,0.055); pointer-events: none; user-select: none; white-space: nowrap;
+  }
+  .fx-top { display: flex; align-items: center; gap: 11px; position: relative; }
+  .fx-sym { font-family: var(--mono); font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+  .fx-mult { font-family: var(--mono); font-size: 11.5px; font-weight: 800; color: var(--green); background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.32); border-radius: 999px; padding: 4px 11px; }
+  .fx-state { margin-left: auto; font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--dim); border: 1px solid var(--line2); border-radius: 999px; padding: 4px 10px; }
+  .fx-pnl { position: relative; margin: 20px 0 4px; font-family: var(--mono); font-size: clamp(38px, 8vw, 62px); font-weight: 800; letter-spacing: -2px; color: var(--green); line-height: 1; }
+  .fx-cols { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 22px; }
+  .fx-col .k { font-size: 9.5px; font-weight: 800; letter-spacing: 1.3px; text-transform: uppercase; color: var(--dim); }
+  .fx-col .v { margin-top: 5px; font-family: var(--mono); font-size: 16px; font-weight: 800; letter-spacing: -0.4px; }
+  .fx-col .u { margin-top: 2px; font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+  .fx-col .u.none { color: var(--dim); }
+  .fx-journey { position: relative; margin-top: 22px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .fx-journey .ar { color: var(--orange); }
+  .fx-after { position: relative; margin-top: 13px; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--green); background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.28); border-radius: 999px; padding: 6px 13px; }
+  .fx-bar {
+    position: relative; margin: 24px -28px 0; padding: 12px 28px;
+    display: flex; align-items: center; gap: 9px;
+    border-top: 1px solid var(--line); background: rgba(0,0,0,0.35);
+    font-size: 11.5px; font-weight: 800; letter-spacing: .3px;
+  }
+  .fx-bar .logo { width: 18px; height: 18px; border-radius: 5px; background: linear-gradient(135deg, var(--orange2), var(--orange-deep)); display: grid; place-items: center; color: #2a1400; font-size: 11px; font-weight: 900; }
+  .fx-bar .sim { margin-left: auto; font-weight: 700; color: var(--dim); letter-spacing: 1.2px; font-size: 10px; }
+  .fx-cap { text-align: center; font-size: 12.5px; color: var(--dim); margin-top: 14px; }
+</style>
+</head>
+<body class="a-orange">
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="index.html#bubbles">Chart bubbles</a>
+      <a href="index.html#replay">Replay</a>
+      <a href="index.html#leaderboard">Leaderboard</a>
+      <a href="news.html" aria-current="page">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<article>
+  <header class="post-hero">
+    <div class="wrap-read">
+      <a class="post-back" href="news.html"><span aria-hidden="true">←</span> All updates</a>
+      <div class="post-meta">
+        <span class="ver-chip">v2.5.0</span>
+        <span class="ver-chip">v2.5.1</span>
+        <span class="ver-chip">v2.5.2</span>
+        <span class="tag feature">Feature</span>
+        <time class="feat-date" datetime="2026-08-05">August 5, 2026</time>
+        <span class="post-read">· 5 min read</span>
+      </div>
+      <h1 class="post-title">The Flex Pack: share cards that can never pass as a real trade</h1>
+      <p class="post-stand">People want to post their results. Fine — but a paper P&amp;L card that could be mistaken for a real one is a lie generator, and this market has enough of those. So we built a genuinely good-looking composer <strong>and made the PAPER branding structurally impossible to remove.</strong></p>
+      <div class="post-rule"></div>
+    </div>
+  </header>
+
+  <div class="wrap-read post-body">
+
+    <div class="fx-wrap reveal">
+      <div class="fx">
+        <div class="fx-mark" aria-hidden="true">PAPER</div>
+        <div class="fx-top">
+          <span class="fx-sym">$TRENCH</span>
+          <span class="fx-mult">3.41×</span>
+          <span class="fx-state">CLOSED</span>
+        </div>
+        <div class="fx-pnl">+2.41 ◎</div>
+        <div class="fx-cols">
+          <div class="fx-col"><div class="k">Invested</div><div class="v">1.00 ◎</div><div class="u">$172.40</div></div>
+          <div class="fx-col"><div class="k">Returned</div><div class="v">3.41 ◎</div><div class="u none">—</div></div>
+          <div class="fx-col"><div class="k">P&amp;L %</div><div class="v" style="color:var(--green)">+241%</div><div class="u">realised</div></div>
+        </div>
+        <div class="fx-journey">
+          <span>ENTRY 0.00003412</span><span class="ar">→</span><span>EXIT 0.00011631</span><span class="ar">→</span><span>HELD 41m</span>
+        </div>
+        <div class="fx-after">◷ −62% after exit — dodged</div>
+        <div class="fx-bar">
+          <span class="logo">P</span><span>PaperTrench</span><span class="sim">SIMULATED FUNDS · NOT A REAL TRADE</span>
+        </div>
+      </div>
+      <p class="fx-cap">Simulated card. Note the em-dash under "Returned": that fill never recorded a USD price, so no USD figure is printed.</p>
+    </div>
+
+    <p class="post-lede">Every terminal in this space has a share card, and every one of them exists to make the poster look good. Ours has a second job that outranks the first: it must never be usable to convince someone that fake money was real money.</p>
+
+    <p>Those two goals only conflict if you assume honesty has to be ugly. It does not.</p>
+
+    <h2>What is on the card</h2>
+
+    <ul>
+      <li><b>Token symbol and multiple chip</b>, then a huge ◎ SOL P&amp;L as the hero number.</li>
+      <li><b>Invested / Returned / P&amp;L%</b> columns, each with a USD sub-line.</li>
+      <li><b>The journey line:</b> entry → exit → held. How long you were actually in it, which is the number people quietly omit.</li>
+      <li><b>An After line</b> — "−62% after exit — dodged" — that no other terminal can print, because no other terminal <a href="news-the-after.html">measures what happened after you left</a>.</li>
+    </ul>
+
+    <h3>The em-dash rule</h3>
+
+    <p>USD sub-lines appear only where the fills genuinely recorded a USD price. When one did not — common on fresh launches, where the first ticks pre-date the USD feed — the card prints an em-dash.</p>
+
+    <p>It would be trivial to multiply the SOL figure by today's SOL price and print something. That number would look right and be fabricated, and a fabricated number on a card built for public posting is exactly the thing we refuse to ship.</p>
+
+    <p class="post-pull">An em-dash is not a gap in the design. It is the design.</p>
+
+    <h2>Make it yours</h2>
+
+    <p>Five built-in looks, plus your own uploads — up to 2 MB each, ten stored, saved between sessions, deletable whenever. The drop zone works and now remembers what you dropped.</p>
+
+    <p>Then <b>Customize / Download / Copy</b>: toggle which stats show, pick a trim accent, download a PNG, or copy straight to the clipboard for paste-and-go posting.</p>
+
+    <h2>The part that is not configurable</h2>
+
+    <p>The PAPER watermark and the PaperTrench brand bar are drawn <b>last</b>, by a code path that reads no settings at all. There is no toggle to find, because there is no toggle. The customisation options cannot reach that code.</p>
+
+    <div class="callout">
+      <span class="co-label">How we know it holds</span>
+      <p>A test drives <strong>every combination</strong> of the card's options and asserts the branding survives all of them. It is not a promise in a README; it is a failing build if anyone ever wires an option into that path.</p>
+      <p>Flex the result; never fake it.</p>
+    </div>
+
+    <h2>Then two follow-ups, straight from live use</h2>
+
+    <h3>v2.5.1 — share an open position</h3>
+
+    <p>Spotted in the maintainer's stream footage: the real terminals card an <em>open</em> position — the "still holding" flex — and ours only carded closed rounds.</p>
+
+    <p>Live open positions on the Overview now carry a Share button. The card states OPEN, the middle column reads POSITION (live value at the last recorded mark), and the journey line <b>claims no EXIT that has not happened</b>. Same gallery, same Customize / Download / Copy, same un-removable branding.</p>
+
+    <h3>v2.5.2 — flex it from the overlay, wins and losses</h3>
+
+    <p>The Closed P&amp;L card in the overlay gained a Flex button that opens the composer for that exact result — the newest round, or the open position after a partial exit.</p>
+
+    <p><b>Losses are flexable by design.</b> A share feature that only works when you won is a share feature that manufactures a fake win rate across everyone who uses it. The PAPER watermark rides along either way.</p>
+
+    <p>That release also fixed two things the maintainer hit while taking a live trade: the resize grip could latch after a cancelled gesture and keep resizing forever (pointer capture now guarantees a terminal event), and the Closed P&amp;L card was being rebuilt on every heartbeat — re-running its entry animation each time, which read as a blink. It now renders once per close, and only the how-long-ago text updates in place.</p>
+
+    <!-- ---------- patch notes ---------- -->
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.5.0</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>The share card grew up</h4>
+          <p>Terminal-grade composer: token symbol and multiple chip, a huge ◎ SOL P&amp;L, Invested / Returned / P&amp;L% columns with honest USD sub-lines (em-dash when a fill never had a USD price — never a fabricated conversion), the entry→exit→held journey line, and an observed-only After line ("−62% after exit — dodged") no other terminal can print, because no other terminal measures it.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Backgrounds, yours</h4>
+          <p>Five built-in looks plus your own uploads — max 2 MB each, ten stored, saved between sessions, deletable. The drop zone still works and now remembers what you dropped.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Customize / Download / Copy</h4>
+          <p>Toggle which stats show, pick a trim accent, download a PNG, or copy straight to the clipboard for paste-and-go posting.</p>
+        </div>
+        <div class="pn-item">
+          <h4>The non-negotiable, by construction</h4>
+          <p>The PAPER watermark and the PaperTrench brand bar are drawn last by a code path that reads no settings — verified by a test that drives every combination of options and asserts the branding survives all of them. Flex the result; never fake it.</p>
+        </div>
+      </div>
+      <div class="pn-foot"><span>Also in v2.5.0:</span> <a href="news-instant-x.html">Instant X links learn GMGN and Axiom, plus hover preview cards</a></div>
+    </div>
+
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.5.1</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>Share an open position</h4>
+          <p>Live open positions on the Overview now carry a Share button. The card states OPEN, the middle column reads POSITION (live value at the last recorded mark), the journey line claims no EXIT that has not happened, and USD figures appear only where fills and marks genuinely recorded them. Same gallery, same Customize/Download/Copy — and the same un-removable PaperTrench branding.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.5.2</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>The resize grip can never stick again</h4>
+          <p>A cancelled gesture (misclick, drag out of the window, context menu) used to leave the drag latched — the panel kept resizing with every mouse move. Pointer capture now guarantees a terminal event, and pointercancel ends the drag like pointerup.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Resize from any corner</h4>
+          <p>All four corners are grips. The panel is right/top-anchored, so left corners grow it leftward from the planted right edge, and top corners grow it upward while the bottom edge stays planted.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Flex it — wins AND losses</h4>
+          <p>The Closed P&amp;L card in the overlay now has a Flex button that opens the share composer for that exact result (the newest round, or the open position after a partial exit). Losses are flexable by design; the PAPER watermark rides along either way.</p>
+        </div>
+        <div class="pn-item">
+          <h4>The Closed P&amp;L card stopped blinking</h4>
+          <p>It was being rebuilt on every heartbeat, re-running its entry animation each time. It now renders once per close; only the how-long-ago text updates in place.</p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Full history:</span>
+        <a href="news.html#v2-5-0">these releases in the archive</a>
+      </div>
+    </div>
+
+    <div class="post-nav">
+      <a class="pnav" href="news-xray.html">
+        <span class="dir">← Newer</span>
+        <span class="t">X-Ray: instant account intel on X</span>
+      </a>
+      <a class="pnav next" href="news-instant-x.html">
+        <span class="dir">Older →</span>
+        <span class="t">Instant X links</span>
+      </a>
+    </div>
+
+  </div>
+</article>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="index.html">Home</a>
+        <a href="news.html">News</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+    <div class="foot-note">Paper trading only · not financial advice · the card above is a simulated example, watermarked exactly as the real one is.</div>
+  </div>
+</footer>
+
+<script src="reveal.js"></script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fees &amp; costs — make paper fills cost what real fills cost · PaperTrench news</title>
+<meta name="description" content="v2.2.0: PaperTrench models the full cost of a real fill — platform percentage, flat priority fee and bribe — through the cost basis, rounds, calendar, equity curve and verification chain. A dust exit can now genuinely net negative.">
+<meta property="og:title" content="Fees &amp; costs: make paper fills cost what real fills cost">
+<meta property="og:description" content="Zero-cost practice quietly teaches that small entries are free. They are not — gas and tips dominate them. Now the simulator charges you.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta property="og:type" content="article">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* ---------- cost ladder mock ---------- */
+  .cost { margin: 34px 0 12px; overflow: hidden; background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); }
+  .cost-head { padding: 14px 22px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,0.02); font-size: 11px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; color: var(--dim); }
+  .cost-row { display: flex; align-items: baseline; gap: 14px; padding: 12px 22px; border-bottom: 1px solid rgba(255,255,255,0.045); font-size: 14px; }
+  .cost-row .k { color: var(--muted); }
+  .cost-row .sub { font-size: 11.5px; color: var(--dim); }
+  .cost-row .v { margin-left: auto; font-family: var(--mono); font-weight: 700; font-size: 13.5px; white-space: nowrap; }
+  .cost-row.neg .v { color: #ff8a80; }
+  .cost-row.total { background: rgba(255,157,69,0.05); border-bottom: 0; }
+  .cost-row.total .k { color: var(--text); font-weight: 750; }
+  .cost-row.total .v { color: var(--orange2); font-size: 15px; font-weight: 800; }
+  .cost-cap { text-align: center; font-size: 12.5px; color: var(--dim); margin-top: 14px; }
+</style>
+</head>
+<body class="a-green">
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="index.html#bubbles">Chart bubbles</a>
+      <a href="index.html#replay">Replay</a>
+      <a href="index.html#leaderboard">Leaderboard</a>
+      <a href="news.html" aria-current="page">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<article>
+  <header class="post-hero">
+    <div class="wrap-read">
+      <a class="post-back" href="news.html"><span aria-hidden="true">←</span> All updates</a>
+      <div class="post-meta">
+        <span class="ver-chip">v2.2.0</span>
+        <span class="tag feature">Feature</span>
+        <time class="feat-date" datetime="2026-08-05">August 5, 2026</time>
+        <span class="post-read">· 4 min read</span>
+      </div>
+      <h1 class="post-title">Fees &amp; costs: make paper fills cost what real fills cost</h1>
+      <p class="post-stand">Free practice has one systematic lie in it: it tells you small entries are cheap. They are not. Priority fees and tips are <em>flat</em>, which means they eat a rounding error on a 5 SOL entry and a meaningful chunk of a 0.1 SOL one. <strong>PaperTrench now charges you for them.</strong></p>
+      <div class="post-rule"></div>
+    </div>
+  </header>
+
+  <div class="wrap-read post-body">
+
+    <div class="cost reveal">
+      <div class="cost-head">A 0.1 ◎ entry, with costs modelled</div>
+      <div class="cost-row"><span class="k">Entry size</span><span class="v">0.1000 ◎</span></div>
+      <div class="cost-row neg"><span class="k">Platform fee <span class="sub">· percentage</span></span><span class="v">−0.0010 ◎</span></div>
+      <div class="cost-row neg"><span class="k">Priority fee <span class="sub">· flat, per transaction</span></span><span class="v">−0.0012 ◎</span></div>
+      <div class="cost-row neg"><span class="k">Bribe / tip <span class="sub">· flat, per transaction</span></span><span class="v">−0.0030 ◎</span></div>
+      <div class="cost-row total"><span class="k">Cost basis on the buy</span><span class="v">0.1052 ◎</span></div>
+      <p class="cost-cap">Illustrative figures only. PaperTrench ships every cost at zero — these are yours to set from your own site settings.</p>
+    </div>
+
+    <p class="post-lede">Notice what just happened: before the price moved at all, that trade is down about 5%. The chart has to give you 5% just to get you to break even — and you would never have learned that from a simulator that fills for free.</p>
+
+    <p>Now do it forty times in a session, which is what a real trench session looks like.</p>
+
+    <h2>What the settings card models</h2>
+
+    <p>The full cost of a real fill, not just the headline one:</p>
+
+    <ul>
+      <li><b>The platform percentage</b> — as before.</li>
+      <li><b>A flat priority fee (gas)</b> — per transaction.</li>
+      <li><b>A bribe/tip</b> — per transaction.</li>
+    </ul>
+
+    <p>Quick fill-in presets give rough starting points, but they are starting points and nothing more: <b>your own site settings are the truth</b>. If you are running an aggressive sniper config on Axiom, the numbers to type in are the ones already in your Axiom settings.</p>
+
+    <p>As of <a href="news-fills.html">v2.7.0</a>, a fees profile (Axiom/Padre bot · aggressive sniper · no costs) is switchable straight from the extension popup mid-session, with the numbers pinned by test to match the dashboard's card. The full form stays on the dashboard.</p>
+
+    <h2>The accounting is honest end to end</h2>
+
+    <p>The easy version of this feature would subtract a fee from the P&amp;L display and stop. That would produce a number that disagreed with every other number in the product.</p>
+
+    <p>Instead, flat costs <b>join the cost basis on buys</b> and <b>reduce net proceeds on sells</b>. Everything downstream inherits them automatically:</p>
+
+    <ul>
+      <li>Per-sell P&amp;L</li>
+      <li>Rounds</li>
+      <li>The calendar</li>
+      <li>The equity curve — still exact to the SOL</li>
+      <li>The verification chain</li>
+    </ul>
+
+    <p>One definition of a fill's cost, used everywhere. There is no view in PaperTrench that shows you a pre-fee number next to a post-fee one and leaves you to work out which is which.</p>
+
+    <h2>The dust exit</h2>
+
+    <p class="post-pull">A dust exit can genuinely net negative — you paid gas to leave a worthless bag.</p>
+
+    <p>That is not an edge case we tolerated; it is the lesson. Getting out of a dead position costs money. There is a size below which closing a bag is not worth the transaction, and the only way to internalise that is to watch it happen to your own balance.</p>
+
+    <p>The alternative — a simulator that lets you exit dust for free — trains you to accumulate positions you will pay real money to escape later.</p>
+
+    <div class="callout">
+      <span class="co-label">Nothing changes until you opt in</span>
+      <p>Defaults are zero, so existing wallets behave exactly as they did before. Turning costs on is a deliberate act, and it is the single fastest way to make your paper record resemble a real one.</p>
+    </div>
+
+    <!-- ---------- patch notes ---------- -->
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.2.0</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>Fees &amp; costs emulation</h4>
+          <p>A new settings card models the FULL cost of a real fill: the platform percentage (as before), plus a flat priority fee (gas) and a bribe/tip per transaction — the costs that dominate small entries and that zero-cost practice quietly ignores. Quick fill-in presets give rough starting points; your own site settings are the truth.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Honest end to end</h4>
+          <p>Flat costs join the cost basis on buys and reduce net proceeds on sells, so per-sell P&amp;L, rounds, the calendar, the equity curve (still exact to the SOL), and the verification chain all include them. A dust exit can genuinely net negative — you paid gas to leave a worthless bag, which is precisely the lesson.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Defaults are zero</h4>
+          <p>So existing wallets change nothing until you opt in.</p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Full history:</span>
+        <a href="news.html#v2-2-0">this release in the archive</a>
+      </div>
+    </div>
+
+    <div class="post-nav">
+      <a class="pnav" href="news-instant-x.html">
+        <span class="dir">← Newer</span>
+        <span class="t">Instant X links</span>
+      </a>
+      <a class="pnav next" href="news-the-after.html">
+        <span class="dir">Older →</span>
+        <span class="t">The After: what happened once you sold</span>
+      </a>
+    </div>
+
+  </div>
+</article>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="index.html">Home</a>
+        <a href="news.html">News</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+    <div class="foot-note">Paper trading only · not financial advice · the cost ladder above is an illustration; PaperTrench ships every cost at zero until you set your own.</div>
+  </div>
+</footer>
+
+<script src="reveal.js"></script>
+</body>
+</html>

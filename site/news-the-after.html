@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The After — what actually happened once you sold · PaperTrench news</title>
+<meta name="description" content="v2.1.0: every closed round watches its coin for the following hour and records what really happened after your exit — observed extremes, sample counts, no interpolation. Plus Guardrails, CSV export and onboarding.">
+<meta property="og:title" content="The After: what actually happened once you sold">
+<meta property="og:description" content="The most expensive guesswork in this market — and the number one revenge-FOMO trigger — replaced with measured truth.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta property="og:type" content="article">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* ---------- rounds table mock with the After column ---------- */
+  .rt { margin: 34px 0 12px; overflow: hidden; background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); }
+  .rt-head, .rt-row { display: grid; grid-template-columns: 1.1fr 0.9fr 0.9fr 1.5fr; gap: 12px; align-items: center; padding: 13px 20px; }
+  .rt-head { border-bottom: 1px solid var(--line); background: rgba(255,255,255,0.02); font-size: 10.5px; font-weight: 800; letter-spacing: 1.3px; text-transform: uppercase; color: var(--dim); }
+  .rt-row + .rt-row, .rt-row:first-of-type { border-top: 1px solid rgba(255,255,255,0.045); }
+  .rt-row .sym { font-family: var(--mono); font-weight: 800; font-size: 13.5px; }
+  .rt-row .num { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+  .rt-row .num.up { color: var(--green); } .rt-row .num.down { color: #ff8a80; }
+  .rt-after { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .rt-after .pill { font-family: var(--mono); font-size: 11.5px; font-weight: 800; border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+  .rt-after .pill.dodged { color: var(--green); background: rgba(52,211,153,0.09); border: 1px solid rgba(52,211,153,0.3); }
+  .rt-after .pill.missed { color: #ff8a80; background: rgba(224,67,58,0.09); border: 1px solid rgba(224,67,58,0.32); }
+  .rt-after .pill.thin { color: var(--dim); background: rgba(255,255,255,0.03); border: 1px solid var(--line2); }
+  .rt-after .why { color: var(--dim); font-size: 11.5px; }
+  @media (max-width: 700px) {
+    .rt-head { display: none; }
+    .rt-row { grid-template-columns: 1fr 1fr; row-gap: 8px; }
+  }
+  .rt-cap { text-align: center; font-size: 12.5px; color: var(--dim); margin-top: 14px; }
+</style>
+</head>
+<body class="a-green">
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="index.html#bubbles">Chart bubbles</a>
+      <a href="index.html#replay">Replay</a>
+      <a href="index.html#leaderboard">Leaderboard</a>
+      <a href="news.html" aria-current="page">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<article>
+  <header class="post-hero">
+    <div class="wrap-read">
+      <a class="post-back" href="news.html"><span aria-hidden="true">←</span> All updates</a>
+      <div class="post-meta">
+        <span class="ver-chip">v2.1.0</span>
+        <span class="tag feature">Feature</span>
+        <time class="feat-date" datetime="2026-08-05">August 5, 2026</time>
+        <span class="post-read">· 6 min read</span>
+      </div>
+      <h1 class="post-title">The After: what actually happened once you sold</h1>
+      <p class="post-stand">You exit a position and immediately start guessing. Did it keep running? Did it dump the second you were out? The guess is always wrong, always flattering or always brutal — and it is <strong>the single biggest trigger for the revenge trade that follows.</strong> PaperTrench now measures it instead.</p>
+      <div class="post-rule"></div>
+    </div>
+  </header>
+
+  <div class="wrap-read post-body">
+
+    <div class="rt reveal">
+      <div class="rt-head">
+        <span>Round</span><span>P&amp;L</span><span>Exit grade</span><span>After (1h)</span>
+      </div>
+      <div class="rt-row">
+        <span class="sym">$TRENCH</span>
+        <span class="num up">+2.41 ◎</span>
+        <span class="num" style="color:var(--green);font-size:11.5px">EXCELLENT</span>
+        <span class="rt-after"><span class="pill dodged">−38% after exit</span><span class="why">dodged · 214 samples</span></span>
+      </div>
+      <div class="rt-row">
+        <span class="sym">$WIF</span>
+        <span class="num up">+0.88 ◎</span>
+        <span class="num" style="color:var(--orange2);font-size:11.5px">SOLD EARLY</span>
+        <span class="rt-after"><span class="pill missed">+126% after exit</span><span class="why">ran without you · 198 samples</span></span>
+      </div>
+      <div class="rt-row">
+        <span class="sym">$REKT</span>
+        <span class="num down">−1.30 ◎</span>
+        <span class="num" style="color:#ff8a80;font-size:11.5px">ROUND-TRIPPED</span>
+        <span class="rt-after"><span class="pill dodged">−71% after exit</span><span class="why">dodged · 187 samples</span></span>
+      </div>
+      <div class="rt-row">
+        <span class="sym">$QUIET</span>
+        <span class="num up">+0.12 ◎</span>
+        <span class="num" style="color:var(--dim);font-size:11.5px">FLAT</span>
+        <span class="rt-after"><span class="pill thin">not enough data</span><span class="why">9 samples · feed went quiet</span></span>
+      </div>
+      <p class="rt-cap">Simulated rounds. The fourth row is the important one — see below.</p>
+    </div>
+
+    <p class="post-lede">Everyone in this market has an imaginary ledger of what would have happened. It is the most expensive book you will ever keep, because it is written entirely from vibes, and it is what convinces you to jump back into a coin you already exited badly.</p>
+
+    <p>The After closes it. Every round you finish, PaperTrench keeps watching that coin for the following hour and records what genuinely happened next.</p>
+
+    <h2>What it records</h2>
+
+    <p>Observed extremes and how many samples they came from. That is deliberately unglamorous, and the two things it does <em>not</em> do are the whole point:</p>
+
+    <ul>
+      <li><b>No interpolation.</b> If the feed did not see a price, that price does not exist. We do not draw a smooth line between two observations and read a number off it.</li>
+      <li><b>No filling in the quiet parts.</b> A coin nobody traded for forty minutes has forty minutes of nothing, and the After says so — which is why the <code>$QUIET</code> row above reports its sample count instead of a confident percentage.</li>
+    </ul>
+
+    <div class="callout">
+      <span class="co-label">The rule that makes it worth reading</span>
+      <p>A "+340% after you sold" built from four ticks is not information — it is a mood. Every After figure carries the sample count it was built from, so you can tell the difference between <strong>a measured move and a rumour</strong>.</p>
+    </div>
+
+    <h2>Reading the column</h2>
+
+    <p>The rounds table gained an <b>After (1h)</b> column, and it is colour-coded against your interests rather than against the price:</p>
+
+    <div class="ba-grid">
+      <div class="ba after">
+        <div class="ba-lbl">Green — you dodged it</div>
+        <p>A −30%+ dump after you sold reads green. You were out. That was a good exit, and the P&amp;L column alone would never have told you.</p>
+      </div>
+      <div class="ba before">
+        <div class="ba-lbl">Red — it ran without you</div>
+        <p>A big move up after your exit reads red. You sold into strength that kept going, and that is a sizing-and-patience lesson, not a win.</p>
+      </div>
+    </div>
+
+    <p>Note what this does to a "winning" trade. A round that closed +0.88 ◎ looks fine on its own. Next to <b>+126% after exit</b>, it is a round you got out of far too early — and next to <b>−38% after exit</b>, the same P&amp;L is a genuinely well-timed exit.</p>
+
+    <p class="post-pull">P&amp;L tells you what you made. The After tells you whether you deserved it.</p>
+
+    <h2>It aggregates, too</h2>
+
+    <p>One round is an anecdote. The discipline panel rolls the whole record up: your <b>median further-upside</b> (how much you routinely leave behind) and your <b>dumps dodged</b> across every closed round.</p>
+
+    <p>Those two numbers describe a trading personality with no room for argument. Consistently large further-upside means you sell winners early. Consistently high dumps-dodged means your exits are doing real work. Either way it is measured from your own record, not from how the session felt.</p>
+
+    <h2>Also in v2.1.0</h2>
+
+    <h3>Guardrails — training wheels you can actually use</h3>
+
+    <p>Opt-in, enforced at buy time, and modelled on the three rules every surviving trader eventually adopts: a <b>tilt breaker</b> (N straight losses triggers a cooldown), a <b>max position size</b> as a percentage of your live book, and a <b>daily loss limit</b>.</p>
+
+    <p>The right time to practise those rules is while the money is fake and breaking them is free.</p>
+
+    <h3>Your data, one click</h3>
+
+    <p>CSV export for the journal and rounds — RFC-4180-safe, After columns included. It is your record; you should be able to take it somewhere else.</p>
+
+    <h3>An onboarding checklist that knows when to leave</h3>
+
+    <p>New accounts get a path on the Overview: first buy → thesis → first close → first After → review → the 50-round road to the graduation bar. It is dismissible, and it disappears on its own once you have done it all.</p>
+
+    <h3>And the community screenshot, fixed same day</h3>
+
+    <p>On market-cap charts, fill markers floated above the candles (raw resolver-implied cap versus the chart's own cap scale) and could park past the final bar on 1-second charts. Shapes now share the average line's close-corrected level math — supply cancels, the chart's scale wins — and clamp to the newest bar.</p>
+
+    <!-- ---------- patch notes ---------- -->
+    <div class="pn-panel reveal">
+      <div class="pn-head">
+        <span class="pn-t">Patch notes</span>
+        <span class="ver-chip">v2.1.0</span>
+        <span class="pn-date">August 5, 2026</span>
+      </div>
+      <div class="pn-body">
+        <div class="pn-item">
+          <h4>The After</h4>
+          <p>Every closed round now watches its coin for the following hour and records what ACTUALLY happened after your exit — observed extremes, sample counts, no interpolation. The rounds table gains an "After (1h)" column (a −30%+ dump after you sold reads green: you dodged it; a big run without you reads red), and the discipline panel aggregates your median further-upside and dumps-dodged across the record. The most expensive guesswork in this market — and the #1 revenge-FOMO trigger — replaced with measured truth.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Guardrails (training wheels)</h4>
+          <p>Opt-in, enforced at buy time: a tilt breaker (N straight losses → cooldown), a max position size (% of your live book), and a daily loss limit. The three rules every surviving trader eventually adopts, practicable while the money is fake.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Fill bubbles land on the candles (community screenshot, fixed same day)</h4>
+          <p>On mcap charts the fill markers floated above the candles (raw resolver-implied cap vs the chart's own cap scale) and could park past the final bar (clock skew on 1s charts). Shapes now share the avg line close-corrected level math — supply cancels, the chart scale wins — and clamp to the newest bar. The mcap-headline sub-line also says "Price …" now instead of the ambiguous "MC · …".</p>
+        </div>
+        <div class="pn-item">
+          <h4>CSV export</h4>
+          <p>For the journal and rounds — your data, one click, RFC-4180-safe, After columns included.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Onboarding checklist</h4>
+          <p>On Overview for newcomers: first buy → thesis → first close → first After → review → the 50-round road to the graduation bar. Dismissible; disappears on its own once you have done it all.</p>
+        </div>
+        <div class="pn-item">
+          <h4>Sharper prices on fresh launches</h4>
+          <p>Ambiguous unknown-unit ticks are now refused with a distinct reason instead of risking a double-converted price; GMGN markers snap to the bar grid; host-chart callbacks are hardened so a PaperTrench bug can never break the site's own chart; backups say honestly that screen recordings stay on this machine; replay scrubbing is memoized; coach timestamps match the calendar day you see.</p>
+        </div>
+      </div>
+      <div class="pn-foot">
+        <span>Full history:</span>
+        <a href="news.html#v2-1-0">this release in the archive</a>
+        <span>·</span>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/GRADUATION.md" target="_blank" rel="noopener">the graduation bar ↗</a>
+      </div>
+    </div>
+
+    <div class="post-nav">
+      <a class="pnav" href="news-fees.html">
+        <span class="dir">← Newer</span>
+        <span class="t">Fees &amp; costs emulation</span>
+      </a>
+      <a class="pnav next" href="news-v2.html">
+        <span class="dir">Older →</span>
+        <span class="t">Out of alpha: 139 defects published</span>
+      </a>
+    </div>
+
+  </div>
+</article>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="index.html">Home</a>
+        <a href="news.html">News</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/GRADUATION.md" target="_blank" rel="noopener">Graduation criteria</a>
+      </div>
+    </div>
+    <div class="foot-note">Paper trading only · not financial advice · every round in the table above is simulated demo data.</div>
+  </div>
+</footer>
+
+<script src="reveal.js"></script>
+</body>
+</html>
