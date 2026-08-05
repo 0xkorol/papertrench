@@ -54,6 +54,22 @@ test('magnitude suffixes across the whole memecoin range', () => {
   assert.equal(T.parseTitle('PEPE $89,400 | Padre', 'padre'), 89400);
 });
 
+test('real fomo titles yield their market cap (no dollar sign, MC-anchored)', () => {
+  const T = loadTitleFeed();
+  // Captured live from fomo.family (logged-in session, 2026-08-05). Fomo
+  // titles carry no "$" — the generic fallback patterns can never match, so
+  // without a dedicated entry fomo titles contribute nothing (fail-closed).
+  assert.equal(T.parseTitle('246.3M MC | BONK | fomo', 'fomo'), 246300000);
+  assert.equal(T.parseTitle('100.4M MC | CASHCAT | fomo', 'fomo'), 100400000);
+  assert.equal(T.parseTitle('265.3K MC | STRAW | fomo', 'fomo'), 265300);
+  // The pattern is anchored to the leading figure: a numeric TOKEN NAME
+  // later in the title must never be read as the cap.
+  assert.equal(T.parseTitle('BONK | fomo', 'fomo'), null,
+    'a title without the leading MC figure yields nothing');
+  assert.equal(T.parseTitle('fomo | Social Crypto Trading App & Web Platform', 'fomo'), null,
+    'the logged-out landing title yields nothing');
+});
+
 test('a title with no market cap yields nothing rather than a guess', () => {
   const T = loadTitleFeed();
   for (const title of ['GMGN.AI', '', 'Loading…', 'Padre', null, undefined]) {

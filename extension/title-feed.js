@@ -41,6 +41,11 @@
     bullx: [/\$([0-9][0-9,.]*)\s*([KMBT])?/i],
     dexscreener: [/\$([0-9][0-9,.]*)\s*([KMBT])?/i],
     birdeye: [/\$([0-9][0-9,.]*)\s*([KMBT])?/i],
+    // Fomo titles lead with the cap and carry NO dollar sign
+    // ("246.3M MC | BONK | fomo", verified live 2026-08-05). Only the
+    // ^-anchored MC form is accepted: with no $ to key on, an unanchored
+    // number pattern could read a numeric token name as the cap.
+    fomo: [/^([0-9][0-9,.]*)([KMBT])?\s*MC\s*\|/i],
   };
 
   /**

@@ -90,6 +90,10 @@ const MATRIX = [
   ['https://fomo.family/tokens/solana/' + MINT, 'fomo', 'mint', MINT, 'token route (solana chain slug + whole-mint address)'],
   ['https://fomo.family/tokens/solana/' + MINT + '?ref=abc', 'fomo', 'mint', MINT, 'query strings do not change the route'],
   ['https://fomo.family/tokens/base/' + EVM_B58ISH, 'fomo', null, null, 'EVM chain slugs must not reach the Solana resolver (O-11)'],
+  // Captured live 2026-08-05: fomo's own /token entry point dropped a logged-in
+  // user straight onto this Robinhood-chain page — EVM landings are routine, not
+  // hypothetical.
+  ['https://fomo.family/tokens/robinhood/0xdc29db7d4396ed738710a5373a30afc197e7268a', 'fomo', null, null, 'live-captured EVM landing must not mount (O-11)'],
   ['https://fomo.family/tokens/ethereum/' + MINT, 'fomo', null, null, 'a base58-shaped address under a non-solana slug is still not ours (O-11)'],
   ['https://fomo.family/u/sometrader', 'fomo', null, null, 'profile routes must not mount (O-10)'],
   ['https://fomo.family/profile/sometrader', 'fomo', null, null, 'profile routes must not mount (O-10)'],
