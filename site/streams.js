@@ -68,6 +68,20 @@
 
   $('signupBtn').href = SIGNUP_URL;
 
+  /* ---------- chat show/hide (desktop) ---------- */
+  let chatHidden = false;
+  try { chatHidden = localStorage.getItem('pt_chat_hidden') === '1'; } catch (_) {}
+  function applyChatPref() {
+    document.querySelector('.player-grid').classList.toggle('no-chat', chatHidden);
+    $('chatToggle').textContent = chatHidden ? 'Show chat' : 'Hide chat';
+  }
+  $('chatToggle').addEventListener('click', () => {
+    chatHidden = !chatHidden;
+    try { localStorage.setItem('pt_chat_hidden', chatHidden ? '1' : '0'); } catch (_) {}
+    applyChatPref();
+  });
+  applyChatPref();
+
   /* ---------- approval-sheet roster ----------
    * The sheet is the approval screen: form responses land as rows, and a row
    * ships the moment its Approved cell says yes. Published CSVs refresh on

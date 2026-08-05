@@ -57,6 +57,16 @@
     padding: 6px 13px; border-radius: 999px; transition: background .2s;
   }
   .player-bar a.twitch-out:hover { background: rgba(145,70,255,0.18); }
+  .chat-toggle {
+    font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+    color: var(--muted); background: rgba(255,255,255,0.04);
+    border: 1px solid var(--line2); border-radius: 999px; padding: 6px 13px;
+    transition: color .2s, background .2s;
+  }
+  .chat-toggle:hover { color: var(--text); background: rgba(255,255,255,0.09); }
+  @media (max-width: 980px) { .chat-toggle { display: none; } }
+  .player-grid.no-chat { grid-template-columns: 1fr; }
+  .player-grid.no-chat .chat-shell { display: none !important; }
   .chat-shell {
     overflow: hidden; display: flex; flex-direction: column;
     background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius);
@@ -133,11 +143,11 @@
   <div class="nav-inner">
     <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
     <div class="nav-links">
-      <a href="streams.html" style="color:var(--text)">Live</a>
       <a href="index.html#bubbles">Chart bubbles</a>
       <a href="index.html#replay">Replay</a>
       <a href="index.html#leaderboard">Leaderboard</a>
       <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" aria-current="page"><span class="dot"></span>Watch Live</a>
       <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
     </div>
   </div>
@@ -164,6 +174,7 @@
           <span class="who" id="playerWho"></span>
           <span class="handle" id="playerHandle"></span>
           <span class="spacer"></span>
+          <button class="chat-toggle" id="chatToggle" type="button">Hide chat</button>
           <a class="twitch-out" id="playerOut" href="#" target="_blank" rel="noopener">Watch on Twitch ↗</a>
         </div>
       </div>

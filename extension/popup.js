@@ -197,7 +197,11 @@ async function backupWallet() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
-  $('status').textContent = 'Backup downloaded — keep the file somewhere safe.';
+  // DEFECT D-41: screen recordings live in IndexedDB (tens of MB) and are
+  // deliberately NOT exported. The status line must say so — silently
+  // implying "everything is in the file" is an overpromise the user only
+  // discovers after the original machine is gone.
+  $('status').textContent = 'Backup downloaded — note that screen recordings stay on this machine and are not in the file.';
 }
 
 async function restoreWallet(ev) {

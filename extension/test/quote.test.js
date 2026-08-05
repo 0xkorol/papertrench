@@ -328,6 +328,97 @@ test('bootstrap refuses an untrusted or mismatched source', () => {
   assert.equal(stray.accepted, false, 'untrusted generic source must be rejected');
 });
 
+/* ---- F-25: rate-aware unit disambiguation refuses instead of guessing ---- */
+
+test('F-25: an unknown close plausible as BOTH units is refused, never guessed', () => {
+  // 5e-7 at rate 200: read as USD it is a sane memecoin price (~$500 mcap
+  // at 1e9 supply); read as native SOL it implies 1e-4 USD (~$100K mcap) —
+  // also sane. The old heuristic hardcoded "assume USD", so a genuinely
+  // SOL-denominated close here was divided by the rate a second time and
+  // the first fill landed ~200x low. Honest absence beats that number.
+  for (const v of [1e-7, 2e-7, 5e-7]) {
+    const verdict = Q.bootstrapTick(pendingToken(), {
+      source: 'chart-export',
+      candidates: [{ value: v, unit: 'unknown', key: 'chartExportClose' }],
+    }, SOL_USD);
+    assert.equal(verdict.accepted, false, `ambiguous close ${v} must be refused`);
+    assert.equal(verdict.reason, 'ambiguous-unit');
+    assert.equal(verdict.priceNative, null, 'no price may be fabricated from a guess');
+    assert.equal(verdict.priceUsd, null);
+  }
+});
+
+test('F-25: just past the ambiguous band, a single sane reading is accepted', () => {
+  // 6e-7 as native implies 1.2e-4 USD — outside the sane pre-index band —
+  // so only the USD reading survives and the tick is unambiguous again.
+  const v = 6e-7;
+  const verdict = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: v, unit: 'unknown', key: 'chartExportClose' }],
+  }, SOL_USD);
+  assert.equal(verdict.accepted, true, 'exactly one plausible reading must still bootstrap');
+  assert.equal(verdict.basis, 'usd');
+  assert.equal(verdict.priceUsd, v);
+  assert.ok(Math.abs(verdict.priceNative - v / SOL_USD) < 1e-18);
+});
+
+test('F-25: an unknown close implausible under EITHER reading is refused', () => {
+  // 0.5 read as USD is a $500M-mcap coin, read as native it is $100 per
+  // token — neither is a coin still waiting for its first index.
+  const verdict = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: 0.5, unit: 'unknown', key: 'chartExportClose' }],
+  }, SOL_USD);
+  assert.equal(verdict.accepted, false);
+  assert.equal(verdict.reason, 'implausible-unit');
+});
+
+test('F-25: with no rate the original magnitude heuristic is kept', () => {
+  // Rate-awareness must not regress the rateless path: a tiny close still
+  // bootstraps as native (without a fabricated USD side), and a mid-range
+  // close still waits for the rate.
+  const tiny = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: 1.05e-8, unit: 'unknown', key: 'chartExportClose' }],
+  }, 0);
+  assert.equal(tiny.accepted, true);
+  assert.equal(tiny.basis, 'native');
+  assert.equal(tiny.priceUsd, null, 'no rate means no USD side may be invented');
+
+  const mid = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: 5e-7, unit: 'unknown', key: 'chartExportClose' }],
+  }, 0);
+  assert.equal(mid.accepted, false);
+  assert.equal(mid.reason, 'no-sol-rate');
+});
+
+test('F-25: an explicit native price gains a rate-aware sanity floor', () => {
+  // Declared-native dust (1e-11 SOL -> 2e-9 USD -> $2 mcap) is not a coin;
+  // the old branch accepted anything under 1 SOL with no floor at all.
+  const dust = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: 1e-11, unit: 'native' }],
+  }, SOL_USD);
+  assert.equal(dust.accepted, false);
+  assert.equal(dust.reason, 'native-implausible');
+
+  // A sane declared-native price still bootstraps.
+  const sane = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: 1.05e-8, unit: 'native' }],
+  }, SOL_USD);
+  assert.equal(sane.accepted, true);
+  assert.equal(sane.priceNative, 1.05e-8);
+
+  // Without a rate there is nothing to judge against: behavior unchanged.
+  const noRate = Q.bootstrapTick(pendingToken(), {
+    source: 'chart-export',
+    candidates: [{ value: 1e-11, unit: 'native' }],
+  }, 0);
+  assert.equal(noRate.accepted, true, 'the rateless declared-native path must be untouched');
+});
+
 test('the header switches from "waiting" to a price after bootstrap', () => {
   const token = { ...pendingToken(), priceNative: 1.05e-8, priceUsd: 1.05e-8 * SOL_USD };
   const h = Q.headerFields(token, { now: Date.now(), pendingSince: 0, lastPriceAt: Date.now() });

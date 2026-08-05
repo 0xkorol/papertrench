@@ -43,6 +43,21 @@
  *   D-28  tables reset scroll/hover ~1/s (marks + timeAgo churn)
  *   D-34  any focused input froze the ENTIRE dashboard refresh
  *
+ * Wave 3 (dashboard value pack):
+ *
+ *   CSV   journal + rounds Export CSV: RFC-4180-safe escaping, documented
+ *         stable column order, client-side Blob download with URL revoke
+ *   ONBD  onboarding checklist on Overview: steps computed from real state,
+ *         dismissal persisted as pt_settings.onboardingDismissed (added at
+ *         write time only — engine.js untouched)
+ *   D-40  replay scrub rebuilt the whole view twice per animation frame —
+ *         buildReplayView memoized per (replay identity, session, cursor)
+ *   D-45  share-card drop target advertised GIF animation it never delivered
+ *   D-46  dead renderMomentMedia/renderReplayTape/formatUnix deleted
+ *   D-49  coach prompts stamped fills in UTC ISO while the calendar buckets
+ *         local days — stamps are local time with an explicit UTC offset
+ *   D-50  frame data URLs interpolated unescaped into src attributes
+ *
  * Engine fixes are exercised behaviourally through the real API; the
  * background override path is driven through the real service worker in a vm
  * sandbox; dashboard.js/popup.js (no DOM harness exists) are pinned with
@@ -768,7 +783,9 @@ function mutateHarness(initialState) {
     },
     set: async (obj) => { calls.sets += 1; stored.pt_state = obj.pt_state; },
   };
-  const sandbox = { store };
+  // D-40 wired mutateState to invalidate the replay-view memo on adoption;
+  // the harness only needs it to exist.
+  const sandbox = { store, invalidateReplayView: () => {} };
   vm.createContext(sandbox);
   vm.runInContext(
     `let storageReadFailed = false; let state = null;\n${src}\nthis.mutateState = mutateState; this.adopted = () => state;`,
@@ -1021,4 +1038,385 @@ test("D-12: the replay shell identity covers the round outcome and session count
     "a new session must be able to appear in the list");
   assert.doesNotMatch(block, /replayShell\.sessionId !== replay\.sessionId\) \{/,
     "the old sessionId-only reuse condition must be gone");
+});
+
+/* ======================= wave 3: dashboard value pack ======================= */
+
+/* ---------------- CSV export (behavioural through the shipped helpers) ----- */
+
+/** Run the SHIPPED CSV seam (csvEscape…roundsCsv) against the real engine. */
+function csvApi() {
+  const start = dashJs.indexOf('function csvEscape');
+  const end = dashJs.indexOf('function downloadCsv');
+  assert.ok(start !== -1 && end > start, 'the pure CSV seam must sit at the top of dashboard.js');
+  const sandbox = { E, JSON, Number, String, Array, Object, Math, Date, Boolean };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${dashJs.slice(start, end)}\nthis.api = { csvEscape, buildCsv, csvIso, flattenThesis, journalCsv, roundsCsv, JOURNAL_CSV_COLUMNS, ROUNDS_CSV_COLUMNS };`,
+    sandbox
+  );
+  return sandbox.api;
+}
+
+test('CSV: csvEscape is RFC-4180-safe and never turns a missing value into 0', () => {
+  const { csvEscape } = csvApi();
+  assert.equal(csvEscape('BONK'), 'BONK', 'plain values pass through unquoted');
+  assert.equal(csvEscape(0), '0', 'a real zero survives');
+  assert.equal(csvEscape('a,b'), '"a,b"', 'commas force quoting');
+  assert.equal(csvEscape('say "hi"'), '"say ""hi"""', 'embedded quotes are doubled');
+  assert.equal(csvEscape('line1\nline2'), '"line1\nline2"', 'LF forces quoting');
+  assert.equal(csvEscape('cr\rhere'), '"cr\rhere"', 'CR forces quoting');
+  assert.equal(csvEscape(null), '', 'null exports as an EMPTY field');
+  assert.equal(csvEscape(undefined), '', 'undefined exports as an EMPTY field');
+});
+
+test('CSV: buildCsv emits the header first with CRLF line endings', () => {
+  const { buildCsv } = csvApi();
+  assert.equal(buildCsv(['a', 'b'], [['1', 'x,y']]), 'a,b\r\n1,"x,y"\r\n');
+});
+
+test('CSV: the journal export carries the documented columns, oldest first', () => {
+  const api = csvApi();
+  // join, not deepEqual: the array is built inside the vm realm, so its
+  // prototype is the sandbox's Array and deepStrictEqual would reject it.
+  assert.equal(api.JOURNAL_CSV_COLUMNS.join(','),
+    'ts,side,symbol,mint,site,qty,priceNative,priceUsd,solGross,feeSol,solNet,pnlSol,mcap',
+    'the column order is a documented contract — reordering breaks consumers');
+
+  // Newest-first journal (the stored order); a symbol with a comma; a buy
+  // with no pnlSol and no mcap — both must export EMPTY, never 0.
+  const csv = api.journalCsv([
+    { ts: Date.UTC(2026, 0, 2, 3, 4, 5), side: 'sell', symbol: 'BONK', mint: 'M2', site: 'padre', qty: 10, priceNative: 0.002, priceUsd: 0.4, solGross: 0.02, feeSol: 0.0002, solNet: 0.0198, pnlSol: 0.01, mcap: 240000 },
+    { ts: Date.UTC(2026, 0, 1, 0, 0, 0), side: 'buy', symbol: 'A,B', mint: 'M1', site: 'axiom', qty: 5, priceNative: 0.001, priceUsd: 0.2, solGross: 1, feeSol: 0.01, solNet: 0.99, mcap: null },
+  ]);
+  const lines = csv.split('\r\n');
+  assert.equal(lines[0], api.JOURNAL_CSV_COLUMNS.join(','));
+  assert.equal(lines[1], '2026-01-01T00:00:00.000Z,buy,"A,B",M1,axiom,5,0.001,0.2,1,0.01,0.99,,',
+    'oldest fill first; ISO timestamp; missing pnlSol/mcap stay empty');
+  assert.equal(lines[2], '2026-01-02T03:04:05.000Z,sell,BONK,M2,padre,10,0.002,0.4,0.02,0.0002,0.0198,0.01,240000');
+  assert.equal(lines[3], '', 'the document is CRLF-terminated');
+  assert.equal(lines.length, 4);
+});
+
+test('CSV: the rounds export flattens afterExit, thesis, and the exit grade honestly', () => {
+  const api = csvApi();
+  // join, not deepEqual: vm-realm array (see the journal columns test).
+  assert.equal(api.ROUNDS_CSV_COLUMNS.join(','),
+    'openedAt,closedAt,symbol,mint,site,heldMs,investedSol,returnedSol,pnlSol,pnlPct,'
+    + 'peakPnlSol,troughPnlSol,afterExit.maxPct,afterExit.minPct,afterExit.samples,thesis,exitGrade');
+
+  // A REAL closed round from the engine, then annotated the way the app does.
+  const settings = wave2Settings();
+  const state = E.defaultState(settings);
+  const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+  E.buy(state, settings, { ts: t0, mint: 'MintA', symbol: 'X', site: 'padre', priceNative: 0.001, solAmount: 1 });
+  const { round } = E.sell(state, settings, { ts: t0 + 60000, mint: 'MintA', site: 'padre', qtyFraction: 1, priceNative: 0.002 });
+  round.afterExit = { maxPct: 120, minPct: -35, samples: 7 };
+  round.thesis = { text: 'dip, buy the fear', tags: ['momentum', 'dip'], plan: 'scale out', targetPct: 50, stopPct: 20 };
+
+  const bare = { ...round, id: 'r-bare', afterExit: undefined, thesis: undefined, closedAt: round.closedAt + 1000 };
+
+  const csv = api.roundsCsv([bare, round]); // stored newest-first on purpose
+  const lines = csv.split('\r\n');
+  assert.equal(lines[0], api.ROUNDS_CSV_COLUMNS.join(','));
+
+  // Oldest (annotated) round first.
+  assert.match(lines[1], new RegExp(`^${new Date(round.openedAt).toISOString()},${new Date(round.closedAt).toISOString()},X,MintA,padre,`));
+  assert.match(lines[1], /,120,-35,7,/, 'observed afterExit extremes export as-is');
+  assert.ok(lines[1].includes('"dip, buy the fear | tags: momentum/dip | plan: scale out | target: +50% | stop: -20%"'),
+    'the thesis flattens to one quoted field (it contains a comma)');
+  const grade = E.exitQuality(round);
+  assert.ok(grade && lines[1].endsWith(',' + grade.verdict),
+    'the exit grade is the same verdict the Rounds table shows');
+
+  // The bare round: afterExit and thesis export as EMPTY fields — an honest
+  // gap, never fabricated zeros.
+  assert.match(lines[2], /,,,,/, 'missing afterExit fields and thesis stay empty');
+  assert.doesNotMatch(lines[2], /,0,0,0,/, 'no zeros are invented for an unobserved After');
+});
+
+test('CSV: both cards render an Export CSV button wired to the revoked-URL download', () => {
+  const journal = fnBlock(dashJs, 'function renderJournal(el)');
+  assert.match(journal, /id="journal-export"/, 'the Journal card header carries the button');
+  const rounds = fnBlock(dashJs, 'function renderRounds(el)');
+  assert.match(rounds, /id="rounds-export"/, 'the Rounds card header carries the button');
+
+  const rebind = fnBlock(dashJs, 'function rebindSection(id, el)');
+  assert.match(rebind, /downloadCsv\(`papertrench-journal-\$\{csvStamp\(\)\}\.csv`, journalCsv\(state\.journal\)\)/,
+    'the journal button downloads journalCsv');
+  assert.match(rebind, /downloadCsv\(`papertrench-rounds-\$\{csvStamp\(\)\}\.csv`, roundsCsv\(state\.rounds\)\)/,
+    'the rounds button downloads roundsCsv');
+
+  const dl = fnBlock(dashJs, 'function downloadCsv(filename, text)');
+  assert.match(dl, /new Blob\(\[text\], \{ type: 'text\/csv' \}\)/, 'generated client-side as a Blob');
+  assert.match(dl, /URL\.createObjectURL/, 'served through an object URL');
+  assert.match(dl, /revokeObjectURL/, 'the object URL is revoked — the popup backup pattern');
+});
+
+/* ---------------- onboarding checklist ------------------------------------ */
+
+/** Run the SHIPPED onboardingSteps against synthetic state. */
+function stepsOf(stateObj) {
+  const src = fnBlock(dashJs, 'function onboardingSteps(state)');
+  const sandbox = { Object, Math, Number, String, Array, Boolean };
+  vm.createContext(sandbox);
+  vm.runInContext(`${src}\nthis.run = onboardingSteps;`, sandbox);
+  return sandbox.run(stateObj);
+}
+
+function doneById(steps) {
+  return Object.fromEntries(steps.map((s) => [s.id, s.done]));
+}
+
+test('ONBD: every step is computed from real state — nothing pre-checked', () => {
+  const empty = stepsOf({ journal: [], rounds: [], positions: {} });
+  assert.equal(empty.length, 6);
+  assert.deepEqual(Object.values(doneById(empty)), [false, false, false, false, false, false],
+    'a fresh wallet has done nothing, so nothing is checked');
+  assert.equal(empty.find((s) => s.id === 'graduation').progress, '0 / 50');
+});
+
+test('ONBD: each signal flips exactly its own step', () => {
+  const base = { journal: [], rounds: [], positions: {} };
+  assert.equal(doneById(stepsOf({ ...base, journal: [{ side: 'buy' }] })).buy, true);
+  assert.equal(doneById(stepsOf({ ...base, journal: [{ side: 'sell' }] })).buy, false,
+    'a sell alone is not a first buy');
+  assert.equal(doneById(stepsOf({ ...base, positions: { M: { thesis: { text: 'x' } } } })).thesis, true,
+    'a thesis on an OPEN position counts');
+  assert.equal(doneById(stepsOf({ ...base, rounds: [{ thesis: { text: 'x' } }] })).thesis, true,
+    'a thesis carried onto a closed round counts');
+  assert.equal(doneById(stepsOf({ ...base, rounds: [{}] })).round, true);
+  assert.equal(doneById(stepsOf({ ...base, rounds: [{ afterExit: { maxPct: 1, minPct: -1, samples: 2 } }] })).after, true);
+  assert.equal(doneById(stepsOf({ ...base, rounds: [{ note: { text: 'lesson' } }] })).review, true);
+  assert.equal(doneById(stepsOf({ ...base, rounds: [{ aiReview: { t: 1 } }] })).review, true);
+  assert.equal(doneById(stepsOf({ ...base, rounds: [{ note: { text: '' } }] })).review, false,
+    'an empty note is not a review');
+});
+
+test('ONBD: the review step checks itself once every doing-step is done', () => {
+  const steps = stepsOf({
+    journal: [{ side: 'buy' }],
+    rounds: [{ thesis: { text: 'x' }, afterExit: { maxPct: 1, minPct: -1, samples: 1 } }],
+    positions: {},
+  });
+  const done = doneById(steps);
+  assert.equal(done.buy && done.thesis && done.round && done.after, true);
+  assert.equal(done.review, true, 'the habit clearly exists — the card must not nag');
+});
+
+test('ONBD: the graduation step tracks 50 rounds with honest progress', () => {
+  const rounds49 = Array.from({ length: 49 }, (_, i) => ({ id: 'r' + i }));
+  const at49 = stepsOf({ journal: [], rounds: rounds49, positions: {} });
+  assert.equal(doneById(at49).graduation, false);
+  assert.equal(at49.find((s) => s.id === 'graduation').progress, '49 / 50');
+  const at50 = stepsOf({ journal: [], rounds: [...rounds49, { id: 'r49' }], positions: {} });
+  assert.equal(doneById(at50).graduation, true);
+});
+
+test('ONBD: shown until completed, then permanently hidden via pt_settings', () => {
+  const render = fnBlock(dashJs, 'function renderOnboarding()');
+  assert.match(render, /if \(settings\.onboardingDismissed === true\) return '';/,
+    'a persisted dismissal hides the card for good');
+  assert.match(render, /doneCount === steps\.length/,
+    'completion is judged over ALL steps');
+  assert.match(render, /persistOnboardingDismissal\(\);\s*\n\s*return '';/,
+    'a completed checklist persists its own dismissal and renders nothing');
+  assert.match(render, /id="onboard-dismiss"/, 'one dismiss button');
+  assert.match(render, /I know my way around/, 'with the promised label');
+  assert.match(render, /id="onboard-coach"/, 'the graduation row links the coach section');
+
+  const overview = fnBlock(dashJs, 'function renderOverview(el)');
+  assert.match(overview, /\$\{renderOnboarding\(\)\}/, 'the card renders on the Overview');
+
+  const bind = fnBlock(dashJs, 'function bindOnboarding(el)');
+  assert.match(bind, /persistOnboardingDismissal\(\)/);
+  assert.match(bind, /nav button\[data-section="coach"\]/,
+    'the coach link navigates through the real nav');
+});
+
+test('ONBD: dismissal is written over a FRESH read and engine.js is untouched', () => {
+  const persist = fnBlock(dashJs, 'async function persistOnboardingDismissal()');
+  assert.match(persist, /store\.get\(\['pt_settings'\]\)/,
+    'D-19 discipline: the key is laid over freshly read settings, never the stale module copy');
+  assert.match(persist, /if \(stored === null\) return;/,
+    'D-15 discipline: an unreadable read refuses the write');
+  assert.match(persist, /fresh\.onboardingDismissed = true;[\s\S]*await store\.set\(\{ pt_settings: fresh \}\);[\s\S]*settings = fresh;/,
+    'the in-memory copy is adopted only AFTER the write lands');
+
+  const gather = fnBlock(dashJs, 'function gatherSettingsFromForm(');
+  assert.ok(!gather.includes('onboardingDismissed'),
+    'the key is not a form field — the fresh-read merge preserves it across settings saves');
+
+  const engineSrc = fs.readFileSync(path.join(ROOT, 'engine.js'), 'utf8');
+  assert.ok(!engineSrc.includes('onboardingDismissed'),
+    'absent-key defaults handle it — engine.js must not know the key exists');
+});
+
+/* ---------------- D-40: memoized replay view ------------------------------ */
+
+/** Run the SHIPPED buildReplayView + invalidate against counting stubs. */
+function replayViewHarness(eventTimes) {
+  const invalidate = dashJs.match(/function invalidateReplayView\(\) \{ replayViewCache = null; \}/);
+  assert.ok(invalidate, 'the shipped invalidate helper must exist');
+  const src = [
+    'let replayViewCache = null;',
+    invalidate[0],
+    fnBlock(dashJs, 'function buildReplayView(replay)'),
+  ].join('\n');
+  const calls = { builds: 0 };
+  const sandbox = {
+    Number, Math, Boolean, Object, Array,
+    replayCursor: 0,
+    replayRound: () => null,
+    replayTrades: () => [],
+    replayFrames: () => [],
+    replayRecording: () => null,
+    RP: { buildReplayEvents: () => { calls.builds += 1; return eventTimes.map((at) => ({ at })); } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${src}\nthis.build = buildReplayView; this.invalidate = invalidateReplayView; this.setCursor = (n) => { replayCursor = n; };`,
+    sandbox
+  );
+  return { build: sandbox.build, invalidate: sandbox.invalidate, setCursor: sandbox.setCursor, calls };
+}
+
+test('D-40: an unchanged (replay, cursor) pair is served from the memo', () => {
+  const h = replayViewHarness([10, 20]);
+  const A = { sessionId: 's1', openedAt: 100 };
+  const first = h.build(A);
+  const second = h.build(A);
+  assert.equal(h.calls.builds, 1, 'the second call must not rebuild the event list');
+  assert.equal(first, second, 'the identical view object is returned');
+  assert.equal(first.event.at, 10);
+});
+
+test('D-40: a cursor move, an invalidation, or a reloaded replay object rebuilds', () => {
+  const h = replayViewHarness([10, 20]);
+  const A = { sessionId: 's1', openedAt: 100 };
+  h.build(A);
+  h.setCursor(1);
+  const moved = h.build(A);
+  assert.equal(h.calls.builds, 2, 'a cursor change invalidates');
+  assert.equal(moved.event.at, 20);
+  h.build(A);
+  assert.equal(h.calls.builds, 2, 'and the moved cursor is itself memoized');
+
+  h.invalidate();
+  h.build(A);
+  assert.equal(h.calls.builds, 3, 'explicit invalidation forces a rebuild');
+
+  // A reloaded replay list produces NEW objects for the same sessionId; the
+  // identity key means a stale view can never be served across a data reload.
+  h.build({ sessionId: 's1', openedAt: 100 });
+  assert.equal(h.calls.builds, 4);
+});
+
+test('D-40: an out-of-range cursor clamps, then memoizes at the clamped index', () => {
+  const h = replayViewHarness([10, 20]);
+  const A = { sessionId: 's1', openedAt: 100 };
+  h.setCursor(99);
+  const clamped = h.build(A);
+  assert.equal(clamped.event.at, 20, 'the cursor clamps to the last event');
+  h.build(A);
+  assert.equal(h.calls.builds, 1, 'the post-clamp cursor is a memo hit');
+});
+
+test('D-40: the D-26 degraded empty view survives and is never cached', () => {
+  const h = replayViewHarness([10, 20]);
+  const A = { sessionId: 's1', openedAt: 100 };
+  h.build(A);
+  const empty = h.build(null);
+  // .length, not deepEqual: the empty array is a vm-realm array.
+  assert.equal(empty.events.length, 0, 'a missing replay still degrades to an empty view');
+  assert.equal(empty.replay, null);
+  h.build(A);
+  assert.equal(h.calls.builds, 1, 'the null call must not have evicted the cached view');
+});
+
+test('D-40: every data-refresh path invalidates the memo', () => {
+  const load = fnBlock(dashJs, 'async function loadAll()');
+  assert.match(load, /invalidateReplayView\(\);/, 'loadAll replaces state/frames/replays');
+  const mutate = fnBlock(dashJs, 'async function mutateState(');
+  assert.match(mutate, /invalidateReplayView\(\);/, 'mutateState adopts a fresh state');
+  const recs = fnBlock(dashJs, 'async function loadRecordings()');
+  assert.match(recs, /invalidateReplayView\(\);/, 'loadRecordings swaps the recordings map');
+  assert.match(resetBlock(), /invalidateReplayView\(\)/, 'reset wipes everything the view is built from');
+});
+
+/* ---------------- D-45 / D-46 / D-49 / D-50 ------------------------------- */
+
+test('D-45: the share-card drop target no longer promises GIF animation', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'dashboard.html'), 'utf8');
+  assert.doesNotMatch(html, /image \/ GIF/,
+    'the old label advertised animation the canvas composer does not deliver');
+  assert.match(html, /a GIF renders as a still/,
+    'the honest label says exactly what happens');
+});
+
+test('D-46: the dead render functions are gone and the live ones remain', () => {
+  assert.doesNotMatch(dashJs, /function renderMomentMedia/,
+    'renderMomentMedia was dead code drifting from syncReplayMedia');
+  assert.doesNotMatch(dashJs, /function renderReplayTape/,
+    'renderReplayTape was dead code drifting from syncTape');
+  assert.doesNotMatch(dashJs, /function formatUnix/,
+    'formatUnix had zero call sites');
+  assert.match(dashJs, /function syncReplayMedia/, 'the live media renderer remains');
+  assert.match(dashJs, /function syncTape/, 'the live tape renderer remains');
+});
+
+/** Run a SHIPPED formatLocalStamp (dashboard or background copy). */
+function localStampFn(source, name) {
+  const src = fnBlock(source, 'function formatLocalStamp(ms)');
+  const sandbox = { Date, Number, String, Math };
+  vm.createContext(sandbox);
+  vm.runInContext(`${src}\nthis.run = formatLocalStamp;`, sandbox);
+  assert.ok(typeof sandbox.run === 'function', `${name} must ship formatLocalStamp`);
+  return sandbox.run;
+}
+
+test('D-49: coach stamps are local time with an explicit UTC offset', () => {
+  const backgroundJs = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  for (const [source, name] of [[dashJs, 'dashboard.js'], [backgroundJs, 'background.js']]) {
+    const stamp = localStampFn(source, name);
+    const ts = Date.UTC(2026, 6, 15, 12, 34, 56);
+    const out = stamp(ts);
+    assert.match(out, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC[+-]\d{2}:\d{2}$/,
+      `${name}: the stamp carries an explicit UTC-offset suffix`);
+    // The rendered clock must be the LOCAL clock for that instant (whatever
+    // this machine's zone is), and the suffix must encode that zone's offset.
+    const d = new Date(ts);
+    const pad = (n) => String(n).padStart(2, '0');
+    const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    assert.equal(out.slice(0, 19), local, `${name}: the date-time part is local time`);
+    const offsetMin = -d.getTimezoneOffset();
+    const sign = offsetMin >= 0 ? '+' : '-';
+    const abs = Math.abs(offsetMin);
+    assert.equal(out.slice(20), `UTC${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`,
+      `${name}: the suffix encodes the real zone offset`);
+  }
+});
+
+test('D-49: both coach prompt builders use the local stamp, never bare UTC ISO', () => {
+  const coach = fnBlock(dashJs, 'function buildCoachMessages(round, trades, roundFrames)');
+  assert.match(coach, /formatLocalStamp\(t\.ts\)/);
+  assert.doesNotMatch(coach, /toISOString/,
+    'a UTC ISO stamp puts midnight fills on a different day than the calendar');
+
+  const backgroundJs = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  const prompt = fnBlock(backgroundJs, 'function buildRoundReviewPrompt(round, trades)');
+  assert.match(prompt, /formatLocalStamp\(trade\.ts\)/);
+  assert.match(prompt, /formatLocalStamp\(round\.openedAt\)/);
+  assert.match(prompt, /formatLocalStamp\(round\.closedAt\)/);
+  assert.doesNotMatch(prompt, /toISOString/);
+});
+
+test('D-50: frame data URLs are escaped into src attributes', () => {
+  assert.ok(dashJs.includes('src="${esc(relatedFrame.dataUrl)}"'),
+    'the replay frame image escapes its data URL');
+  assert.ok(dashJs.includes('src="${esc(f.dataUrl)}"'),
+    'the coach frame strip escapes its data URLs');
+  assert.doesNotMatch(dashJs, /src="\$\{relatedFrame\.dataUrl\}"/,
+    'no unescaped interpolation remains');
+  assert.doesNotMatch(dashJs, /src="\$\{f\.dataUrl\}"/);
 });

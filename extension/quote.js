@@ -220,6 +220,19 @@
   var BOOTSTRAP_NATIVE_THRESHOLD = 1e-7;
   var BOOTSTRAP_MCAP_FLOOR = 1000;
   var BOOTSTRAP_USD_CEILING = 1e6;
+  // DEFECT F-25: the sane USD unit-price band for a coin still in its
+  // pre-index bootstrap window. The old heuristic hardcoded today's SOL/USD
+  // scale ("anything in [1e-7, 1000) is USD"), so a genuinely SOL-denominated
+  // close just past the threshold was divided by the rate twice (~200x low).
+  // With a live rate the two readings are judged the same way: a value is
+  // plausibly NATIVE when value x rate lands in this band, plausibly USD when
+  // the value itself does. When BOTH readings are plausible the tick is
+  // REFUSED rather than guessed — the fast-retry loop delivers an anchored
+  // quote within seconds, and a short honest absence beats a 200x-wrong fill.
+  // Band intuition at 1e9 supply (the memecoin norm): $100 .. $100K market
+  // cap, generous in both directions for a coin no aggregator has indexed.
+  var BOOTSTRAP_SANE_USD_MIN = 1e-7;
+  var BOOTSTRAP_SANE_USD_MAX = 1e-4;
 
   /**
    * Accept the very first price for a coin no aggregator has indexed yet.
@@ -294,6 +307,17 @@
         // A memecoin native price is far below 1 SOL. Anything larger is almost
         // certainly a market cap or a mislabelled USD figure.
         if (v >= 1) return reject('native-looks-mcap');
+        // F-25: this branch had no floor — dust values and rate-scale
+        // mislabels became real fills. With a live rate an explicit native
+        // price must still imply a sane USD price for a pre-index coin.
+        // Without a rate there is nothing to judge against: keep the old
+        // behavior rather than refusing a possibly-good declared unit.
+        if (rate) {
+          var usdEquiv = v * rate;
+          if (usdEquiv < BOOTSTRAP_SANE_USD_MIN || usdEquiv > BOOTSTRAP_SANE_USD_MAX) {
+            return reject('native-implausible');
+          }
+        }
         return accept(v, rate ? v * rate : null, null, 'native');
       }
 
@@ -305,24 +329,41 @@
         return accept(native, v, null, 'usd');
       }
 
-      // unit === 'unknown' is the common TradingView chart close case. Use the
-      // magnitude of the close to guess the axis unit.
+      // unit === 'unknown' is the common TradingView chart close case.
       if (unit === 'unknown') {
         // Market cap values are much larger than token prices and we cannot
         // derive a token price without an implied supply.
         if (v >= BOOTSTRAP_MCAP_FLOOR) return reject('mcap-no-supply');
 
-        // Very small values are native SOL prices for memecoins (e.g. 1e-8).
-        if (v < BOOTSTRAP_NATIVE_THRESHOLD) {
-          return accept(v, rate ? v * rate : null, null, 'native');
-        }
-
-        // Mid-range values are USD token prices for most charts.
+        // F-25: with a live SOL/USD rate the disambiguation is RATE-AWARE,
+        // not a hardcoded magnitude split. Judge both readings against the
+        // sane pre-index USD band and only accept when exactly ONE fits.
         if (rate) {
-          var native = v / rate;
-          if (native > 0) return accept(native, v, null, 'usd');
+          var usdIfNative = v * rate;
+          var nativePlausible = usdIfNative >= BOOTSTRAP_SANE_USD_MIN
+            && usdIfNative <= BOOTSTRAP_SANE_USD_MAX;
+          var usdPlausible = v >= BOOTSTRAP_SANE_USD_MIN
+            && v <= BOOTSTRAP_SANE_USD_MAX;
+          // Both readings sane: guessing here is exactly the double-division
+          // corruption. Refuse; the fast-retry loop anchors the coin soon.
+          if (nativePlausible && usdPlausible) return reject('ambiguous-unit');
+          if (nativePlausible) return accept(v, usdIfNative, null, 'native');
+          if (usdPlausible) {
+            var native = v / rate;
+            if (native > 0) return accept(native, v, null, 'usd');
+            return reject('no-sol-rate');
+          }
+          // Neither reading lands anywhere sane for a bootstrap coin: an
+          // absurd value must never become the first fill price.
+          return reject('implausible-unit');
         }
 
+        // No rate yet: keep the original magnitude-only heuristic. Very
+        // small values are native SOL prices for memecoins (e.g. 1e-8);
+        // anything else needs the rate to be read at all.
+        if (v < BOOTSTRAP_NATIVE_THRESHOLD) {
+          return accept(v, null, null, 'native');
+        }
         return reject('no-sol-rate');
       }
     }

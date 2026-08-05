@@ -657,8 +657,11 @@
       <h3 style="margin:0 0 12px;font-size:10.5px;font-weight:750;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim)">Share P&amp;L card</h3>
       <canvas class="card-preview" id="card-canvas" width="1200" height="675"></canvas>
       <div class="card-controls">
+        <!-- D-45: the card is drawn once onto a canvas, so an animated GIF
+             renders as its first frame. The label says so instead of
+             promising animation the composer does not deliver. -->
         <label class="card-drop" id="card-drop">
-          Click or drop an image / GIF to use as the background
+          Click or drop an image to use as the background — a GIF renders as a still (its first frame)
           <input type="file" id="card-file" accept="image/*">
         </label>
         <button class="btn-sec" id="card-clear">Clear image</button>

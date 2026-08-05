@@ -19,6 +19,111 @@ if (!AT) throw new Error('PTAttest module missing');
 const PC = window.PTPnlCard;
 if (!PC) throw new Error('PTPnlCard module missing');
 
+/* ---------- CSV export: pure helpers (kept together as a testable seam) ----
+ *
+ * Data ownership is part of the trust story: the journal and the closed
+ * rounds export as plain CSV, generated entirely client-side — nothing
+ * leaves the machine. RFC-4180 escaping: a field containing a comma, a
+ * double quote, a CR, or an LF is wrapped in double quotes with embedded
+ * quotes doubled. null/undefined render as EMPTY fields — a missing number
+ * stays missing, it never becomes 0.
+ */
+function csvEscape(value) {
+  if (value === null || value === undefined) return '';
+  const s = String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Header + rows (arrays of fields) → one CRLF-terminated CSV document. */
+function buildCsv(header, rows) {
+  return [header, ...rows]
+    .map((row) => row.map(csvEscape).join(','))
+    .join('\r\n') + '\r\n';
+}
+
+/** ISO 8601 or empty — an unknown timestamp exports as an empty field. */
+function csvIso(ms) {
+  const value = Number(ms);
+  return Number.isFinite(value) && value > 0 ? new Date(value).toISOString() : '';
+}
+
+/** One field per thesis: the text plus the structured parts, pipe-joined. */
+function flattenThesis(thesis) {
+  if (!thesis) return '';
+  const parts = [];
+  if (thesis.text) parts.push(thesis.text);
+  if (Array.isArray(thesis.tags) && thesis.tags.length) parts.push(`tags: ${thesis.tags.join('/')}`);
+  if (thesis.plan) parts.push(`plan: ${thesis.plan}`);
+  if (thesis.targetPct !== null && thesis.targetPct !== undefined) parts.push(`target: +${thesis.targetPct}%`);
+  if (thesis.stopPct !== null && thesis.stopPct !== undefined) parts.push(`stop: -${thesis.stopPct}%`);
+  return parts.join(' | ');
+}
+
+// Stable, documented column orders — the header row IS the format contract.
+const JOURNAL_CSV_COLUMNS = [
+  'ts', 'side', 'symbol', 'mint', 'site', 'qty', 'priceNative', 'priceUsd',
+  'solGross', 'feeSol', 'solNet', 'pnlSol', 'mcap',
+];
+const ROUNDS_CSV_COLUMNS = [
+  'openedAt', 'closedAt', 'symbol', 'mint', 'site', 'heldMs', 'investedSol',
+  'returnedSol', 'pnlSol', 'pnlPct', 'peakPnlSol', 'troughPnlSol',
+  'afterExit.maxPct', 'afterExit.minPct', 'afterExit.samples', 'thesis', 'exitGrade',
+];
+
+/** The full journal, oldest first, in JOURNAL_CSV_COLUMNS order. */
+function journalCsv(journal) {
+  const rows = [...(journal || [])]
+    .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0))
+    .map((t) => [
+      csvIso(t.ts), t.side, t.symbol, t.mint, t.site, t.qty,
+      t.priceNative, t.priceUsd, t.solGross, t.feeSol, t.solNet, t.pnlSol, t.mcap,
+    ]);
+  return buildCsv(JOURNAL_CSV_COLUMNS, rows);
+}
+
+/**
+ * Closed rounds, oldest first, in ROUNDS_CSV_COLUMNS order. The After
+ * exports observed extremes only — a round without an observed hour exports
+ * EMPTY afterExit fields, never zeros. The exit grade is the same verdict
+ * the Rounds table shows, or empty when the round cannot be graded.
+ */
+function roundsCsv(rounds) {
+  const rows = [...(rounds || [])]
+    .sort((a, b) => (Number(a.closedAt) || 0) - (Number(b.closedAt) || 0))
+    .map((r) => {
+      const after = r.afterExit || null;
+      const quality = E.exitQuality(r);
+      return [
+        csvIso(r.openedAt), csvIso(r.closedAt), r.symbol, r.mint, r.site,
+        r.heldMs, r.investedSol, r.returnedSol, r.pnlSol, r.pnlPct,
+        r.peakPnlSol, r.troughPnlSol,
+        after ? after.maxPct : null, after ? after.minPct : null,
+        after ? after.samples : null,
+        flattenThesis(r.thesis),
+        quality ? quality.verdict : '',
+      ];
+    });
+  return buildCsv(ROUNDS_CSV_COLUMNS, rows);
+}
+
+/**
+ * Client-side download, mirroring the popup backup pattern: Blob → object
+ * URL → synthetic click → revoke shortly after.
+ */
+function downloadCsv(filename, text) {
+  const blob = new Blob([text], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function csvStamp() { return new Date().toISOString().slice(0, 10); }
+
 const DEFAULTS = E.DEFAULT_SETTINGS;
 let settings = E.defaultSettings();
 let state = E.defaultState(settings);
@@ -309,6 +414,8 @@ async function loadAll() {
   state = s.pt_state || E.defaultState(settings);
   frames = s.pt_frames || [];
   replays = RP.normalizeReplayList(s[RP.STORAGE_KEY]);
+  // D-40: everything the replay view is derived from was just replaced.
+  invalidateReplayView();
   if (!selectedReplayId && replays[0]) selectedReplayId = replays[0].sessionId;
 
   // Videos are not needed to paint anything except Replay, and they come from
@@ -399,6 +506,9 @@ async function mutateState(mutate, retries = 3) {
     if (checkSeq !== baseSeq) continue;
     await store.set({ pt_state: fresh });
     state = fresh;
+    // D-40: the adopted state carries new journal/rounds — replay views
+    // built from the old one are stale.
+    invalidateReplayView();
     return fresh;
   }
   throw new Error('Another tab kept writing the wallet — the change was NOT saved. Try again.');
@@ -476,12 +586,22 @@ function renderSection(id) {
  */
 function rebindSection(id, el) {
   if (id === 'overview') {
+    bindOnboarding(el);
     // The canvas needs real layout before it can be sized and drawn.
     drawEquityCurve();
     return;
   }
   if (id === 'calendar') { bindCalendar(el); return; }
+  if (id === 'journal') {
+    const exportBtn = el.querySelector('#journal-export');
+    if (exportBtn) exportBtn.addEventListener('click', () =>
+      downloadCsv(`papertrench-journal-${csvStamp()}.csv`, journalCsv(state.journal)));
+    return;
+  }
   if (id === 'rounds') {
+    const exportBtn = el.querySelector('#rounds-export');
+    if (exportBtn) exportBtn.addEventListener('click', () =>
+      downloadCsv(`papertrench-rounds-${csvStamp()}.csv`, roundsCsv(state.rounds)));
     el.querySelectorAll('.review-btn').forEach((button) =>
       button.addEventListener('click', () => runReview(button.dataset.reviewId)));
     el.querySelectorAll('.replay-btn').forEach((button) =>
@@ -577,6 +697,127 @@ function equitySparkline() {
   </svg>`;
 }
 
+/* ---------- onboarding checklist ---------- */
+
+/**
+ * The first-session checklist, computed entirely from real state — nothing is
+ * ever checked off that did not actually happen. Shown on the Overview until
+ * every step is done (or the trader dismisses it), then permanently hidden
+ * via pt_settings.onboardingDismissed. The key is only ever ADDED at
+ * dismissal time; an absent key just means "still new here" (engine defaults
+ * handle absence — engine.js is untouched).
+ */
+function onboardingSteps(state) {
+  const journal = (state && state.journal) || [];
+  const rounds = (state && state.rounds) || [];
+  const positions = Object.values((state && state.positions) || {});
+  const firstBuy = journal.some((t) => t && t.side === 'buy');
+  const thesisWritten = positions.some((p) => p && p.thesis)
+    || rounds.some((r) => r && r.thesis);
+  const firstRound = rounds.length > 0;
+  const afterObserved = rounds.some((r) => r && r.afterExit);
+  // "Reviewed" means a note or an AI review on any round. Once every doing
+  // step is done the habit clearly exists, so the box checks itself instead
+  // of nagging about a specific feature.
+  const reviewed = rounds.some((r) => r && ((r.note && r.note.text) || r.aiReview))
+    || (firstBuy && thesisWritten && firstRound && afterObserved);
+  return [
+    { id: 'buy', done: firstBuy, label: 'Make your first paper buy',
+      sub: 'Open a coin on a supported site and hit BUY (PAPER). Fake money, real price.' },
+    { id: 'thesis', done: thesisWritten, label: 'Write a thesis while a position is open',
+      sub: 'Say why, before you know the outcome. Nobody grades the prose.' },
+    { id: 'round', done: firstRound, label: 'Close your first round trip',
+      sub: 'Sell all the way out and the round lands in Rounds, graded.' },
+    { id: 'after', done: afterObserved, label: 'See The After',
+      sub: 'An hour after an exit, what the coin actually did lands on the round.' },
+    { id: 'review', done: reviewed, label: 'Review a closed round',
+      sub: 'Add a note (or run an AI review) on a round — the lesson is the point.' },
+    { id: 'graduation', done: rounds.length >= 50, label: '50 rounds toward the graduation bar',
+      sub: 'Ten trades prove nothing. The honest sample starts at 50.',
+      progress: `${Math.min(rounds.length, 50)} / 50` },
+  ];
+}
+
+let onboardingDismissInFlight = false;
+
+/**
+ * Persist onboardingDismissed: true into pt_settings. D-19 discipline: the
+ * one key is laid over a FRESH read, never the stale module copy; D-15
+ * discipline: an unreadable read refuses the write and keeps the card (it
+ * costs nothing and retries next render). The in-memory copy is adopted only
+ * after the write lands.
+ */
+async function persistOnboardingDismissal() {
+  if (onboardingDismissInFlight || settings.onboardingDismissed === true) return;
+  onboardingDismissInFlight = true;
+  try {
+    if (storageReadFailed) return;
+    const stored = await store.get(['pt_settings']);
+    if (stored === null) return;
+    const fresh = E.mergeSettings(stored.pt_settings);
+    fresh.onboardingDismissed = true;
+    await store.set({ pt_settings: fresh });
+    settings = fresh;
+  } catch (_) {
+    // A failed write keeps the card — no state was changed.
+  } finally {
+    onboardingDismissInFlight = false;
+  }
+}
+
+function renderOnboarding() {
+  if (settings.onboardingDismissed === true) return '';
+  const steps = onboardingSteps(state);
+  const doneCount = steps.filter((s) => s.done).length;
+  if (doneCount === steps.length) {
+    // Cleared for real: persist the dismissal so the card never returns.
+    persistOnboardingDismissal();
+    return '';
+  }
+  const icon = (done) => (done
+    ? '<span class="green" style="font-weight:800">✓</span>'
+    : '<span class="dim" style="font-weight:800">○</span>');
+  return `
+    <div class="card" id="onboarding-card" style="margin-bottom:16px">
+      <h3>Finding your way around <span class="tag">${doneCount}/${steps.length}</span>
+        <button class="btn-sec" id="onboard-dismiss" style="margin-left:auto">I know my way around</button>
+      </h3>
+      <p class="dim" style="margin-top:0;font-size:12.5px;line-height:1.55">
+        Six things worth doing once. Each checks itself off from your real
+        record, and this card leaves for good when you're done with it.
+      </p>
+      ${steps.map((s) => `
+        <div class="stat" style="align-items:center">
+          <span>${icon(s.done)} <strong style="color:var(--text);font-size:12.5px">${esc(s.label)}</strong>
+            <span class="dim" style="display:block;font-size:11px;margin-top:2px">${esc(s.sub)}</span></span>
+          ${s.id === 'graduation'
+            ? `<span style="white-space:nowrap;font-weight:750">${esc(s.progress)}
+                <button class="btn-sec" id="onboard-coach" style="margin-left:8px;padding:4px 10px;font-size:11px">Graduation bar →</button></span>`
+            : ''}
+        </div>`).join('')}
+    </div>`;
+}
+
+/** Wire the checklist's two buttons once the overview markup is live. */
+function bindOnboarding(el) {
+  const dismiss = el.querySelector('#onboard-dismiss');
+  if (dismiss) {
+    dismiss.addEventListener('click', async () => {
+      dismiss.disabled = true;
+      await persistOnboardingDismissal();
+      lastFingerprint = dataFingerprint();
+      renderSection('overview');
+    });
+  }
+  const coach = el.querySelector('#onboard-coach');
+  if (coach) {
+    coach.addEventListener('click', () => {
+      const nav = document.querySelector('nav button[data-section="coach"]');
+      if (nav) nav.click();
+    });
+  }
+}
+
 /* ---------- overview ---------- */
 
 function renderOverview(el) {
@@ -588,6 +829,7 @@ function renderOverview(el) {
   // (a session of only losses has a negative "best" round, and vice versa),
   // and every value carries an explicit sign — the old Worst tile dropped it.
   el.innerHTML = `
+    ${renderOnboarding()}
     <div class="grid3" style="margin-bottom:16px">
       ${statTile('Total return', `${stats.equityVsStart >= 0 ? '+' : ''}${fmt(stats.equityVsStart, 3)} SOL`, stats.equityVsStart >= 0 ? 'green' : 'red',
         settings.balanceStartSol ? `${stats.equityVsStart >= 0 ? '+' : ''}${((stats.equityVsStart / settings.balanceStartSol) * 100).toFixed(1)}% on ${fmt(settings.balanceStartSol, 2)} SOL` : '')}
@@ -897,7 +1139,8 @@ function renderJournal(el) {
       <td class="dim"><span data-rel-ts="${Number(t.ts) || 0}" title="${esc(formatDateTime(t.ts))}">${timeAgo(t.ts)}</span></td>
     </tr>`).join('');
   el.innerHTML = `
-    <div class="card"><h3>All fills <span class="tag">${(state.journal || []).length}</span></h3>
+    <div class="card"><h3>All fills <span class="tag">${(state.journal || []).length}</span>
+      <button class="btn-sec" id="journal-export" style="margin-left:auto" ${(state.journal || []).length ? '' : 'disabled'}>Export CSV</button></h3>
       <div class="log">
         <table>
           <thead><tr><th>Side</th><th>Token</th><th>Site</th><th class="num">Qty</th><th class="num">Market cap</th><th class="num">Gross</th><th class="num">Fee</th><th class="num">P&L</th><th>When</th></tr></thead>
@@ -964,7 +1207,8 @@ function renderRounds(el) {
       </tr>`;
   }).join('');
   el.innerHTML = `
-    <div class="card"><h3>Closed round trips <span class="tag">${(state.rounds || []).length}</span></h3>
+    <div class="card"><h3>Closed round trips <span class="tag">${(state.rounds || []).length}</span>
+      <button class="btn-sec" id="rounds-export" style="margin-left:auto" ${(state.rounds || []).length ? '' : 'disabled'}>Export CSV</button></h3>
       <div class="log"><table>
         <thead><tr><th>Token</th><th>Site</th><th class="num">Held</th><th class="num">In</th><th class="num">Out</th><th class="num">P&L SOL</th><th class="num">%</th><th class="num">Peak/Worst</th><th>After (1h)</th><th>Exit</th><th>Thesis</th><th>Notes</th><th>Review</th><th>Replay</th><th>Share</th><th>Recording</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="16">${emptyState('No closed round trips yet', 'Close a paper position to bank a round trip.')}</td></tr>`}</tbody>
@@ -1139,8 +1383,10 @@ async function runReview(roundId) {
 }
 
 function buildCoachMessages(round, trades, roundFrames) {
+  // D-49: local time with an explicit UTC offset, matching the calendar's
+  // local-day buckets — never bare UTC ISO.
   const fillText = trades.sort((a, b) => a.ts - b.ts).map((t) =>
-    `${new Date(t.ts).toISOString()} ${t.side.toUpperCase()} ${t.qty.toFixed(4)} ${t.symbol} @ ${t.priceNative} SOL (gross ${t.solGross.toFixed(3)} SOL${t.pnlSol !== undefined ? `, realized ${t.pnlSol >= 0 ? '+' : ''}${t.pnlSol.toFixed(4)}` : ''})`
+    `${formatLocalStamp(t.ts)} ${t.side.toUpperCase()} ${t.qty.toFixed(4)} ${t.symbol} @ ${t.priceNative} SOL (gross ${t.solGross.toFixed(3)} SOL${t.pnlSol !== undefined ? `, realized ${t.pnlSol >= 0 ? '+' : ''}${t.pnlSol.toFixed(4)}` : ''})`
   ).join('\n');
   const frameText = roundFrames.length
     ? `\n\nPaperTrench captured ${roundFrames.length} timestamped chart frames during this round.`
@@ -1219,6 +1465,8 @@ async function loadRecordings() {
   } catch (_) {
     recordings = {};
   }
+  // D-40: cached views hold a `recording` reference from the old map.
+  invalidateReplayView();
 }
 
 /**
@@ -1464,12 +1712,33 @@ function renderReplay(el) {
   updateReplayView(view);
 }
 
+/**
+ * D-40: the scrub path calls buildReplayView twice per input event and the
+ * video-sync rAF calls it once per frame — and every call re-filtered the
+ * whole journal and re-sorted every frame. The built view is memoized per
+ * (replay identity, sessionId, cursor) and invalidated whenever the data
+ * underneath it changes: loadAll()/loadRecordings() (fresh journal, frames,
+ * replays, recordings), mutateState() (fresh state adopted), and reset. The
+ * replay OBJECT identity is part of the key, so a reloaded replay list can
+ * never serve a stale view even for an unchanged sessionId/cursor.
+ */
+let replayViewCache = null; // { replayRef, sessionId, cursor, view }
+
+function invalidateReplayView() { replayViewCache = null; }
+
 /** Everything the replay needs for the current cursor position. */
 function buildReplayView(replay) {
   // D-26: a missing replay (list emptied mid-playback) degrades to an empty
   // view instead of a TypeError — callers stop or render the empty state.
+  // The degraded view is a cheap literal and is never cached (D-40).
   if (!replay) {
     return { replay: null, round: null, events: [], event: null, at: 0, relatedFrame: null, recording: null };
+  }
+  if (replayViewCache
+      && replayViewCache.replayRef === replay
+      && replayViewCache.sessionId === replay.sessionId
+      && replayViewCache.cursor === replayCursor) {
+    return replayViewCache.view;
   }
   const round = replayRound(replay);
   const trades = replayTrades(replay);
@@ -1481,7 +1750,7 @@ function buildReplayView(replay) {
   const framesSoFar = frames
     .filter((frame) => Number(frame.t) <= at)
     .sort((a, b) => Number(b.t) - Number(a.t));
-  return {
+  const view = {
     replay,
     round,
     events,
@@ -1491,6 +1760,9 @@ function buildReplayView(replay) {
     relatedFrame: event?.frame || framesSoFar[0] || null,
     recording: replayRecording(replay),
   };
+  // The cursor is stored POST-clamp, so a hit always compares real indices.
+  replayViewCache = { replayRef: replay, sessionId: replay.sessionId, cursor: replayCursor, view };
+  return view;
 }
 
 /** Build the replay DOM once for a session and wire its permanent handlers. */
@@ -1712,7 +1984,7 @@ function syncReplayMedia(view) {
       shell.media.innerHTML = `
         <div class="card replay-frame">
           <h3>Chart at this moment${recording ? '<span class="replay-source-tabs" style="margin-left:auto"><button data-media="video">Video</button><button class="active" data-media="frame">Frame</button></span>' : ''}</h3>
-          <img src="${relatedFrame.dataUrl}" alt="PaperTrench chart frame at ${formatDateTime(relatedFrame.t)}">
+          <img src="${esc(relatedFrame.dataUrl)}" alt="PaperTrench chart frame at ${formatDateTime(relatedFrame.t)}">
           <div class="dim">${formatDateTime(relatedFrame.t)} · ${esc(relatedFrame.kind || 'frame')}</div>
         </div>`;
     } else {
@@ -1739,45 +2011,9 @@ function syncReplayMedia(view) {
   void replay;
 }
 
-/**
- * Show what the trade actually looked like at the selected moment.
- *
- * A screen recording is far richer than a still, so when one exists for this
- * round it wins and is seeked to the moment being replayed. Frames remain the
- * fallback for rounds recorded without video.
- */
-function renderMomentMedia(replay, event, relatedFrame) {
-  const recording = replayRecording(replay);
-  const at = event ? Number(event.at) : Number(replay.openedAt);
-
-  if (recording && !(preferFrameOverVideo && relatedFrame)) {
-    const offset = RC.offsetForMoment(recording, at);
-    const inRange = offset !== null;
-    return `
-      <div class="card replay-video">
-        <h3>
-          Screen recording at this moment
-          ${relatedFrame ? '<span class="replay-source-tabs" style="margin-left:auto"><button class="active" data-media="video">Video</button><button data-media="frame">Frame</button></span>' : ''}
-        </h3>
-        <video id="replay-video" src="${esc(recordingUrl(recording))}" controls preload="metadata"
-               data-offset="${inRange ? offset.toFixed(2) : ''}"></video>
-        <div class="replay-video-meta">
-          <span>${inRange
-            ? `Seeked to +${formatDuration(offset * 1000)} · ${formatDateTime(at)}`
-            : 'This moment falls outside the recorded window'}</span>
-          <span>${esc(recording.file || '')} · ${(Number(recording.size) / 1048576).toFixed(1)} MB</span>
-        </div>
-      </div>`;
-  }
-
-  if (!relatedFrame) return '';
-  return `
-    <div class="card replay-frame">
-      <h3>Chart at this moment</h3>
-      <img src="${relatedFrame.dataUrl}" alt="PaperTrench chart frame at ${formatDateTime(relatedFrame.t)}">
-      <div class="dim">${formatDateTime(relatedFrame.t)} · ${esc(relatedFrame.kind || 'frame')}</div>
-    </div>`;
-}
+/* D-46: renderMomentMedia (superseded by syncReplayMedia) deleted — it was
+ * dead code with zero call sites, and dead render paths drift from the live
+ * ones until a future edit resurrects the wrong copy. */
 
 /** The stored recording for a replay's round, if one was captured. */
 function replayRecording(replay) {
@@ -1796,32 +2032,8 @@ function recordingUrl(recording) {
   return recordingUrls[recording.id];
 }
 
-/**
- * A readable transcript of the session: every fill and checkpoint in order,
- * with the current moment highlighted. This is the "what actually happened"
- * companion to the scrubber — scannable without dragging anything.
- */
-function renderReplayTape(events, cursor, replay) {
-  if (!events.length) return '';
-  const rows = events.map((event, index) => {
-    const active = index === cursor;
-    const offset = Math.max(0, event.at - replay.openedAt);
-    const detail = event.trade
-      ? `${fmt(event.trade.solGross, 3)} SOL @ ${fillLevel(event.trade)}${
-          event.trade.pnlSol !== undefined && event.trade.pnlSol !== null
-            ? ` · <span class="${event.trade.pnlSol >= 0 ? 'green' : 'red'}">${event.trade.pnlSol >= 0 ? '+' : ''}${fmt(event.trade.pnlSol, 3)} SOL</span>` : ''}`
-      : event.frame ? 'chart frame captured'
-      : 'context snapshot';
-    return `
-      <button class="tape-row${active ? ' active' : ''}" data-index="${index}">
-        <span class="tape-time mono">+${formatDuration(offset)}</span>
-        <span class="tape-icon">${eventIcon(event)}</span>
-        <span class="tape-label">${esc(eventLabel(event))}</span>
-        <span class="tape-detail dim mono">${detail}</span>
-      </button>`;
-  }).join('');
-  return `<div class="card"><h3>Session tape</h3><div class="tape">${rows}</div></div>`;
-}
+/* D-46: renderReplayTape (superseded by syncTape) deleted — same reason as
+ * renderMomentMedia above. */
 
 /** A glyph per event type so the timeline reads at a glance. */
 function eventIcon(event) {
@@ -2224,7 +2436,7 @@ function renderCoach(el) {
       </div>` : ''}
     <div class="card" style="margin-top:16px">
       <h3>Captured frames <span class="tag">${frames.length}</span></h3>
-      <div class="frames">${frames.slice(-12).reverse().map((f) => `<img src="${f.dataUrl}" title="${esc(new Date(f.t).toLocaleTimeString() + ' · ' + (f.kind || '') + ' ' + (f.symbol || ''))}" />`).join('')
+      <div class="frames">${frames.slice(-12).reverse().map((f) => `<img src="${esc(f.dataUrl)}" title="${esc(new Date(f.t).toLocaleTimeString() + ' · ' + (f.kind || '') + ' ' + (f.symbol || ''))}" />`).join('')
         || emptyState('No frames captured yet', 'Enable frame capture in Settings to give the coach visual context.')}</div>
     </div>
   `;
@@ -2553,6 +2765,7 @@ function bindSettings() {
     replays = [];
     frames = [];
     stopReplayPlayback();
+    invalidateReplayView(); // D-40: the wiped data invalidates any cached view
     // D-51: no extra seq bump here — engine resetState already advanced seq
     // past the inherited base; the engine owns that bump, and doubling it
     // here made the write counter lie about how many writes happened.
@@ -2812,9 +3025,22 @@ function formatDateTime(ms) {
   return Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString() : '—';
 }
 
-function formatUnix(seconds) {
-  const value = Number(seconds);
-  return Number.isFinite(value) && value > 0 ? formatDateTime(value * 1000) : '—';
+/**
+ * D-49: coach prompts stamp fills in LOCAL time with an explicit UTC-offset
+ * suffix (e.g. "2026-08-05 14:03:22 UTC+02:00"). The P&L calendar buckets
+ * days in local time; stamping the prompt in UTC ISO meant the coach could
+ * put a fill near midnight on a different day than the calendar the user is
+ * looking at, and its "day" observations disagreed with the grid.
+ */
+function formatLocalStamp(ms) {
+  const d = new Date(Number(ms) || 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  const offsetMin = -d.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} `
+    + `UTC${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
 }
 
 function formatDuration(ms) {

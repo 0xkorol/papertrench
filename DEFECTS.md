@@ -856,6 +856,7 @@ sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · con
 **largely fixed v2.0.0** (lazy blob pull + URL release landed in wave 2); remaining: skip list() when the recordings count is unchanged.
 `dashboard.js:150-154,882,885`, `recordings.js:119,132` · confirmed · open
 **D-40 · S4 · Replay scrub rebuilds the entire replay model at 60 fps — twice per frame**
+**fixed v2.1.0** — buildReplayView memoized per (replay, session, cursor); invalidated on load/adopt/reset; degraded view never cached.
 **backlog (v2.1):** scrub rebuild is now guarded (D-26) but still rebuilds per frame; memoize the view per cursor index.
 `dashboard.js:1004-1009,1020,1036` · confirmed · open
 **D-41 · S4 · Backup omits IndexedDB recordings — restored wallets show unplayable recording refs**
@@ -872,15 +873,19 @@ sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · con
 **D-44 · S5** Share-card object URL never revoked on success; replacing cardMedia orphans the previous — `dashboard.js:1553-1561`.
 **fixed v2.0.0** — previous object URL revoked when the card media is replaced.
 **D-45 · S5** Drop target advertises GIF but renders only the first frame — `dashboard.html:650`.
+**fixed v2.1.0** — honest label: a GIF renders as a still (its first frame).
 **backlog (v2.1):** static first-frame is honest but the label overpromises; either animate via <img> or drop GIF from the label.
 **D-46 · S5** Dead code: renderMomentMedia, renderReplayTape, formatUnix, unused summary, empty else-if — `dashboard.js:1395,1450,2120,1759,1374`.
+**fixed v2.1.0** — renderMomentMedia, renderReplayTape AND formatUnix deleted (correction: the v2.0.0 close-out claimed formatUnix was already gone; it was still live with zero call sites).
 **partial v2.0.0:** formatUnix removed; renderMomentMedia/renderReplayTape deletions deferred to the next dashboard touch.
 **D-47 · S5** "Saved." written into the AI-test output span and never cleared — `dashboard.js:2077`.
 **D-48 · S5** Journal fee column shows entire gross as fee for legacy fills missing solNet; recorded feeSol unused — `dashboard.js:634`.
 **fixed v2.0.0** — fee column prefers the recorded feeSol; em-dash when underivable.
 **D-49 · S5** Coach prompts stamp UTC ISO; calendar buckets local days — day boundaries disagree — `dashboard.js:810`, `background.js:456`, `engine.js:704-708`.
+**fixed v2.1.0** — coach prompts stamp local time with an explicit UTC offset, in both the dashboard and the background auto-review path.
 **backlog (v2.1):** stamp coach prompts in local time with an explicit offset note so its day boundaries match the calendar.
 **D-50 · S5** Frame data URLs interpolated unescaped into src — `dashboard.js:1361,1423,1798`.
+**fixed v2.1.0** — both live dataUrl interpolations escaped; the third site was inside deleted dead code.
 **backlog (v2.1):** frame data URLs are self-generated JPEG captures (attacker cannot control content), so exposure is low; esc() them on the next dashboard touch anyway.
 **D-51 · S5** seq double-bumped on dashboard reset — `engine.js:932` + `dashboard.js:2013`.
 **D-52 · S5** sessionStats counts break-even rounds as losses — `engine.js:407`.

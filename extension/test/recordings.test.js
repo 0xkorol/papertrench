@@ -96,12 +96,14 @@ test('the background records playable recording metadata on the round', () => {
 test('the replay view shows the recording instead of screenshots when one exists', () => {
   const src = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
 
-  const fn = src.slice(src.indexOf('function renderMomentMedia'), src.indexOf('function replayRecording'));
+  // D-46: the dead renderMomentMedia copy was deleted; the LIVE media
+  // renderer is syncReplayMedia, so the same contract is pinned there.
+  const fn = src.slice(src.indexOf('function syncReplayMedia'), src.indexOf('function replayRecording'));
   assert.ok(fn.length > 0, 'the media renderer must exist');
 
   // The video branch must be reached BECAUSE a recording exists — not because
   // of source ordering. Guarding on a constant would silently disable it.
-  const guard = /if \(recording && !\(preferFrameOverVideo && relatedFrame\)\) \{/.exec(fn);
+  const guard = /const useVideo = Boolean\(recording\) && !\(preferFrameOverVideo && relatedFrame\);/.exec(fn);
   assert.ok(guard,
     'the video branch must be entered whenever a recording exists and the ' +
     'user has not explicitly asked for the still frame');
@@ -124,7 +126,8 @@ test('the dashboard seeks the video to the selected moment', () => {
 
 test('object URLs are created once per recording rather than per render', () => {
   const src = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
-  const fn = src.slice(src.indexOf('function recordingUrl'), src.indexOf('function renderReplayTape'));
+  // D-46: the end marker was the dead renderReplayTape, now deleted.
+  const fn = src.slice(src.indexOf('function recordingUrl'), src.indexOf('function eventIcon'));
   assert.match(fn, /recordingUrls\[recording\.id\]/,
     'the replay re-renders on every tick; minting a new URL each time would leak');
 });

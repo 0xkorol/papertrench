@@ -473,10 +473,28 @@ async function autoReview(roundId) {
   await setState(state);
 }
 
+/**
+ * D-49: coach prompts stamp times in LOCAL time with an explicit UTC-offset
+ * suffix, matching the dashboard's P&L calendar (which buckets days in local
+ * time). A bare UTC ISO stamp put fills near midnight on a different day
+ * than the calendar the user sees, so the coach's "day" observations
+ * disagreed with the grid. Same helper as dashboard.js formatLocalStamp.
+ */
+function formatLocalStamp(ms) {
+  const d = new Date(Number(ms) || 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  const offsetMin = -d.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} `
+    + `UTC${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
 function buildRoundReviewPrompt(round, trades) {
   const lines = trades
     .sort((a, b) => a.ts - b.ts)
-    .map((trade) => `${new Date(trade.ts).toISOString()} ${trade.side.toUpperCase()} ${trade.qty.toFixed(4)} ${trade.symbol} @ ${trade.priceNative} SOL (gross ${trade.solGross.toFixed(3)} SOL${trade.pnlSol !== undefined ? `, realized ${trade.pnlSol >= 0 ? '+' : ''}${trade.pnlSol.toFixed(4)}` : ''})`)
+    .map((trade) => `${formatLocalStamp(trade.ts)} ${trade.side.toUpperCase()} ${trade.qty.toFixed(4)} ${trade.symbol} @ ${trade.priceNative} SOL (gross ${trade.solGross.toFixed(3)} SOL${trade.pnlSol !== undefined ? `, realized ${trade.pnlSol >= 0 ? '+' : ''}${trade.pnlSol.toFixed(4)}` : ''})`)
     .join('\n');
   return [
     {
@@ -488,7 +506,7 @@ function buildRoundReviewPrompt(round, trades) {
       role: 'user',
       content:
         `Round trip on ${round.symbol} (${round.mint})\n` +
-        `Opened: ${new Date(round.openedAt).toISOString()}  Closed: ${new Date(round.closedAt).toISOString()}  Held: ${(round.heldMs / 60000).toFixed(1)} min\n` +
+        `Opened: ${formatLocalStamp(round.openedAt)}  Closed: ${formatLocalStamp(round.closedAt)}  Held: ${(round.heldMs / 60000).toFixed(1)} min\n` +
         `Invested: ${round.investedSol.toFixed(4)} SOL  Returned: ${round.returnedSol.toFixed(4)} SOL\n` +
         `P&L: ${round.pnlSol >= 0 ? '+' : ''}${round.pnlSol.toFixed(4)} SOL (${round.pnlPct.toFixed(1)}%)\n` +
         `Peak unrealized P&L: +${round.peakPnlSol.toFixed(4)} SOL   Worst: ${round.troughPnlSol.toFixed(4)} SOL\n\n` +

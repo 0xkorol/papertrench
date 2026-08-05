@@ -3,6 +3,42 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.1.0 — 2026-08-05
+
+The value release: the practice loop gets its most important missing organ,
+plus training wheels, data ownership, and a same-day community fix.
+
+- **The After.** Every closed round now watches its coin for the following
+  hour and records what ACTUALLY happened after your exit — observed
+  extremes, sample counts, no interpolation. The rounds table gains an
+  "After (1h)" column (a −30%+ dump after you sold reads green: you dodged
+  it; a big run without you reads red), and the discipline panel aggregates
+  your median further-upside and dumps-dodged across the record. The most
+  expensive guesswork in this market — and the #1 revenge-FOMO trigger —
+  replaced with measured truth.
+- **Guardrails (training wheels).** Opt-in, enforced at buy time: a tilt
+  breaker (N straight losses → cooldown), a max position size (% of your
+  live book), and a daily loss limit. The three rules every surviving
+  trader eventually adopts, practicable while the money is fake.
+- **Fill bubbles land on the candles (community screenshot, fixed same
+  day).** On mcap charts the fill markers floated above the candles (raw
+  resolver-implied cap vs the chart own cap scale) and could park past the
+  final bar (clock skew on 1 s charts). Shapes now share the avg line
+  close-corrected level math — supply cancels, the chart scale wins — and
+  clamp to the newest bar. The mcap-headline sub-line also says "Price …"
+  now instead of the ambiguous "MC · …".
+- **CSV export** for the journal and rounds — your data, one click,
+  RFC-4180-safe, After columns included.
+- **Onboarding checklist** on Overview for newcomers: first buy → thesis →
+  first close → first After → review → the 50-round road to the graduation
+  bar. Dismissible; disappears on its own once you have done it all.
+- **Sharper prices on fresh launches**: ambiguous unknown-unit ticks are now
+  refused with a distinct reason instead of risking a double-converted
+  price; GMGN markers snap to the bar grid; host-chart callbacks are
+  hardened so a PaperTrench bug can never break the site own chart; backups
+  say honestly that screen recordings stay on this machine; replay
+  scrubbing is memoized; coach timestamps match the calendar day you see.
+
 ## v2.0.1 — 2026-08-05
 
 First post-2.0 community report, fixed same-day.

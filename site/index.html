@@ -22,12 +22,12 @@
   <div class="nav-inner">
     <a class="nav-logo" href="#"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
     <div class="nav-links">
-      <a href="streams.html" style="display:inline-flex;align-items:center;gap:6px"><span style="width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--red)"></span>Live</a>
       <a href="#bubbles">Chart bubbles</a>
       <a href="#replay">Replay</a>
       <a href="#journal">Journal</a>
       <a href="#leaderboard">Leaderboard</a>
       <a href="#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
       <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
     </div>
   </div>
@@ -40,12 +40,13 @@
     <h1 class="reveal d1">Trade the trenches.<br><span class="grad-orange">Keep your SOL.</span></h1>
     <p class="hero-sub reveal d2">PaperTrench overlays a <strong>paper-trading terminal</strong> on the memecoin sites you already use — real charts, real live prices, <strong>fake money</strong> — then shows you exactly what you did and why. <span style="color:var(--green)">Learn in an afternoon what usually costs a wallet.</span></p>
     <div class="hero-ctas reveal d3">
-      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.0.1/papertrench-2.0.1.zip" target="_blank" rel="noopener">⬇ Get the extension</a>
+      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.1.0/papertrench-2.1.0.zip" target="_blank" rel="noopener">⬇ Get the extension</a>
+      <a class="btn btn-ghost" href="streams.html"><span style="width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red)"></span>Watch live</a>
       <a class="btn btn-ghost" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">★ Star on GitHub</a>
     </div>
     <div class="hero-stats reveal d3">
       <div class="hero-stat"><div class="num o">9</div><div class="lbl">TRADING SITES</div></div>
-      <div class="hero-stat"><div class="num g">556</div><div class="lbl">TESTS PASSING</div></div>
+      <div class="hero-stat"><div class="num g">602</div><div class="lbl">TESTS PASSING</div></div>
       <div class="hero-stat"><div class="num b">0</div><div class="lbl">PRICES INVENTED</div></div>
       <div class="hero-stat"><div class="num o">100%</div><div class="lbl">LOCAL &amp; PRIVATE</div></div>
     </div>
@@ -327,12 +328,12 @@
       <div class="gcard reveal d1"><div class="gi">🚀</div><h3>Trades launches seconds old</h3><p>Jupiter is queried in parallel with Dexscreener, so a coin that just hit the curve is tradeable before indexers even see it.</p></div>
       <div class="gcard reveal d2"><div class="gi">📌</div><h3>Positions bar</h3><p>Every open position pinned to the top of the page with live P&amp;L. Click one to jump straight to its chart.</p></div>
       <div class="gcard reveal"><div class="gi">🖼️</div><h3>Shareable P&amp;L cards</h3><p>Turn any closed round into a 1200×675 image with your own picture or GIF behind it — permanently watermarked PAPER, so it can never pass as a real trade.</p></div>
-      <div class="gcard reveal d1"><div class="gi">🧪</div><h3>231 tests. Mutation-tested.</h3><p>The decision logic is pure functions exercised directly by the suite — the same code that runs in the page.</p></div>
+      <div class="gcard reveal d1"><div class="gi">🧪</div><h3>600+ tests. Mutation-tested.</h3><p>The decision logic is pure functions exercised directly by the suite — the same code that runs in the page.</p></div>
       <div class="gcard reveal d2"><div class="gi">🕵️</div><h3>Zero telemetry</h3><p>No account, no signup, nothing phoned home. The only network calls are the public price APIs — and your own AI endpoint, only if you configure one.</p></div>
-      <a class="gcard reveal" href="streams.html" style="grid-column:1/-1;display:flex;align-items:center;gap:20px;border-color:rgba(145,70,255,0.35)">
-        <div class="gi" style="margin-bottom:0;font-size:30px">🎥</div>
-        <div style="flex:1;min-width:220px"><h3>Watch the PaperTrench Challenge — live on Twitch</h3><p>Streamers grind the leaderboard on stream, with giveaways for the best verified records — and a built-in OBS overlay so you can stream your own runs.</p></div>
-        <span style="flex:none;font-weight:700;font-size:14px;color:#bf94ff;border:1px solid rgba(145,70,255,0.4);background:rgba(145,70,255,0.08);padding:9px 18px;border-radius:999px">Watch live →</span>
+      <a class="gcard live-banner reveal" href="streams.html">
+        <span class="live-chip"><span class="dot"></span>LIVE</span>
+        <div class="txt"><h3>Watch the PaperTrench Challenge — live on Twitch</h3><p>Streamers grind the leaderboard on stream, with giveaways for the best verified records — and a built-in OBS overlay so you can stream your own runs.</p></div>
+        <span class="go">Watch the streams →</span>
       </a>
     </div>
   </div>
@@ -347,7 +348,7 @@
       <p class="sec-sub reveal d2" style="margin:0 auto">Not on the Chrome Web Store yet — loading it unpacked is quick.</p>
     </div>
     <div class="install-steps">
-      <div class="step reveal"><div class="n">01</div><h4>Download</h4><p>Grab the latest <a href="https://github.com/OnlyTerp/papertrench/releases/download/v2.0.1/papertrench-2.0.1.zip" target="_blank" rel="noopener" style="color:var(--orange2)">release zip</a> and unzip it.</p></div>
+      <div class="step reveal"><div class="n">01</div><h4>Download</h4><p>Grab the latest <a href="https://github.com/OnlyTerp/papertrench/releases/download/v2.1.0/papertrench-2.1.0.zip" target="_blank" rel="noopener" style="color:var(--orange2)">release zip</a> and unzip it.</p></div>
       <div class="step reveal d1"><div class="n">02</div><h4>Open extensions</h4><p>Go to <code>chrome://extensions</code> and flip on <b>Developer mode</b>.</p></div>
       <div class="step reveal d2"><div class="n">03</div><h4>Load unpacked</h4><p>Select the folder containing <code>manifest.json</code>.</p></div>
       <div class="step reveal d3"><div class="n">04</div><h4>Trade</h4><p>Open any supported token page — the overlay appears within seconds.</p></div>
@@ -371,7 +372,7 @@
     <h2 class="reveal d1" style="margin-top:24px">Blow up a fake account<br><span class="grad-orange" style="background:linear-gradient(100deg,var(--orange2),var(--orange-deep));-webkit-background-clip:text;background-clip:text;color:transparent">before you blow up a real one.</span></h2>
     <p class="sec-sub reveal d2" style="text-align:center;margin-top:16px">The usual way people learn this market is losing money finding out they chase, oversize, and round-trip their winners. PaperTrench tells you that in an afternoon instead.</p>
     <div class="hero-ctas reveal d3" style="margin-top:36px">
-      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.0.1/papertrench-2.0.1.zip" target="_blank" rel="noopener">⬇ Download PaperTrench</a>
+      <a class="btn btn-primary" href="https://github.com/OnlyTerp/papertrench/releases/download/v2.1.0/papertrench-2.1.0.zip" target="_blank" rel="noopener">⬇ Download PaperTrench</a>
       <a class="btn btn-ghost" href="https://github.com/OnlyTerp/papertrench#readme" target="_blank" rel="noopener">Read the docs</a>
     </div>
   </div>
