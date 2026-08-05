@@ -41,6 +41,15 @@ video evidence doing the heavy lifting.
   the dashboard's, verbatim: a bad value keeps your saved value and says so;
   fee profile numbers are pinned by a test to match the dashboard's card.
   The full Fees & costs form stays on the dashboard.
+- **Flex without leaving the terminal.** The Flex button on the closed P&L
+  card now opens the share composer as a floating window centered over the
+  page — no more bouncing to a dashboard tab. It is the SAME composer:
+  identical card, backgrounds, customize toggles, Copy and Download, and the
+  same shared background gallery (uploads made in the overlay appear in the
+  dashboard composer and vice versa). Esc or a backdrop click closes it. The
+  card math now lives in one shared derivation (pnlcard.js) used by both
+  composers, so a card can never show different numbers depending on where
+  you opened it. The PAPER watermark rides along, as always.
 
 ## v2.6.0 — 2026-08-05
 

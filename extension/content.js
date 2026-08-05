@@ -10,6 +10,10 @@
   const E = window.PaperEngine;
   const S = window.PaperTrenchSites;
   const Q = window.PaperQuote;
+  // The share-card module (pnlcard.js) — the SAME painter and source builders
+  // the dashboard composer uses, so the in-page Flex composer can never show
+  // different numbers than the dashboard would for the same result.
+  const PC = window.PTPnlCard || null;
   // Price network calls are routed through the service worker, which has the
   // extension's host permissions and is not bound by the page origin's CORS.
   // Keep a reference to the in-page resolver so wiring tests still see it.
@@ -282,6 +286,10 @@
     try { if (CM) CM.destroyChartMarkers(); } catch (_) {}
     try { sendPadreMarker('standdown'); } catch (_) {}
     try { window.removeEventListener('message', onBridgeMessage); } catch (_) {}
+    // The composer's Escape listener rides on window — remove it with the
+    // overlay; the modal nodes themselves die with the shadow root. (One
+    // try: shutdown can fire before the composer bindings even evaluate.)
+    try { closeFlexComposer(); flexEls = null; flexSource = null; flexModel = null; } catch (_) {}
     try { if (host && host.remove) host.remove(); } catch (_) {}
     host = null; shadow = null; els = {};
     posEls = null; lastRenderedPrice = null;
@@ -1970,6 +1978,84 @@
     }
     .pt-resize:hover { color: var(--pt-amber); }
     .pt-resize:active { color: #fff; }
+
+    /* ---------------- Flex composer ----------------
+       The share card floats HERE, centered over the page, instead of
+       bouncing to a dashboard tab. Same painter, same numbers — just
+       without leaving the terminal. */
+    .pt-flex-modal {
+      position: fixed; inset: 0; z-index: 2147483647;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(4, 6, 10, 0.66);
+      font-family: var(--pt-sans); font-size: 13px; line-height: 1.45;
+      -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+      color: var(--pt-text);
+    }
+    .pt-flex-modal.pt-open { display: flex; }
+    .pt-flex-inner {
+      width: min(720px, 94vw); max-height: 92vh; overflow: auto;
+      background:
+        radial-gradient(120% 90% at 50% -10%, rgba(255, 157, 69, 0.08), transparent 62%),
+        linear-gradient(180deg, rgba(17, 21, 28, 0.98), rgba(9, 11, 16, 0.99));
+      border: 1px solid rgba(255, 157, 69, 0.28);
+      border-radius: var(--pt-r-lg);
+      box-shadow: 0 32px 70px -18px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      padding: 14px;
+      animation: pt-enter 0.32s var(--pt-ease) both;
+    }
+    .pt-flex-title {
+      display: flex; justify-content: space-between; align-items: center;
+      margin: 0 0 10px;
+      font-family: var(--pt-mono); font-size: 10px; font-weight: 700;
+      letter-spacing: 1.2px; text-transform: uppercase; color: var(--pt-dim);
+    }
+    .pt-flex-close {
+      background: none; border: none; cursor: pointer; padding: 0 2px;
+      color: var(--pt-dim); font-size: 16px; line-height: 1;
+    }
+    .pt-flex-close:hover { color: var(--pt-text); }
+    .pt-flex-canvas { width: 100%; height: auto; display: block; border-radius: var(--pt-r-md); }
+    .pt-flex-gallery { display: flex; gap: 7px; overflow-x: auto; margin-top: 10px; padding-bottom: 3px; }
+    .pt-flex-thumb {
+      position: relative; flex: 0 0 auto; width: 82px; height: 46px; padding: 0;
+      border-radius: var(--pt-r-sm); overflow: hidden; cursor: pointer;
+      border: 1px solid var(--pt-line-2); background: var(--pt-bg);
+      color: var(--pt-dim);
+    }
+    .pt-flex-thumb.pt-selected { border-color: var(--pt-amber); box-shadow: 0 0 0 1px var(--pt-amber); }
+    .pt-flex-thumb canvas, .pt-flex-thumb img { width: 100%; height: 100%; display: block; object-fit: cover; }
+    .pt-flex-thumb .pt-del {
+      position: absolute; top: 1px; right: 1px; width: 15px; height: 15px;
+      line-height: 14px; text-align: center; border-radius: 999px;
+      background: rgba(0, 0, 0, 0.62); color: var(--pt-dim); font-size: 11px;
+    }
+    .pt-flex-thumb .pt-del:hover { color: var(--pt-red); }
+    .pt-flex-up {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 2px; width: 100%; height: 100%; font-size: 8.5px; text-align: center;
+    }
+    .pt-flex-controls { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; align-items: center; }
+    .pt-fbtn {
+      padding: 6px 12px; border-radius: 999px; cursor: pointer;
+      font-size: 10px; font-weight: 800; letter-spacing: 0.6px; text-transform: uppercase;
+      border: 1px solid var(--pt-line-2); background: rgba(255, 255, 255, 0.05);
+      color: var(--pt-text); transition: background 0.12s;
+    }
+    .pt-fbtn:hover { background: rgba(255, 255, 255, 0.10); }
+    .pt-fbtn.pt-primary { background: var(--pt-amber-soft); border-color: rgba(255, 157, 69, 0.5); color: var(--pt-amber); }
+    .pt-fbtn.pt-primary:hover { background: rgba(255, 157, 69, 0.28); }
+    .pt-flex-custom {
+      display: flex; flex-wrap: wrap; gap: 5px 13px; margin-top: 11px;
+      padding: 10px 11px; border-radius: var(--pt-r-md);
+      background: rgba(255, 255, 255, 0.03); border: 1px solid var(--pt-line);
+      font-size: 11.5px; color: var(--pt-dim);
+    }
+    .pt-flex-custom.pt-hidden { display: none; }
+    .pt-flex-custom label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
+    .pt-accent-swatch { width: 15px; height: 15px; border-radius: 999px; border: 2px solid transparent; cursor: pointer; padding: 0; }
+    .pt-accent-swatch.pt-selected { border-color: rgba(255, 255, 255, 0.85); }
+    .pt-flex-msg { margin: 9px 0 0; font-size: 11px; color: var(--pt-red); }
+    .pt-flex-note { margin: 9px 0 0; font-size: 10.5px; color: var(--pt-faint); line-height: 1.5; }
 
     /* Axiom-style focus mode: decoration out, execution controls stay.
      * Toggle is settings.panelFocusMode (Dashboard → Settings). The class
@@ -4176,15 +4262,15 @@
     status.className = 'pt-closed-badge';
     status.textContent = badge;
     // Flex the result — wins AND losses ("people might wanna flex their
-    // losses also"). Opens the share composer for this exact outcome: the
-    // dashboard cards the newest round for the mint, or the open position
-    // after a partial exit.
+    // losses also"). The composer floats right here, centered over the page
+    // — no tab switch. It cards the newest round for the mint, or the open
+    // position after a partial exit.
     const flex = document.createElement('button');
     flex.className = 'pt-flex-btn';
     flex.textContent = 'Flex';
     flex.title = 'Open the share card for this result';
     flex.addEventListener('click', () => {
-      if (token && token.mint) sendMessage({ type: 'pt_open_share', mint: token.mint });
+      if (token && token.mint) openFlexComposer(token.mint);
     });
     right.appendChild(status);
     right.appendChild(flex);
@@ -4211,6 +4297,370 @@
     if (seconds < 60) return `${seconds}s ago`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     return `${Math.floor(seconds / 3600)}h ago`;
+  }
+
+  /* -------------------- Flex composer (in-page) --------------------
+   *
+   * The share-card composer floats over the terminal in a centered modal
+   * instead of opening a dashboard tab. It is the SAME composer: pnlcard.js
+   * builds the source and paints the canvas (identical numbers, identical
+   * pixels), prefs persist to the same settings.cardPrefs, and uploaded
+   * backgrounds live in the same extension-origin gallery — a content
+   * script's IndexedDB belongs to the SITE origin, so gallery reads/writes
+   * ride pt_cardbg_* messages through the service worker, which opens the
+   * very database the dashboard reads directly.
+   */
+  let flexEls = null;      // built lazily on first Flex, dies with the shadow root
+  let flexSource = null;
+  let flexModel = null;
+  let flexPrefs = null;    // working copy of settings.cardPrefs while open
+  let flexMedia = null;    // Image element for an uploaded background
+  let flexUploads = [];    // [{id, name, dataUrl}] served by the worker
+
+  const FLEX_FLAGS = [
+    ['showSymbol', 'Symbol'],
+    ['showInvested', 'Invested'],
+    ['showReturned', 'Returned'],
+    ['showPercent', 'P&L %'],
+    ['showUsd', 'USD sub-lines'],
+    ['showDate', 'Date'],
+    ['showAfter', 'After-exit line'],
+  ];
+
+  function onFlexKeydown(e) {
+    if (e.key === 'Escape') closeFlexComposer();
+  }
+
+  function flexMsg(text) {
+    if (!flexEls) return;
+    flexEls.msg.textContent = text || '';
+    flexEls.msg.style.display = text ? '' : 'none';
+  }
+
+  function buildFlexComposer() {
+    if (!shadow || !PC) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'pt-flex-modal';
+    const flags = FLEX_FLAGS.map(([key, label]) =>
+      `<label><input type="checkbox" data-flag="${key}"> ${label}</label>`).join('');
+    const accents = Object.keys(PC.ACCENTS).map((name) =>
+      `<button class="pt-accent-swatch" data-accent="${name}" title="${name}" style="background:${PC.ACCENTS[name]}"></button>`).join('');
+    wrap.innerHTML = `
+      <div class="pt-flex-inner">
+        <div class="pt-flex-title">
+          <span>Share P&amp;L card</span>
+          <button class="pt-flex-close" title="Close (Esc)">✕</button>
+        </div>
+        <canvas class="pt-flex-canvas" width="${PC.WIDTH}" height="${PC.HEIGHT}"></canvas>
+        <div class="pt-flex-gallery"></div>
+        <div class="pt-flex-controls">
+          <button class="pt-fbtn pt-flex-customize">Customize</button>
+          <button class="pt-fbtn pt-flex-copy">Copy</button>
+          <button class="pt-fbtn pt-primary pt-flex-download">Download PNG</button>
+          <input type="file" accept="image/*" style="display:none">
+        </div>
+        <div class="pt-flex-custom pt-hidden">${flags}
+          <span style="display:inline-flex;gap:5px;align-items:center"><span style="font-size:10px">Trim</span>${accents}</span>
+        </div>
+        <p class="pt-flex-msg" style="display:none"></p>
+        <p class="pt-flex-note">The <strong>PAPER</strong> watermark and the PaperTrench brand bar are
+        always drawn — no setting turns them off — so a shared paper trade can never be mistaken
+        for a real one. A GIF renders as a still (its first frame).</p>
+      </div>`;
+    shadow.appendChild(wrap);
+
+    flexEls = {
+      wrap,
+      canvas: wrap.querySelector('.pt-flex-canvas'),
+      gallery: wrap.querySelector('.pt-flex-gallery'),
+      custom: wrap.querySelector('.pt-flex-custom'),
+      msg: wrap.querySelector('.pt-flex-msg'),
+      file: wrap.querySelector('input[type="file"]'),
+      copy: wrap.querySelector('.pt-flex-copy'),
+    };
+
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) closeFlexComposer(); });
+    wrap.querySelector('.pt-flex-close').addEventListener('click', closeFlexComposer);
+    wrap.querySelector('.pt-flex-customize').addEventListener('click', () => {
+      flexEls.custom.classList.toggle('pt-hidden');
+    });
+    flexEls.copy.addEventListener('click', copyFlexCard);
+    wrap.querySelector('.pt-flex-download').addEventListener('click', downloadFlexCard);
+    flexEls.file.addEventListener('change', () => {
+      adoptFlexUpload(flexEls.file.files && flexEls.file.files[0]);
+      // Re-picking the same file must fire change again.
+      flexEls.file.value = '';
+    });
+    wrap.querySelectorAll('input[data-flag]').forEach((input) => {
+      input.addEventListener('change', () => {
+        if (!flexPrefs) return;
+        // Stored as false only when hidden — an absent key stays "shown".
+        if (input.checked) delete flexPrefs[input.dataset.flag];
+        else flexPrefs[input.dataset.flag] = false;
+        paintFlexCard();
+        persistFlexPrefs();
+      });
+    });
+    wrap.querySelectorAll('.pt-accent-swatch').forEach((swatch) => {
+      swatch.addEventListener('click', () => {
+        if (!flexPrefs) return;
+        flexPrefs.accent = swatch.dataset.accent;
+        syncFlexCustomize();
+        paintFlexCard();
+        persistFlexPrefs();
+      });
+    });
+  }
+
+  /**
+   * Open the composer for a mint: the open position if one exists (the
+   * partial-exit case — realized slice banked, still holding), else the
+   * newest closed round. Same routing the dashboard uses.
+   */
+  function openFlexComposer(mint) {
+    if (!PC || !shadow || !mint) return;
+    const pos = state.positions && state.positions[mint];
+    let source = null;
+    if (pos) {
+      source = PC.positionCardSource(pos, state.journal, {
+        pnlSol: E.unrealizedPnl(pos),
+        pnlPct: E.positionPnlPct(pos),
+        avgBuyNative: (E.averageFillPrices(state, mint) || {}).avgBuyNative,
+      }, Date.now());
+    } else {
+      // state.rounds is newest-first (engine unshifts on close).
+      const round = (state.rounds || []).find((r) => r.mint === mint);
+      if (round) source = PC.roundCardSource(round, state.journal);
+    }
+    if (!source) return;
+
+    flexSource = source;
+    flexPrefs = { ...(settings.cardPrefs || {}) };
+    flexMedia = null;
+    if (!flexEls) buildFlexComposer();
+    if (!flexEls || !paintFlexCard()) return;
+    flexEls.wrap.classList.add('pt-open');
+    window.addEventListener('keydown', onFlexKeydown, true);
+    flexMsg('');
+    syncFlexCustomize();
+    refreshFlexGallery();
+  }
+
+  function closeFlexComposer() {
+    window.removeEventListener('keydown', onFlexKeydown, true);
+    if (flexEls) flexEls.wrap.classList.remove('pt-open');
+  }
+
+  /** Rebuild the model and repaint — numbers still come only from the source. */
+  function paintFlexCard() {
+    if (!flexEls || !flexSource) return false;
+    const ctx2d = flexEls.canvas.getContext && flexEls.canvas.getContext('2d');
+    if (!ctx2d) return false;
+    flexModel = PC.cardModel(flexSource, {
+      handle: (settings.leaderboardIdentity || {}).handle || '',
+      prefs: flexPrefs || settings.cardPrefs || {},
+    });
+    if (!flexModel) return false;
+    PC.drawCard(ctx2d, flexModel, flexMedia);
+    return true;
+  }
+
+  /** Same key the dashboard composer persists — prefs follow the user. */
+  function persistFlexPrefs() {
+    if (!flexPrefs) return;
+    settings.cardPrefs = { ...flexPrefs };
+    store.set({ [E.STORAGE_KEYS.settings]: settings });
+  }
+
+  function syncFlexCustomize() {
+    if (!flexEls) return;
+    const prefs = flexPrefs || {};
+    flexEls.wrap.querySelectorAll('input[data-flag]').forEach((input) => {
+      input.checked = prefs[input.dataset.flag] !== false;
+    });
+    const active = PC.ACCENTS[prefs.accent] ? prefs.accent : 'amber';
+    flexEls.wrap.querySelectorAll('.pt-accent-swatch').forEach((swatch) => {
+      swatch.classList.toggle('pt-selected', swatch.dataset.accent === active);
+    });
+  }
+
+  /** Load one stored upload (a data URL from the worker) into an Image. */
+  function showFlexUpload(record) {
+    return new Promise((resolve) => {
+      if (!record || typeof record.dataUrl !== 'string' || !record.dataUrl) { resolve(false); return; }
+      const img = new Image();
+      img.onload = () => { flexMedia = img; resolve(true); };
+      // A broken/unsupported file must not wipe the card.
+      img.onerror = () => resolve(false);
+      img.src = record.dataUrl;
+    });
+  }
+
+  /** Adopt a gallery selection: a built-in id or 'upload:<id>'. */
+  async function selectFlexBackground(choice) {
+    if (!flexPrefs) return;
+    if (String(choice).startsWith('upload:')) {
+      const record = flexUploads.find((r) => 'upload:' + r.id === choice);
+      if (!record || !(await showFlexUpload(record))) return;
+    } else {
+      flexMedia = null;
+    }
+    flexPrefs.background = choice;
+    paintFlexCard();
+    renderFlexGallery();
+    persistFlexPrefs();
+  }
+
+  /** Pull the shared gallery from the worker, restore a persisted pick. */
+  function refreshFlexGallery() {
+    sendMessage({ type: 'pt_cardbg_list' }).then(async (res) => {
+      if (res && res.ok && Array.isArray(res.items)) {
+        flexUploads = res.items;
+      } else {
+        flexUploads = [];
+        if (res && res.error) flexMsg('The background gallery is unavailable — built-ins still work.');
+      }
+      const chosen = flexPrefs && flexPrefs.background;
+      if (typeof chosen === 'string' && chosen.startsWith('upload:')) {
+        const record = flexUploads.find((r) => 'upload:' + r.id === chosen);
+        if (record) {
+          if (await showFlexUpload(record)) paintFlexCard();
+        } else {
+          // The stored pick was deleted elsewhere; fall back to the plain card.
+          flexPrefs.background = null;
+        }
+      }
+      renderFlexGallery();
+    });
+  }
+
+  function renderFlexGallery() {
+    if (!flexEls) return;
+    const host = flexEls.gallery;
+    const selected = (flexPrefs && flexPrefs.background) || 'void';
+    host.textContent = '';
+    for (const bg of PC.BACKGROUNDS) {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'pt-flex-thumb' + (bg.id === selected ? ' pt-selected' : '');
+      tile.title = bg.name;
+      const canvas = document.createElement('canvas');
+      canvas.width = 120; canvas.height = 68;
+      const tctx = canvas.getContext && canvas.getContext('2d');
+      if (tctx) PC.paintBackground(tctx, bg.id, 120, 68);
+      tile.appendChild(canvas);
+      tile.addEventListener('click', () => { selectFlexBackground(bg.id); });
+      host.appendChild(tile);
+    }
+    for (const record of flexUploads) {
+      const choice = 'upload:' + record.id;
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'pt-flex-thumb' + (choice === selected ? ' pt-selected' : '');
+      tile.title = record.name;
+      const img = document.createElement('img');
+      img.src = record.dataUrl;
+      img.alt = record.name;
+      tile.appendChild(img);
+      const del = document.createElement('span');
+      del.className = 'pt-del';
+      del.textContent = '×';
+      del.title = 'Delete this background';
+      del.addEventListener('click', (event) => {
+        event.stopPropagation();
+        deleteFlexUpload(choice);
+      });
+      tile.appendChild(del);
+      tile.addEventListener('click', () => { selectFlexBackground(choice); });
+      host.appendChild(tile);
+    }
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'pt-flex-thumb';
+    up.innerHTML = `<span class="pt-flex-up"><span>Upload image</span><span>Max 2 MB · ${flexUploads.length}/${PC.MAX_UPLOADS}</span></span>`;
+    up.addEventListener('click', () => { flexEls.file.click(); });
+    host.appendChild(up);
+  }
+
+  async function deleteFlexUpload(choice) {
+    const id = String(choice).replace(/^upload:/, '');
+    await sendMessage({ type: 'pt_cardbg_remove', id });
+    flexUploads = flexUploads.filter((r) => r.id !== id);
+    if (flexPrefs && flexPrefs.background === choice) {
+      // The selected background is gone; drop to the plain card, honestly.
+      await selectFlexBackground('void');
+    } else {
+      renderFlexGallery();
+    }
+  }
+
+  /**
+   * A picked file goes THROUGH the shared gallery: admitted locally first
+   * (PC.admitUpload — instant, visible refusals), shipped to the worker as a
+   * data URL, re-checked there, persisted, then selected. If the gallery
+   * itself fails, the image is still used for this one card.
+   */
+  function adoptFlexUpload(file) {
+    if (!file) return;
+    const verdict = PC.admitUpload(file, flexUploads.length);
+    if (!verdict.ok) { flexMsg(verdict.reason); return; }
+    flexMsg('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      sendMessage({
+        type: 'pt_cardbg_add',
+        name: String(file.name || 'background'),
+        dataUrl,
+      }).then((res) => {
+        if (res && res.ok && res.record) {
+          flexUploads.push(res.record);
+          selectFlexBackground('upload:' + res.record.id);
+          return;
+        }
+        if (res && res.reason) { flexMsg(res.reason); return; }
+        flexMsg('Could not save to the gallery — using the image for this card only.');
+        showFlexUpload({ dataUrl }).then((ok) => { if (ok) paintFlexCard(); });
+      });
+    };
+    reader.onerror = () => flexMsg('That file could not be read.');
+    reader.readAsDataURL(file);
+  }
+
+  /**
+   * Copy the card PNG. The ClipboardItem is created inside the click gesture
+   * with a Promise payload — awaiting toBlob first would leave the gesture
+   * and Chrome would refuse the write (same discipline as the dashboard).
+   */
+  function copyFlexCard() {
+    if (!flexEls || !flexModel) return;
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard || !navigator.clipboard.write) {
+      flexMsg('Copying images is not supported in this browser — use Download PNG instead.');
+      return;
+    }
+    const png = new Promise((resolve, reject) => {
+      flexEls.canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('PNG encode failed'));
+      }, 'image/png');
+    });
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      .then(() => {
+        flexMsg('');
+        flexEls.copy.textContent = 'Copied ✓';
+        setTimeout(() => { if (flexEls) flexEls.copy.textContent = 'Copy'; }, 2000);
+      })
+      .catch(() => {
+        flexMsg('Copy failed — the browser refused clipboard access. Use Download PNG instead.');
+      });
+  }
+
+  function downloadFlexCard() {
+    if (!flexEls || !flexModel) return;
+    const link = document.createElement('a');
+    link.download = `papertrench-${flexModel.symbol}-${flexModel.multipleText}.png`;
+    link.href = flexEls.canvas.toDataURL('image/png');
+    link.click();
   }
 
   /** Build the static structure of the position card exactly once. */

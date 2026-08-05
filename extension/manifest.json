@@ -66,6 +66,7 @@
       "js": [
         "xlinks.js",
         "engine.js",
+        "pnlcard.js",
         "attest.js",
         "quote.js",
         "sites.js",

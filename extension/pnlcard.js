@@ -190,6 +190,75 @@
     return { ok: true, reason: '' };
   }
 
+  /**
+   * Card source for one CLOSED round. This is THE derivation — the dashboard
+   * composer and the in-page overlay composer both call it, so a shared card
+   * can never show different numbers depending on where it was opened.
+   * Entry/exit are quantity-weighted over the round's actual fills; USD
+   * totals exist only when every fill on that side recorded a USD price at
+   * fill time (usdTotal), else null and the card shows an em-dash.
+   */
+  function roundCardSource(round, journal) {
+    if (!round || typeof round !== 'object') return null;
+    const trades = (Array.isArray(journal) ? journal : [])
+      .filter((t) => t && (round.tradeIds || []).includes(t.id));
+    const buys = trades.filter((t) => t.side === 'buy');
+    const sells = trades.filter((t) => t.side === 'sell');
+    const weighted = (list, field) => {
+      const qty = list.reduce((sum, t) => sum + (num(t.qty) || 0), 0);
+      if (!(qty > 0)) return null;
+      const total = list.reduce(
+        (sum, t) => sum + (num(t.qty) || 0) * (num(t[field]) || 0), 0
+      );
+      return total > 0 ? total / qty : null;
+    };
+    return {
+      ...round,
+      entryPrice: weighted(buys, 'priceNative'),
+      exitPrice: weighted(sells, 'priceNative'),
+      entryMcap: weighted(buys, 'mcap'),
+      exitMcap: weighted(sells, 'mcap'),
+      investedUsd: usdTotal(trades, 'buy', 'solGross'),
+      returnedUsd: usdTotal(trades, 'sell', 'solNet'),
+    };
+  }
+
+  /**
+   * Card source for an OPEN position — the "still holding" card. The live
+   * value stands in for proceeds (cardModel labels the column POSITION when
+   * open). The P&L figures are engine-derived and passed in by the caller so
+   * this module stays dependency-free; USD only where the mark genuinely
+   * recorded a USD price — never a conversion at an assumed rate.
+   * `derived` = { pnlSol, pnlPct, avgBuyNative }.
+   */
+  function positionCardSource(pos, journal, derived, now) {
+    if (!pos || typeof pos !== 'object') return null;
+    const d = derived || {};
+    const qty = num(pos.qty) || 0;
+    const lastNative = num(pos.lastPriceNative) || 0;
+    const fills = (Array.isArray(journal) ? journal : [])
+      .filter((t) => t && t.mint === pos.mint && t.ts >= pos.openedAt);
+    const lastUsd = Number(pos.lastPriceUsd);
+    const avgBuy = Number(d.avgBuyNative);
+    return {
+      mint: pos.mint,
+      symbol: pos.symbol,
+      site: pos.site,
+      openedAt: pos.openedAt,
+      heldMs: (Number(now) || 0) - pos.openedAt,
+      investedSol: pos.investedSol,
+      returnedSol: qty * lastNative,
+      pnlSol: d.pnlSol,
+      pnlPct: d.pnlPct,
+      entryPrice: avgBuy > 0 ? avgBuy : null,
+      lastPriceNative: lastNative,
+      entryMcap: null,
+      exitMcap: null,
+      investedUsd: usdTotal(fills, 'buy', 'solGross'),
+      returnedUsd: Number.isFinite(lastUsd) && lastUsd > 0 ? qty * lastUsd : null,
+    };
+  }
+
   /* Built-in card backgrounds — drawn procedurally in the brand palette, so
    * they cost zero assets and work identically on the 1200×675 card and the
    * little gallery thumbnails. All of them are dark by construction; the
@@ -639,6 +708,7 @@
     WIDTH, HEIGHT, COLORS, ACCENTS, WATERMARK_TEXT, BRAND_TEXT, BRAND_TAGLINE, SITE_URL,
     BACKGROUNDS, MAX_UPLOAD_BYTES, MAX_UPLOADS,
     cardModel, drawCard, coverRect, paintBackground, admitUpload, usdTotal,
+    roundCardSource, positionCardSource,
     formatPrice, formatMarketCap, formatSol, formatUsd, formatHeld, shortMint,
   };
 

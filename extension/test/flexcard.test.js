@@ -340,10 +340,15 @@ test('a round with USD data renders parenthesised subs; without, honest em-dashe
 });
 
 test('the dashboard feeds the card usdTotal, not a rate-of-the-day conversion', () => {
+  // The derivation moved into pnlcard.js (roundCardSource) so the overlay
+  // composer shares it — the honesty contract rides along unchanged.
   const open = fnBlock(dashJs, 'function openShareCard(roundId)');
-  assert.match(open, /investedUsd: PC\.usdTotal\(trades, 'buy', 'solGross'\)/);
-  assert.match(open, /returnedUsd: PC\.usdTotal\(trades, 'sell', 'solNet'\)/);
-  assert.doesNotMatch(open, /solUsdRate/,
+  assert.match(open, /PC\.roundCardSource\(round, state\.journal\)/,
+    'the dashboard must use the ONE shared source derivation');
+  const src = iifeBlock(pnlJs, 'function roundCardSource(round, journal)');
+  assert.match(src, /investedUsd: usdTotal\(trades, 'buy', 'solGross'\)/);
+  assert.match(src, /returnedUsd: usdTotal\(trades, 'sell', 'solNet'\)/);
+  assert.doesNotMatch(open + src, /solUsdRate/,
     'the live SOL/USD rate must never back-fill a historical round');
 });
 
@@ -587,7 +592,11 @@ test("the dashboard offers Share on live open positions", () => {
   assert.ok(fnStart !== -1);
   const block = dash.slice(fnStart, dash.indexOf("\nfunction openShareCard(", fnStart));
   assert.match(block, /E\.unrealizedPnl\(pos\)/, "P&L is the engine live mark, never recomputed ad hoc");
-  assert.match(block, /Number\.isFinite\(lastUsd\) && lastUsd > 0 \? qty \* lastUsd : null/,
+  assert.match(block, /PC\.positionCardSource\(pos, state\.journal/,
+    "the dashboard must use the ONE shared open-position derivation");
+  // The honest-USD rule lives in the shared builder now.
+  const src = iifeBlock(pnlJs, 'function positionCardSource(pos, journal, derived, now)');
+  assert.match(src, /Number\.isFinite\(lastUsd\) && lastUsd > 0 \? qty \* lastUsd : null/,
     "USD value only from a genuinely recorded mark — no fabricated conversion");
 });
 
@@ -625,11 +634,159 @@ test("the closed P&L card renders once per close (no blink) and carries Flex", (
     "an unchanged close must only update the ago-text — rebuilding re-ran the entry animation (the blink)");
   assert.match(fn, /pt-flex-btn/, "the card must carry the Flex button");
   assert.match(fn, /losses also/, "losses are flexable by design — the intent is documented");
-  assert.match(fn, /pt_open_share/, "Flex routes through the background to the dashboard composer");
+  // Maintainer follow-up: the composer floats over the page now — the Flex
+  // click must open the in-page modal, never a new tab.
+  assert.match(fn, /openFlexComposer\(token\.mint\)/,
+    "Flex opens the in-page composer, not a dashboard tab");
 
-  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
-  assert.match(bg, /case .pt_open_share.:/, "background must open the composer deep link");
   const dash = fs.readFileSync(path.join(__dirname, "..", "dashboard.js"), "utf8");
-  assert.match(dash, /\[#&\]flex=/, "the dashboard must route the #flex deep link");
+  assert.match(dash, /\[#&\]flex=/, "the dashboard keeps the #flex deep link (URL feature)");
   assert.match(dash, /openShareCardForPosition\(mint\)/, "an open position (partial exit) cards as OPEN");
+});
+
+/* ------------- the in-page Flex composer (floats over the terminal) ------ */
+
+test("Flex floats over the page: in-page modal, no new tab, one teardown path", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const content = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
+
+  // pnlcard.js ships to the overlay, before content.js consumes it.
+  const entry = manifest.content_scripts.find((cs) => (cs.js || []).includes("content.js"));
+  assert.ok(entry.js.indexOf("pnlcard.js") !== -1, "pnlcard.js must ride the ISOLATED bundle");
+  assert.ok(entry.js.indexOf("pnlcard.js") < entry.js.indexOf("content.js"),
+    "pnlcard.js must load before content.js");
+
+  // The tab flow is gone end to end: nothing sends pt_open_share, nothing
+  // handles it, and the composer never calls tabs.create.
+  assert.doesNotMatch(content, /pt_open_share/, "the overlay must not message for a tab");
+  assert.doesNotMatch(bg, /pt_open_share/, "the dead tab-open case must not linger");
+
+  // The modal is centered and covers the viewport; Escape and the backdrop
+  // both close it, and shutdown removes the window Escape listener.
+  assert.match(content, /\.pt-flex-modal \{[^}]*position: fixed; inset: 0/,
+    "the composer is a fixed, full-viewport layer");
+  assert.match(content, /\.pt-flex-modal \{[^}]*align-items: center; justify-content: center/,
+    "the card floats centered over the page");
+  assert.match(content, /if \(e\.key === 'Escape'\) closeFlexComposer\(\)/, "Escape closes");
+  assert.match(content, /if \(e\.target === wrap\) closeFlexComposer\(\)/, "backdrop click closes");
+  assert.match(content, /window\.removeEventListener\('keydown', onFlexKeydown, true\)/,
+    "the Escape listener dies with the modal");
+  assert.match(content, /try \{ closeFlexComposer\(\); flexEls = null;/,
+    "shutdown tears the composer down with the overlay");
+
+  // Copy keeps the gesture discipline; Download names the file like the dashboard.
+  const copy = content.slice(content.indexOf("function copyFlexCard("), content.indexOf("function downloadFlexCard("));
+  assert.match(copy, /new ClipboardItem\(\{ 'image\/png': png \}\)/,
+    "ClipboardItem created inside the click gesture with a Promise payload");
+  assert.match(content, /papertrench-\$\{flexModel\.symbol\}-\$\{flexModel\.multipleText\}\.png/,
+    "downloads carry the same papertrench- name");
+});
+
+test("one derivation: overlay and dashboard build card sources from the same functions", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const content = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  // Both composers call the pnlcard.js builders — a card can never show
+  // different numbers depending on where it was opened.
+  assert.match(content, /PC\.positionCardSource\(pos, state\.journal/,
+    "overlay open-position source comes from the shared builder");
+  assert.match(content, /PC\.roundCardSource\(round, state\.journal\)/,
+    "overlay round source comes from the shared builder");
+  assert.match(dashJs, /PC\.positionCardSource\(pos, state\.journal/,
+    "dashboard open-position source comes from the shared builder");
+  assert.match(dashJs, /PC\.roundCardSource\(round, state\.journal\)/,
+    "dashboard round source comes from the shared builder");
+  // And the overlay paints with the same painter + prefs key.
+  assert.match(content, /PC\.drawCard\(ctx2d, flexModel, flexMedia\)/);
+  assert.match(content, /settings\.cardPrefs = \{ \.\.\.flexPrefs \}/,
+    "composer prefs persist to the same settings.cardPrefs the dashboard uses");
+});
+
+test("roundCardSource derives weighted entries and honest USD from real fills", () => {
+  const journal = [
+    { id: "t1", side: "buy", qty: 100, priceNative: 0.001, priceUsd: 0.2, mcap: 200000, solGross: 0.1 },
+    { id: "t2", side: "buy", qty: 300, priceNative: 0.002, priceUsd: 0.4, mcap: 400000, solGross: 0.6 },
+    { id: "t3", side: "sell", qty: 400, priceNative: 0.004, priceUsd: 0.8, mcap: 800000, solNet: 1.6 },
+    { id: "zz", side: "buy", qty: 999, priceNative: 9, priceUsd: 9, mcap: 9, solGross: 9 },
+  ];
+  const round = { id: "r1", mint: MINT, symbol: "BONK", investedSol: 0.7, returnedSol: 1.6, pnlSol: 0.9, closedAt: 5000, tradeIds: ["t1", "t2", "t3"] };
+  const src = PC.roundCardSource(round, journal);
+
+  // Quantity-weighted: (100*0.001 + 300*0.002) / 400.
+  assert.ok(Math.abs(src.entryPrice - 0.00175) < 1e-12, `weighted entry, got ${src.entryPrice}`);
+  assert.equal(src.exitPrice, 0.004);
+  assert.equal(src.entryMcap, 350000, "weighted entry mcap");
+  assert.equal(src.exitMcap, 800000);
+  // USD at each fill's own recorded rate: 0.1*(0.2/0.001) + 0.6*(0.4/0.002) = 20 + 120.
+  assert.ok(Math.abs(src.investedUsd - 140) < 1e-9, `got ${src.investedUsd}`);
+  assert.ok(Math.abs(src.returnedUsd - 320) < 1e-9, `got ${src.returnedUsd}`);
+  assert.equal(src.pnlSol, 0.9, "round fields ride through untouched");
+
+  // One fill without a USD price on a side = no USD total for that side.
+  const partial = journal.map((t) => (t.id === "t2" ? { ...t, priceUsd: null } : t));
+  assert.equal(PC.roundCardSource(round, partial).investedUsd, null,
+    "a single USD-less buy voids the invested total — never a partial sum");
+  assert.equal(PC.roundCardSource(round, null).investedUsd, null,
+    "a missing journal degrades to no-USD, never a throw");
+  assert.equal(PC.roundCardSource(null, journal), null, "no round, no source");
+});
+
+test("positionCardSource: live value stands in, USD only when the mark recorded it", () => {
+  const pos = { mint: MINT, symbol: "BONK", site: "padre", openedAt: 10_000, investedSol: 1, qty: 500, lastPriceNative: 0.003 };
+  const journal = [
+    { id: "a", mint: MINT, ts: 9_000, side: "buy", qty: 9, priceNative: 1, priceUsd: 2, solGross: 9 },
+    { id: "b", mint: MINT, ts: 12_000, side: "buy", qty: 500, priceNative: 0.002, priceUsd: 0.4, solGross: 1 },
+  ];
+  const src = PC.positionCardSource(pos, journal, { pnlSol: 0.5, pnlPct: 50, avgBuyNative: 0.002 }, 70_000);
+
+  assert.ok(Math.abs(src.returnedSol - 1.5) < 1e-12, "live value = qty x last recorded native price");
+  assert.equal(src.returnedUsd, null, "no recorded USD mark, no USD value — never a conversion");
+  assert.equal(src.entryPrice, 0.002);
+  assert.equal(src.heldMs, 60_000);
+  assert.ok(Math.abs(src.investedUsd - 200) < 1e-9,
+    "invested USD from THIS position's fills only (ts >= openedAt): 1 * (0.4/0.002)");
+
+  const marked = PC.positionCardSource({ ...pos, lastPriceUsd: 0.6 }, journal, { pnlSol: 0.5, pnlPct: 50, avgBuyNative: 0 }, 70_000);
+  assert.ok(Math.abs(marked.returnedUsd - 300) < 1e-9, "a genuine USD mark values the position in USD");
+  assert.equal(marked.entryPrice, null, "no positive average = no entry claim");
+
+  // An open source has no closedAt — the model must card it as OPEN.
+  const model = PC.cardModel(src);
+  assert.equal(model.open, true);
+  assert.equal(model.statusText, "OPEN POSITION");
+});
+
+test("one gallery on the extension origin: the overlay rides pt_cardbg_* through the worker", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const content = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+
+  // A content script's IndexedDB is SITE-origin — uploads must round-trip
+  // through the worker into the same database the dashboard opens directly.
+  for (const type of ["pt_cardbg_list", "pt_cardbg_add", "pt_cardbg_remove"]) {
+    assert.match(content, new RegExp(`type: '${type}'`), `overlay must send ${type}`);
+    assert.match(bg, new RegExp(`case '${type}':`), `worker must handle ${type}`);
+  }
+  assert.match(bg, /CARDBG_DB_NAME = 'pt-cardmedia'/, "same database the dashboard reads");
+  assert.match(dashJs, /CARD_DB_NAME = 'pt-cardmedia'/, "dashboard still reads it directly");
+  assert.match(bg, /importScripts\([^)]*'pnlcard\.js'\)/, "the worker imports the pure admission check");
+
+  // Admission is re-checked worker-side BEFORE the put — no future call path
+  // can slip past the 2 MB / 10-image doctrine by skipping the overlay check.
+  const add = bg.slice(bg.indexOf("async function cardBgAdd("), bg.indexOf("async function cardBgRemove("));
+  const verdictAt = add.indexOf("PTPnlCard.admitUpload");
+  const putAt = add.indexOf("store.put(record)");
+  assert.ok(verdictAt !== -1 && putAt !== -1 && verdictAt < putAt,
+    "the worker re-checks admission before storing");
+  assert.match(add, /if \(!verdict\.ok\) return \{ ok: false, reason: verdict\.reason \}/,
+    "refusals carry the visible reason back to the overlay");
+
+  // The overlay checks first too (instant refusals) and keeps the
+  // use-it-anyway fallback when the gallery itself fails.
+  assert.match(content, /PC\.admitUpload\(file, flexUploads\.length\)/);
+  assert.match(content, /using the image for this card only/);
 });

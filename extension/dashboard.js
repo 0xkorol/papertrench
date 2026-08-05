@@ -2202,33 +2202,15 @@ async function cardBgRemove(id) {
 function openShareCardForPosition(mint) {
   const pos = (state.positions || {})[mint];
   if (!pos) return;
-  const qty = Number(pos.qty) || 0;
-  const lastNative = Number(pos.lastPriceNative) || 0;
-  const valueSol = qty * lastNative;
-  const fills = (state.journal || []).filter((t) => t.mint === mint && t.ts >= pos.openedAt);
-  const averages = E.averageFillPrices(state, mint);
-  const lastUsd = Number(pos.lastPriceUsd);
-
-  cardSourceCurrent = {
-    mint: pos.mint,
-    symbol: pos.symbol,
-    site: pos.site,
-    openedAt: pos.openedAt,
-    heldMs: Date.now() - pos.openedAt,
-    investedSol: pos.investedSol,
-    // The live value stands in for proceeds on an open position (the model
-    // labels the column POSITION when open).
-    returnedSol: valueSol,
+  // The derivation lives in pnlcard.js (PC.positionCardSource) and is shared
+  // with the overlay's in-page composer — same numbers wherever the card is
+  // opened. Only the engine-derived P&L figures are computed here.
+  cardSourceCurrent = PC.positionCardSource(pos, state.journal, {
     pnlSol: E.unrealizedPnl(pos),
     pnlPct: E.positionPnlPct(pos),
-    entryPrice: averages && Number(averages.avgBuyNative) > 0 ? averages.avgBuyNative : null,
-    lastPriceNative: lastNative,
-    entryMcap: null,
-    exitMcap: null,
-    investedUsd: PC.usdTotal(fills, 'buy', 'solGross'),
-    // Live value in USD only when the mark genuinely recorded a USD price.
-    returnedUsd: Number.isFinite(lastUsd) && lastUsd > 0 ? qty * lastUsd : null,
-  };
+    avgBuyNative: (E.averageFillPrices(state, mint) || {}).avgBuyNative,
+  }, Date.now());
+  if (!cardSourceCurrent) return;
   cardPrefs = { ...(settings.cardPrefs || {}) };
 
   cardMedia = null;
@@ -2245,32 +2227,11 @@ function openShareCard(roundId) {
   const round = (state.rounds || []).find((r) => r.id === roundId);
   if (!round) return;
 
-  const trades = (state.journal || []).filter((t) => (round.tradeIds || []).includes(t.id));
-  const buys = trades.filter((t) => t.side === 'buy');
-  const sells = trades.filter((t) => t.side === 'sell');
-  const weighted = (list, field) => {
-    const qty = list.reduce((sum, t) => sum + (Number(t.qty) || 0), 0);
-    if (!(qty > 0)) return null;
-    const total = list.reduce(
-      (sum, t) => sum + (Number(t.qty) || 0) * (Number(t[field]) || 0), 0
-    );
-    return total > 0 ? total / qty : null;
-  };
-
-  cardSourceCurrent = {
-    ...round,
-    entryPrice: weighted(buys, 'priceNative'),
-    exitPrice: weighted(sells, 'priceNative'),
-    // Quantity-weighted market cap at entry and exit — the figures the trade
-    // actually gets described by when the card is shared.
-    entryMcap: weighted(buys, 'mcap'),
-    exitMcap: weighted(sells, 'mcap'),
-    // USD, honestly: a total exists only when EVERY fill on that side
-    // recorded a USD price at fill time (PC.usdTotal). A missing total
-    // renders as an em-dash sub-line — never a conversion at today's rate.
-    investedUsd: PC.usdTotal(trades, 'buy', 'solGross'),
-    returnedUsd: PC.usdTotal(trades, 'sell', 'solNet'),
-  };
+  // Weighted entry/exit, mcaps and honest USD totals all come from ONE
+  // derivation — PC.roundCardSource — shared with the overlay's in-page
+  // composer, so the same round cards identically everywhere.
+  cardSourceCurrent = PC.roundCardSource(round, state.journal);
+  if (!cardSourceCurrent) return;
   // Absent key = everything shown; the working copy is adopted per-modal so
   // half-toggled prefs never leak into settings without a persist.
   cardPrefs = { ...(settings.cardPrefs || {}) };

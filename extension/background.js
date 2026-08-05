@@ -9,7 +9,7 @@
 
 
 if (typeof importScripts === 'function') {
-  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'xlinks.js', 'xray-core.js');
+  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'xlinks.js', 'warmdest.js', 'xray-core.js', 'pnlcard.js');
 }
 const RP = self.PTReplay;
 const R = self.PaperTrenchResolver;
@@ -134,6 +134,123 @@ function setReplays(replays) {
     }
     resolve();
   }));
+}
+
+/* ---- shared card-background gallery (extension-origin IndexedDB) ----
+ *
+ * The Flex composer also runs inside the page overlay now, and a content
+ * script's IndexedDB belongs to the SITE origin — uploads made on Axiom
+ * would be invisible on Padre and on the dashboard. Routing the gallery
+ * through here keeps ONE gallery: this worker shares the extension origin
+ * with dashboard.html, so it opens the very 'pt-cardmedia' database
+ * dashboard.js reads directly. Blobs cross the message boundary as data
+ * URLs (runtime messages are JSON).
+ */
+const CARDBG_DB_NAME = 'pt-cardmedia';
+const CARDBG_DB_STORE = 'backgrounds';
+
+function cardBgDbOpen() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB unavailable')); return; }
+    let settled = false;
+    const finish = (fn, value) => { if (!settled) { settled = true; clearTimeout(timer); fn(value); } };
+    // Bounded open, like recordings.js: a stalled IndexedDB must degrade to
+    // "no gallery", never hang the composer.
+    const timer = setTimeout(() => finish(reject, new Error('IndexedDB open timed out')), 5000);
+    let request;
+    try {
+      request = indexedDB.open(CARDBG_DB_NAME, 1);
+    } catch (err) {
+      finish(reject, err instanceof Error ? err : new Error('IndexedDB open failed'));
+      return;
+    }
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CARDBG_DB_STORE)) {
+        db.createObjectStore(CARDBG_DB_STORE, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => finish(resolve, request.result);
+    request.onerror = () => finish(reject, request.error || new Error('IndexedDB open failed'));
+    request.onblocked = () => finish(reject, new Error('IndexedDB open blocked by another tab'));
+  });
+}
+
+function cardBgDbRequest(db, mode, run) {
+  return new Promise((resolve, reject) => {
+    const request = run(db.transaction(CARDBG_DB_STORE, mode).objectStore(CARDBG_DB_STORE));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
+  });
+}
+
+/** Base64 the blob by hand — service workers have no FileReader/objectURL. */
+async function cardBgBlobToDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return 'data:' + (blob.type || 'image/png') + ';base64,' + btoa(binary);
+}
+
+async function cardBgList() {
+  const db = await cardBgDbOpen();
+  try {
+    const entries = await cardBgDbRequest(db, 'readonly', (store) => store.getAll());
+    const sorted = (entries || []).sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+    const items = [];
+    for (const record of sorted) {
+      try {
+        items.push({
+          id: record.id,
+          name: record.name,
+          addedAt: record.addedAt,
+          dataUrl: await cardBgBlobToDataUrl(record.blob),
+        });
+      } catch (_) { /* an unreadable blob is simply not offered */ }
+    }
+    return items;
+  } finally {
+    try { db.close(); } catch (_) {}
+  }
+}
+
+async function cardBgAdd(name, dataUrl) {
+  if (typeof dataUrl !== 'string' || !/^data:image\//.test(dataUrl)) {
+    return { ok: false, reason: 'Card backgrounds must be images.' };
+  }
+  const blob = await (await fetch(dataUrl)).blob();
+  const db = await cardBgDbOpen();
+  try {
+    const existing = await cardBgDbRequest(db, 'readonly', (store) => store.getAll());
+    // Admission is re-checked here, not only at the drop site, so no future
+    // call path can slip past the 2 MB / 10-image doctrine. Same pure
+    // function the composers use (pnlcard.js is imported above).
+    const verdict = self.PTPnlCard.admitUpload(blob, (existing || []).length);
+    if (!verdict.ok) return { ok: false, reason: verdict.reason };
+    const record = {
+      id: 'bg' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      name: String(name || 'background'),
+      blob,
+      addedAt: Date.now(),
+    };
+    await cardBgDbRequest(db, 'readwrite', (store) => store.put(record));
+    return { ok: true, record: { id: record.id, name: record.name, addedAt: record.addedAt, dataUrl } };
+  } finally {
+    try { db.close(); } catch (_) {}
+  }
+}
+
+async function cardBgRemove(id) {
+  const db = await cardBgDbOpen();
+  try {
+    await cardBgDbRequest(db, 'readwrite', (store) => store.delete(String(id)));
+    return { ok: true };
+  } finally {
+    try { db.close(); } catch (_) {}
+  }
 }
 
 function openDashboard() {
@@ -1430,14 +1547,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse(await xrayPlan(message, settings));
         break;
 
-      case 'pt_open_share': {
-        // The overlay's Flex button: open the dashboard straight into the
-        // share composer for this mint (newest round, or the open position).
-        const mint = typeof message.mint === 'string' ? message.mint : '';
-        chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html#flex=' + encodeURIComponent(mint)) });
-        sendResponse({ ok: true });
+      // The in-page Flex composer's gallery. A content script's IndexedDB is
+      // site-origin; these three keep uploads in the ONE extension-origin
+      // gallery the dashboard composer reads directly.
+      case 'pt_cardbg_list':
+        try { sendResponse({ ok: true, items: await cardBgList() }); }
+        catch (e) { sendResponse({ ok: false, items: [], error: e && e.message }); }
         break;
-      }
+
+      case 'pt_cardbg_add':
+        try { sendResponse(await cardBgAdd(message.name, message.dataUrl)); }
+        catch (e) { sendResponse({ ok: false, error: e && e.message }); }
+        break;
+
+      case 'pt_cardbg_remove':
+        try { sendResponse(await cardBgRemove(message.id)); }
+        catch (e) { sendResponse({ ok: false, error: e && e.message }); }
+        break;
 
       case 'pt_clear_recordings':
         // The popup's reset promises recordings go too, but the popup is
