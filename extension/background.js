@@ -674,6 +674,55 @@ function turboNote(route, ms) {
   }));
 }
 
+/* Page jank receipts. Content scripts sample the browser's own 'longtask'
+ * entries (any main-thread task over 50 ms) and flush ONE aggregate at most
+ * every minute — never a per-event write. The merge lives here, on the same
+ * write chain as the route timings, so the two writers can never lose each
+ * other's read-modify-write on the one stats key.
+ *
+ * Bounded like every receipt: at most TURBO_JANK_SITES_MAX sites (stalest
+ * evicted first), each holding lifetime totals plus a ring of the last
+ * TURBO_RING_MAX flush windows — the ring is what lets the dashboard show
+ * "lately vs earlier" honestly instead of a diluted lifetime average.
+ * Local only; nothing here may ever grow a network path.
+ */
+const TURBO_JANK_SITES_MAX = 12;
+function turboJankNote(site, sample) {
+  const host = (typeof site === 'string' && site) ? site.slice(0, 80) : null;
+  const count = Math.round(Number(sample && sample.count));
+  const blockedMs = Math.round(Number(sample && sample.blockedMs));
+  const sampledMs = Math.round(Number(sample && sample.sampledMs));
+  // A flush with no watched time can only produce a nonsense rate — drop it.
+  if (!host || !Number.isFinite(count) || count < 0) return;
+  if (!Number.isFinite(blockedMs) || blockedMs < 0) return;
+  if (!Number.isFinite(sampledMs) || sampledMs <= 0) return;
+  turboChain = turboChain.catch(() => {}).then(() => new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([TURBO_STATS_KEY], (value) => {
+        if (chrome.runtime && chrome.runtime.lastError) { resolve(); return; }
+        const stats = (value && value[TURBO_STATS_KEY]) || {};
+        const jank = stats.pageJank || {};
+        const entry = jank[host] || { count: 0, blockedMs: 0, sampledMs: 0, ring: [] };
+        entry.count += count;
+        entry.blockedMs += blockedMs;
+        entry.sampledMs += sampledMs;
+        entry.updatedAt = Date.now();
+        if (!Array.isArray(entry.ring)) entry.ring = [];
+        entry.ring.push({ t: entry.updatedAt, c: count, b: blockedMs, s: sampledMs });
+        if (entry.ring.length > TURBO_RING_MAX) entry.ring.splice(0, entry.ring.length - TURBO_RING_MAX);
+        jank[host] = entry;
+        const hosts = Object.keys(jank);
+        if (hosts.length > TURBO_JANK_SITES_MAX) {
+          hosts.sort((a, b) => ((jank[a] && jank[a].updatedAt) || 0) - ((jank[b] && jank[b].updatedAt) || 0));
+          for (const stale of hosts.slice(0, hosts.length - TURBO_JANK_SITES_MAX)) delete jank[stale];
+        }
+        stats.pageJank = jank;
+        chrome.storage.local.set({ [TURBO_STATS_KEY]: stats }, () => resolve());
+      });
+    } catch (_) { resolve(); }
+  }));
+}
+
 /* -------------------- warm X links (instant post opens) --------------------
  *
  * Opt-in (warmXLinksEnabled, default off). One muted background tab is kept
@@ -1812,6 +1861,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       case 'pt_warmdest_prewarm':
         warmDestPrewarm().catch(() => {});
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_turbo_jank':
+        turboJankNote(message.site, message);
         sendResponse({ ok: true });
         break;
 

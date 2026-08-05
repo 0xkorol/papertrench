@@ -411,12 +411,40 @@ test('receipts stay local and bounded (source contract)', () => {
   assert.match(background, /entry\.ring\.splice\(0, entry\.ring\.length - TURBO_RING_MAX\)/,
     'oldest samples are dropped, never the newest');
   // The stats key is only ever written via chrome.storage.local — no fetch,
-  // no external sink may ever touch it.
+  // no external sink may ever touch it. The slice covers turboNote AND the
+  // Tier 3 jank merge (turboJankNote), which lives in the same block.
   const turboBlock = background.slice(
     background.indexOf('const TURBO_STATS_KEY'),
     background.indexOf('warm X links (instant post opens)'),
   );
   assert.doesNotMatch(turboBlock, /fetch\(/, 'receipts never leave the device');
+  assert.match(turboBlock, /TURBO_JANK_SITES_MAX = 12/, 'the jank site table is bounded');
+  assert.match(turboBlock, /function turboJankNote\(/,
+    'the jank merge shares the block — and therefore this contract');
+
+  // Tier 3 widens the pt_turbo_stats surface to content.js (the sampler) and
+  // dashboard.js (the card). Same rules, verbatim: no fetch anywhere near the
+  // key — and the sampler may not even touch storage directly, because every
+  // write must flow through the background write chain (turboChain) or two
+  // writers could silently lose each other's read-modify-write.
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const samplerBlock = content.slice(
+    content.indexOf('Turbo receipts: page jank sampling'),
+    content.indexOf('async function init()'),
+  );
+  assert.match(samplerBlock, /pt_turbo_jank/, 'the sampler flushes through the background');
+  assert.doesNotMatch(samplerBlock, /fetch\(/, 'jank samples never leave the device');
+  assert.doesNotMatch(samplerBlock, /chrome\.storage/,
+    'the sampler holds no storage path of its own');
+
+  const dash = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  const cardBlock = dash.slice(
+    dash.indexOf('Turbo receipts: dashboard card'),
+    dash.indexOf('function renderSettings('),
+  );
+  assert.doesNotMatch(cardBlock, /fetch\(/, 'the card computes locally');
+  assert.doesNotMatch(cardBlock, /storage\.local\.set|store\.set/,
+    'the card is read-only over the stats key');
 });
 
 /* ------------- the main terminals: Axiom / Padre / GMGN families ------- */

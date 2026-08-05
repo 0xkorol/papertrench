@@ -1451,6 +1451,11 @@
         // chart drawings, title signal, timers, pool subscriptions).
         if (settings.appEnabled !== false && settings.overlayEnabled) enableOverlay().catch(() => {});
         else disableOverlay();
+        // The jank sampler follows the master switch alone (see the sampling
+        // block): overlay off with the app on keeps measuring; app off stops
+        // the observer and flushes what it holds.
+        if (settings.appEnabled !== false) startJankSampling();
+        else stopJankSampling();
         if (els.buyPresets) renderPresets();
         syncAveragePriceLines();
         updateOverlayVisibility();
@@ -4965,6 +4970,101 @@
     lastRenderedPrice = null;
   }
 
+  /* -------------------- Turbo receipts: page jank sampling -------------------
+   *
+   * How much does the main thread actually stall on this site? A
+   * PerformanceObserver counts the browser's own 'longtask' entries — any
+   * main-thread task over 50 ms — and aggregates count + blocked time in
+   * memory. Only VISIBLE time is measured: hidden tabs are throttled by the
+   * browser, and folding their quiet minutes into the denominator would
+   * dilute "long tasks per minute" into a flattering lie.
+   *
+   * Storage discipline: never a per-event write. The aggregate flushes as ONE
+   * pt_turbo_jank message at most every JANK_FLUSH_MS — plus on pagehide and
+   * on master-switch off — and the background folds it into
+   * pt_turbo_stats.pageJank on the same write chain as the route timings.
+   * An extension reload kills this context before it can flush; that sliver
+   * of samples is simply lost, which beats writing storage every event.
+   * Local only — the no-fetch source contract in warmdest.test.js covers
+   * this block too. Unbuffered observe: counting starts when watching
+   * starts, so numerator and denominator always cover the same span.
+   */
+  const JANK_FLUSH_MS = 60_000;
+  let jankObserver = null;
+  let jankCount = 0;         // long tasks seen since the last flush
+  let jankBlockedMs = 0;     // their summed durations
+  let jankVisibleMs = 0;     // closed visible-time windows since the last flush
+  // performance.now() when the open window began; -1 while hidden/closed.
+  // -1, not 0: zero is a valid page-epoch timestamp, and treating it as
+  // "closed" would silently drop the whole first window's visible time.
+  let jankVisibleSince = -1;
+  let jankFlushTimer = null;
+
+  /** Fold the currently open visible-time window into jankVisibleMs. */
+  function jankCloseWindow() {
+    if (jankVisibleSince >= 0) {
+      jankVisibleMs += Math.max(0, performance.now() - jankVisibleSince);
+      jankVisibleSince = -1;
+    }
+  }
+
+  function onJankVisibility() {
+    if (!jankObserver) return;
+    if (document.hidden) jankCloseWindow();
+    else if (jankVisibleSince < 0) jankVisibleSince = performance.now();
+  }
+
+  /** The ONLY path out of memory: one message per flush, nothing per event. */
+  function flushJank() {
+    jankCloseWindow();
+    const count = jankCount;
+    const blockedMs = Math.round(jankBlockedMs);
+    const sampledMs = Math.round(jankVisibleMs);
+    jankCount = 0; jankBlockedMs = 0; jankVisibleMs = 0;
+    if (jankObserver && !document.hidden) jankVisibleSince = performance.now();
+    // Under a second watched and nothing seen — no rate worth recording.
+    if (sampledMs < 1000 && count === 0) return;
+    sendMessage({ type: 'pt_turbo_jank', site: location.hostname, count, blockedMs, sampledMs });
+  }
+
+  /** Idempotent; a no-op where the browser has no longtask support. */
+  function startJankSampling() {
+    if (jankObserver) return;
+    if (typeof PerformanceObserver === 'undefined') return;
+    const supported = PerformanceObserver.supportedEntryTypes || [];
+    if (!supported.includes('longtask')) return;
+    try {
+      jankObserver = new PerformanceObserver((list) => {
+        // In-memory aggregation only — the flush cadence owns persistence.
+        for (const entry of list.getEntries()) {
+          jankCount += 1;
+          jankBlockedMs += entry.duration;
+        }
+      });
+      jankObserver.observe({ type: 'longtask' });
+    } catch (_) { jankObserver = null; return; }
+    jankVisibleSince = document.hidden ? -1 : performance.now();
+    document.addEventListener('visibilitychange', onJankVisibility);
+    window.addEventListener('pagehide', flushJank);
+    jankFlushTimer = setInterval(() => {
+      if (!contextAlive()) { shutdown('invalidated'); return; }
+      flushJank();
+    }, JANK_FLUSH_MS);
+  }
+
+  /** Stop watching, flush what was gathered, leave nothing on the page. */
+  function stopJankSampling() {
+    if (!jankObserver) return;
+    try { jankObserver.disconnect(); } catch (_) {}
+    if (jankFlushTimer) { clearInterval(jankFlushTimer); jankFlushTimer = null; }
+    document.removeEventListener('visibilitychange', onJankVisibility);
+    flushJank();
+    jankObserver = null;
+    jankVisibleSince = -1;
+    window.removeEventListener('pagehide', flushJank);
+  }
+  onTeardown(stopJankSampling);
+
   async function init() {
     // price-bridge.js is declared by the manifest in MAIN world at
     // document_start, before Padre creates its WebSocket and TradingView feed.
@@ -4975,6 +5075,12 @@
     // Storage must be watched even when the overlay is disabled, so toggling
     // settings from the dashboard or popup reaches this tab immediately.
     watchStorage();
+    // Jank sampling rides the master switch ALONE — it measures rather than
+    // mounts, but "off means PaperTrench runs nothing on the page" is the
+    // master switch's promise, so off silences the sampler too. The overlay
+    // toggle below does not touch it: a view-only page still has a main
+    // thread worth measuring.
+    if (settings.appEnabled !== false) startJankSampling();
     // The app-wide master switch outranks every sub-setting: off means
     // PaperTrench mounts nothing at all until the user turns it back on.
     if (settings.appEnabled === false || !settings.overlayEnabled) return;

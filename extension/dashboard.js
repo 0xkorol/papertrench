@@ -134,6 +134,7 @@ let replayCursor = 0;
 let replayTimer = null;
 let recordings = {};        // roundId -> stored recording (blob included)
 const recordingUrls = {};   // roundId -> object URL, created lazily
+let turboStats = {};        // pt_turbo_stats: route timings + pageJank, read-only here
 let preferFrameOverVideo = false;
 let lastFingerprint = '';
 let replayShell = null;   // persistent replay DOM, so the video survives updates
@@ -417,7 +418,7 @@ function watchDashboardStorage() {
   if (!chrome.storage || !chrome.storage.onChanged) return;
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    const relevant = ['pt_state', 'pt_settings', 'pt_frames', RP.STORAGE_KEY]
+    const relevant = ['pt_state', 'pt_settings', 'pt_frames', 'pt_turbo_stats', RP.STORAGE_KEY]
       .some((key) => key in changes);
     if (!relevant) return;
     // D-28: heartbeat writes carry fresh live marks; paint them in place.
@@ -426,7 +427,7 @@ function watchDashboardStorage() {
 }
 
 async function loadAll() {
-  const s = await store.get(['pt_state', 'pt_settings', 'pt_frames', RP.STORAGE_KEY]);
+  const s = await store.get(['pt_state', 'pt_settings', 'pt_frames', 'pt_turbo_stats', RP.STORAGE_KEY]);
   if (s === null) {
     // D-15: the read FAILED — this is not "empty storage". Keep whatever is
     // already in memory, show a banner, and block writes until a read
@@ -441,6 +442,7 @@ async function loadAll() {
   settings = E.mergeSettings(s.pt_settings);
   state = s.pt_state || E.defaultState(settings);
   frames = s.pt_frames || [];
+  turboStats = s.pt_turbo_stats || {};
   replays = RP.normalizeReplayList(s[RP.STORAGE_KEY]);
   // D-40: everything the replay view is derived from was just replaced.
   invalidateReplayView();
@@ -3110,6 +3112,113 @@ async function runSessionReview() {
   setSessionReview(resp?.reply || ('Error: ' + (resp?.error || 'unknown')), Boolean(resp?.error));
 }
 
+/* ---------- Turbo receipts: dashboard card (pure helpers, testable) --------
+ *
+ * Same house rule as the popup one-liner: the headline number is the
+ * background's ROUTING latency — click message received → warm tab told
+ * where to go — and it is stated as exactly that, never dressed up as
+ * page-ready time. Everything below reads pt_turbo_stats (written only by
+ * background.js: route timings from turboNote, per-site long-task
+ * aggregates from turboJankNote); computed here, shown here, sent nowhere.
+ */
+const TURBO_ROUTE_LABELS = [
+  ['x:spa', 'X link — warm in-page hop'],
+  ['x:already_open', 'X link — already on screen'],
+  ['x:warm_reload', 'X link — warm tab reload'],
+  ['x:cold_tab', 'X link — cold tab (first open)'],
+  ['dest:warm_nav', 'Terminal / viewer — warm navigate'],
+  ['dest:already_open', 'Terminal / viewer — already open'],
+  ['dest:cold_tab', 'Terminal / viewer — cold tab (first open)'],
+];
+
+/** Median of a numeric ring, or null when there are no samples. */
+function turboMedian(ring) {
+  const sorted = (Array.isArray(ring) ? ring : [])
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+}
+
+/** Route rows with counts and medians; routes never taken are omitted. */
+function turboRouteRows(stats) {
+  return TURBO_ROUTE_LABELS.map(([key, label]) => {
+    const entry = (stats && stats[key]) || null;
+    return {
+      key,
+      label,
+      count: (entry && Number(entry.count)) || 0,
+      medianMs: turboMedian(entry && entry.ring),
+    };
+  }).filter((row) => row.count > 0);
+}
+
+/**
+ * Per-site long-task rows from pageJank. A rate is only computed over at
+ * least JANK_MIN_RATE_MS of watched time — a five-second sample would print
+ * an absurd per-minute rate with a straight face; until then the site is
+ * simply omitted. "Lately" is the last up-to-JANK_RECENT_WINDOWS flush
+ * windows (roughly that many minutes actually watched); "earlier" is
+ * everything before them — computed from the lifetime totals minus the
+ * recent windows, so it still counts windows the bounded ring has already
+ * dropped rather than silently forgetting history.
+ */
+const JANK_MIN_RATE_MS = 30_000;
+const JANK_RECENT_WINDOWS = 15;
+function jankRows(pageJank) {
+  const perMin = (count, ms) => (ms >= JANK_MIN_RATE_MS ? count / (ms / 60_000) : null);
+  return Object.keys(pageJank || {}).map((site) => {
+    const e = pageJank[site] || {};
+    const count = Number(e.count) || 0;
+    const blockedMs = Number(e.blockedMs) || 0;
+    const sampledMs = Number(e.sampledMs) || 0;
+    const ring = Array.isArray(e.ring) ? e.ring : [];
+    const recent = ring.slice(-JANK_RECENT_WINDOWS);
+    const recentCount = recent.reduce((n, w) => n + ((w && Number(w.c)) || 0), 0);
+    const recentMs = recent.reduce((n, w) => n + ((w && Number(w.s)) || 0), 0);
+    return {
+      site,
+      ratePerMin: perMin(count, sampledMs),
+      blockedMsPerMin: sampledMs >= JANK_MIN_RATE_MS ? blockedMs / (sampledMs / 60_000) : null,
+      recentPerMin: perMin(recentCount, recentMs),
+      earlierPerMin: perMin(count - recentCount, sampledMs - recentMs),
+      sampledMs,
+    };
+  })
+    .filter((row) => row.ratePerMin !== null)
+    .sort((a, b) => b.sampledMs - a.sampledMs);
+}
+
+/** The whole receipts card, empty state included. Markup only — no handlers. */
+function renderTurboCard() {
+  const routes = turboRouteRows(turboStats);
+  const jank = jankRows(turboStats && turboStats.pageJank);
+  const fmtRate = (v) => (v === null ? '—' : v.toFixed(1));
+  const routeRows = routes.map((row) => `
+        <div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:12px">
+          <span>${esc(row.label)}</span>
+          <span class="mono dim">${row.count}&times;${row.medianMs === null ? '' : ` &middot; median ${row.medianMs} ms`}</span>
+        </div>`).join('');
+  const jankLines = jank.map((row) => {
+    const beforeAfter = (row.recentPerMin !== null && row.earlierPerMin !== null)
+      ? ` <span class="dim">(earlier ${fmtRate(row.earlierPerMin)}/min → lately ${fmtRate(row.recentPerMin)}/min)</span>`
+      : '';
+    return `
+        <div style="padding:3px 0;font-size:12px"><strong>${fmtRate(row.ratePerMin)}</strong> long tasks/min on ${esc(row.site)}${beforeAfter}
+          <span class="dim mono" style="font-size:11px">&middot; ${Math.round(row.blockedMsPerMin)} ms blocked/min over ${Math.round(row.sampledMs / 60_000)} min watched</span>
+        </div>`;
+  }).join('');
+  return `
+      <div class="card">
+        <h3>Turbo receipts</h3>
+        <p class="dim" style="margin-top:0;font-size:12px;line-height:1.55">Measured on this machine, stored locally, never sent anywhere. Speed claims get receipts or they do not get made.</p>
+        ${routes.length ? routeRows : '<div class="dim" style="font-size:12px;padding:3px 0">No warm opens recorded yet — Instant X links and terminal hops will record here as you use them.</div>'}
+        <div class="field" style="margin:10px 0 0"><label></label><small><strong>What the number is:</strong> background routing latency — the time from your click reaching PaperTrench to the warm tab being told where to go. It is NOT page-ready time: the page still draws itself after routing. Median over the last 50 samples per route.</small></div>
+        <h3 style="margin-top:16px">Main-thread stalls</h3>
+        ${jank.length ? jankLines : '<div class="dim" style="font-size:12px;padding:3px 0">No pages watched long enough yet — at least 30 seconds of visible time on a trading site is needed before a rate is shown.</div>'}
+        <div class="field" style="margin:10px 0 0"><label></label><small><strong>What the number is:</strong> the browser's own "long task" measure — any main-thread task over 50 ms — counted only while the page is visible and flushed at most once a minute. PaperTrench does not claim credit for this number in either direction; "earlier → lately" is your before/after context: change one thing (a PaperTrench toggle, a site setting), trade a while, compare.</small></div>
+      </div>`;
+}
+
 /* ---------- settings ---------- */
 
 function renderSettings(el) {
@@ -3201,6 +3310,7 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-xray-deep" ${settings.xrayDeepScanEnabled !== false ? 'checked' : ''}> Deep scan (read further back)</label><small>Lets X-Ray ask X for a few more pages of the account's posts and its follower list — the same requests the page makes when you scroll, throttled hard and only while you are looking at that account. Off means X-Ray only uses what the page loads on its own.</small></div>
         <div class="field field-check"><label><small><strong>Honest limits:</strong> change history starts the first time this device sees an account — X-Ray cannot know a bio it never saw, and the card always states the date it started watching. CA history and Smart Following come from posts and follower lists actually read, so they are a floor, never a complete record.</small></label></div>
       </div>
+      ${renderTurboCard()}
     </div>
     <div class="card" style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn" id="save-settings">Save settings</button>
