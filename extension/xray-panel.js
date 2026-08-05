@@ -8,13 +8,14 @@
  *     painted from the background's stored ledger in the same beat the route
  *     is recognized — no spinner, no click, no "analyze" button. Live digests
  *     from the page's own load then update it in place.
- *  4. Live where the eye already is. A profile header has a large dead zone —
+ *  4. Live where the eye already is. A profile header has a dead zone —
  *     right of the name stack, under the Follow row, above the tabs — and the
- *     card docks into it so the intel reads as part of the profile, not as a
- *     box floating over the timeline. The dock is an overlay from <body>
- *     (X's React tree is never touched); when there is no room, no header
- *     yet, or the route is a post, the card falls back to the old fixed
- *     top-right position.
+ *     card docks into it, flexing its width to the room the bio leaves and
+ *     styled like one of X's own cards so it reads as part of the profile,
+ *     not as a box floating over the timeline. The dock is an overlay from
+ *     <body> (X's React tree is never touched); the old fixed top-right
+ *     float survives only as a last resort — post pages, windows too narrow
+ *     to seat a readable card, or a header that has not rendered yet.
  *
  * Everything on the card is either a fact from X's own payloads or a labeled
  * statement about what this device has observed. Watch-window fields (bio /
@@ -164,6 +165,10 @@
     'background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:#D7DEEA;cursor:pointer}',
     '.chip:hover{border-color:rgba(255,157,69,.5);color:#fff}',
     '.chip .d{color:#7C8698;font-weight:500;margin-left:4px}',
+    // Docked, the card must read as one of X's own: their card border and
+    // radius, page-black background (opaque — it may sit over the joined-date
+    // tail), and no overlay shadow.
+    '.wrap.dock{background:#000;border-radius:16px;border-color:rgba(255,255,255,.12);box-shadow:none}',
     '.who{display:flex;align-items:center;gap:6px;margin-top:5px}',
     '.who img{width:19px;height:19px;border-radius:50%;flex:0 0 auto;background:#222}',
     '.who .n{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -223,15 +228,16 @@
 
   /* -------------------- placement -------------------- */
 
-  const PANEL_W = 310;
+  const PANEL_W = 310;      // the width the card wants
+  const PANEL_MIN = 220;    // the narrowest card still worth reading
   const DOCK_GAP = 12;      // breathing room from the anchors around the dock
   const DOCK_EDGE = 16;     // matches the header's own horizontal padding
   const DOCK_MIN_H = 150;   // below this the card is a squint, not a read
-  const HOST_BASE = 'z-index:2147483645;width:' + PANEL_W + 'px;';
-  const FLOAT_CSS = HOST_BASE + 'position:fixed;top:64px;right:14px;';
+  const HOST_BASE = 'z-index:2147483645;';
+  const FLOAT_CSS = HOST_BASE + 'position:fixed;top:64px;right:14px;width:' + PANEL_W + 'px;';
   const FLOAT = { mode: 'float' };
 
-  let placement = null;     // last applied: FLOAT or { mode:'dock', top, left, maxH }
+  let placement = null;     // last applied: FLOAT or { mode:'dock', top, left, width, maxH }
 
   /** The profile header pieces the dock is measured against. Null means "no
    * dockable header here" — not an error; the caller floats instead. */
@@ -286,20 +292,25 @@
     if (nameR.bottom < 60) return kept;
     const actR = a.actions ? a.actions.getBoundingClientRect() : null;
     const top = (actR && actR.bottom ? actR.bottom : nameR.top) + DOCK_GAP;
-    const left = colR.right - DOCK_EDGE - PANEL_W;
     const maxH = tabsR.top - DOCK_GAP - top;
     if (maxH < DOCK_MIN_H) return null;
-    // The zone is only usable while the irreplaceable rows (see the
-    // avoid-list above) stay clear of it. A long bio, a long URL, or a
-    // narrow window means there is no zone at all.
+    // The card flexes to the room the header leaves it: right-aligned in the
+    // column, left edge pushed out by whichever irreplaceable row (see the
+    // avoid-list above) reaches furthest right. Only when even the narrowest
+    // readable card cannot seat does the float fallback fire.
+    let clearLeft = colR.left + DOCK_EDGE;
     for (const el of a.stack) {
       const r = el.getBoundingClientRect();
-      if (r.width && r.bottom > top && r.top < tabsR.top && r.right > left - DOCK_GAP) return null;
+      if (r.width && r.bottom > top && r.top < tabsR.top && r.right > clearLeft) clearLeft = r.right;
     }
+    const left = Math.max(clearLeft + DOCK_GAP, colR.right - DOCK_EDGE - PANEL_W);
+    const width = colR.right - DOCK_EDGE - left;
+    if (width < PANEL_MIN) return null;
     return {
       mode: 'dock',
       top: Math.round(top + (window.scrollY || 0)),
       left: Math.round(left + (window.scrollX || 0)),
+      width: Math.round(width),
       maxH: Math.round(maxH),
     };
   }
@@ -308,13 +319,17 @@
     if (!host || !shadow) return;
     const next = computeDock() || FLOAT;
     if (placement && placement.mode === next.mode && placement.top === next.top
-        && placement.left === next.left && placement.maxH === next.maxH) return;
+        && placement.left === next.left && placement.width === next.width
+        && placement.maxH === next.maxH) return;
     placement = next;
     if (next.mode === 'dock') {
-      host.style.cssText = HOST_BASE + 'position:absolute;top:' + next.top + 'px;left:' + next.left + 'px;';
+      host.style.cssText = HOST_BASE + 'position:absolute;top:' + next.top + 'px;left:' + next.left
+        + 'px;width:' + next.width + 'px;';
+      shadow.__wrap.classList.add('dock');
       shadow.__wrap.style.maxHeight = next.maxH + 'px';
     } else {
       host.style.cssText = FLOAT_CSS;
+      shadow.__wrap.classList.remove('dock');
       shadow.__wrap.style.maxHeight = '';
     }
   }

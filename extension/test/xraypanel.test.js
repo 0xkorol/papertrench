@@ -354,9 +354,25 @@ test('on a profile with room, the card docks into the header dead zone', async (
   assert.match(style, /position:absolute/, 'docked into the page, not fixed over it');
   assert.match(style, /top:138px/, 'below the Follow row (126) plus the gap');
   assert.match(style, /left:274px/, 'right-aligned in the 600px column: 600 - 16 - 310');
+  assert.match(style, /width:310px/, 'with room to spare the card takes its full width');
   assert.equal(panel.wrap().style.maxHeight, '370px',
     'capped above the tabs at 520 — the card must never cover Posts/Replies');
+  assert.ok(panel.wrap().classList.contains('dock'),
+    'docked, the card wears X\'s native-card styling — no overlay shadow');
   assert.match(panel.text(), /@degenlabs/, 'and it is still the same card');
+});
+
+test('a bio reaching into the zone narrows the card instead of evicting it', async () => {
+  // The shape of @a7mnoo on 2026-08-05: the bio ends past where a full-width
+  // card would start. The card must give way, not give up — its left edge
+  // starts where the bio stops, and only a card too narrow to read floats.
+  const snug = roomyHeader({ stack: [{ left: 16, top: 196, right: 320, bottom: 216 }] });
+  const panel = mountPanel({ intel: intelFixture(), header: snug });
+  await panel.settle();
+  const style = panel.card().style.cssText;
+  assert.match(style, /position:absolute/);
+  assert.match(style, /left:332px/, 'flush against the bio edge (320) plus the gap');
+  assert.match(style, /width:252px/, 'the rest of the column: 600 - 16 - 332');
 });
 
 test('a dock accounts for page scroll — document coordinates, not viewport', async () => {
