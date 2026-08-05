@@ -484,3 +484,24 @@ test('header never substitutes the address when identity is unknown', () => {
   assert.equal(h.title, 'Unknown token');
   assert.equal(h.titleIsAddress, false);
 });
+
+/* ---------------- F-33 guard: chain fill vs on-screen price ---------------- */
+
+test('fillSourcesAgree: sub-second drift passes, double-digit divergence fails', () => {
+  // Genuine drift between a processed-commitment chain read and a live chart
+  // tick is a few percent at the very worst inside 600ms.
+  assert.equal(Q.fillSourcesAgree(1.00e-7, 1.00e-7), true, 'identical prices agree');
+  assert.equal(Q.fillSourcesAgree(1.03e-7, 1.00e-7), true, '3% apart is the same market');
+  assert.equal(Q.fillSourcesAgree(1.00e-7, 1.05e-7), true, '5% apart still agrees, either direction');
+
+  // The reported failure: chain path filling ~13% under the on-screen chart.
+  assert.equal(Q.fillSourcesAgree(0.885e-7, 1.00e-7), false,
+    'a 13%-low chain read must NOT be allowed to fill silently');
+  assert.equal(Q.fillSourcesAgree(1.2e-7, 1.00e-7), false, 'and 20% high fails the same way');
+
+  // Nothing to compare -> no objection; the ladder decides on freshness alone.
+  assert.equal(Q.fillSourcesAgree(0, 1e-7), true);
+  assert.equal(Q.fillSourcesAgree(1e-7, null), true);
+  assert.ok(Q.ONSCREEN_AGREE_RATIO > 1 && Q.ONSCREEN_AGREE_RATIO < 1.2,
+    'the agreement band must stay tight — wide enough for real drift, far under a broken read');
+});

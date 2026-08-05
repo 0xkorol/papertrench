@@ -3,6 +3,45 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.7.0 — 2026-08-05
+
+Community feedback batch #2 (thanks again lev) — all four items, with the
+video evidence doing the heavy lifting.
+
+- **Fills land on the chart you are looking at — the "instant +14%" is dead.**
+  On migrated (AMM) tokens, the on-chain price feed could silently lose one
+  side of every trade it watched: both pool vaults change in the same slot,
+  and the stale-frame guard threw the second one away as "old". One vault
+  tracked the market, the other froze, and paper fills executed up to ~13%
+  away from the live chart — booking instant fake profit that taught exactly
+  the wrong lesson (F-33). The guard is now per-vault, with a regression test
+  driving a real same-slot vault pair. And belt-and-braces: at fill time the
+  chain price is reconciled against the price on your screen from the moment
+  you clicked — if they ever disagree by more than any real sub-second move,
+  the fill takes the on-screen price and logs the divergence. A paper fill
+  can no longer be double digits away from the chart you clicked, no matter
+  what breaks upstream.
+- **Close the hot X tab, it comes back.** Accidentally closing the Instant X
+  links viewer no longer degrades the feature until you rediscover the
+  toggle: while the toggle is on and a trading tab is open, a fresh hidden
+  viewer takes its place immediately. Turning the feature off remains the
+  one way to not have a viewer (and a closing browser window never respawns
+  anything).
+- **Your own X tab IS the warm tab now.** With no registered viewer, a
+  clicked X link — post, profile, or a token's community — used to open a
+  separate tab right next to the x.com tab you already kept. Now PaperTrench
+  adopts your existing X tab as the viewer and routes into it, community
+  links included. It will never claim a tab you are looking at, a pinned
+  tab, or one playing audio — and adopted tabs are yours: toggling the
+  feature off never closes them.
+- **Quick settings in the popup.** The knobs you actually re-tune
+  mid-session — starting balance, quick-buy presets (SOL), quick-sell
+  presets (%), and a fees profile (Axiom/Padre bot · aggressive sniper · no
+  costs) — are now editable straight from the extension popup. Validation is
+  the dashboard's, verbatim: a bad value keeps your saved value and says so;
+  fee profile numbers are pinned by a test to match the dashboard's card.
+  The full Fees & costs form stays on the dashboard.
+
 ## v2.6.0 — 2026-08-05
 
 Requested by the maintainer: the X page you land on should already tell you

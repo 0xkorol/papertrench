@@ -7,7 +7,15 @@
 
 'use strict';
 
-const DEFAULTS = { appEnabled: true, balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true, warmXLinksEnabled: false, xrayEnabled: false, xrayDeepScanEnabled: true };
+const DEFAULTS = { appEnabled: true, balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true, warmXLinksEnabled: false, xrayEnabled: false, xrayDeepScanEnabled: true, presetsBuy: [0.1, 0.5, 1, 2], sellPcts: [25, 50, 75, 100], feeBps: 100, gasSolPerTx: 0, tipSolPerTx: 0, slippageBps: 0 };
+
+// Same rough starting points the dashboard's Fees & costs card offers; the
+// full form stays there, this is the one-tap version for mid-session fixes.
+const FEE_PRESETS = {
+  bot: { feeBps: 100, gasSolPerTx: 0.001, tipSolPerTx: 0.001, slippageBps: 0 },
+  fast: { feeBps: 100, gasSolPerTx: 0.003, tipSolPerTx: 0.005, slippageBps: 50 },
+  zero: { feeBps: 0, gasSolPerTx: 0, tipSolPerTx: 0, slippageBps: 0 },
+};
 
 function $(id) { return document.getElementById(id); }
 
@@ -21,6 +29,7 @@ $('overlay-window').addEventListener('click', openStreamOverlay);
 $('warmx').addEventListener('click', toggleWarmXLinks);
 $('xray').addEventListener('click', toggleXRay);
 $('power').addEventListener('click', togglePower);
+$('qs-apply').addEventListener('click', applyQuickSettings);
 
 function fmt(n, dp = 4) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
@@ -113,6 +122,8 @@ async function load() {
     pnlEl.textContent = (stats.realizedPnlSol >= 0 ? '+' : '') + fmt(stats.realizedPnlSol, 3);
     pnlEl.className = 'v ' + (stats.realizedPnlSol >= 0 ? 'green' : 'red');
 
+    fillQuickSettings(settings);
+
     const rounds = (state.rounds || []).slice(0, 6);
     $('recent').innerHTML = rounds.length
       ? rounds.map((r) => `
@@ -125,6 +136,86 @@ async function load() {
     $('status').textContent = 'Error: ' + err.message;
     console.error('PaperTrench popup load failed', err);
   }
+}
+
+/* ------------------------- quick settings -------------------------
+ * The handful of knobs people re-tune mid-session — starting balance, the
+ * preset rows, a fee profile — editable right here (lev: "it will be nice to
+ * have these on the tab for quick fixes"). Validation mirrors the dashboard
+ * exactly: a bad value keeps the SAVED value and says so, never a silent
+ * default (D-42/D-06). The full Fees & costs form stays on the dashboard.
+ */
+let qsFilled = false;
+
+function fillQuickSettings(settings) {
+  // Only on the first load(): the toggles re-run load() and re-filling every
+  // time would clobber whatever the user is mid-typing in these fields.
+  if (qsFilled) return;
+  qsFilled = true;
+  $('qs-balance').value = settings.balanceStartSol;
+  $('qs-presets').value = (settings.presetsBuy || DEFAULTS.presetsBuy).join(', ');
+  $('qs-sellpcts').value = (settings.sellPcts || DEFAULTS.sellPcts).join(', ');
+  const match = Object.keys(FEE_PRESETS).find((key) => {
+    const p = FEE_PRESETS[key];
+    return Number(settings.feeBps) === p.feeBps
+      && (Number(settings.gasSolPerTx) || 0) === p.gasSolPerTx
+      && (Number(settings.tipSolPerTx) || 0) === p.tipSolPerTx
+      && (Number(settings.slippageBps) || 0) === p.slippageBps;
+  });
+  $('qs-fees').value = match || 'custom';
+}
+
+/** Comma list -> bounded positive numbers, dashboard rules: > 0, ≤ max,
+ * at most 8, optional dedupe. Returns null (keep saved) for an empty field. */
+function parseNumberList(raw, max, label, notes, { dedupe = false } = {}) {
+  const parts = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  let values = parts.map((s) => parseFloat(s)).filter((n) => Number.isFinite(n) && n > 0 && n <= max);
+  if (dedupe) values = [...new Set(values)];
+  if (values.length > 8) values = values.slice(0, 8);
+  if (!values.length) { notes.push(`${label}: no valid entries — kept the saved list`); return null; }
+  if (values.length !== parts.length) {
+    notes.push(`${label}: kept ${values.length} of ${parts.length} entries (each must be > 0 and ≤ ${max}, max 8${dedupe ? ', no repeats' : ''})`);
+  }
+  return values;
+}
+
+async function applyQuickSettings() {
+  const stored = await chrome.storage.local.get(['pt_settings']);
+  const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+  const notes = [];
+  const patch = {};
+
+  const balanceRaw = $('qs-balance').value;
+  const balanceNum = Number(balanceRaw);
+  if (String(balanceRaw).trim() === '') {
+    // untouched/cleared: keep saved
+  } else if (Number.isFinite(balanceNum) && balanceNum >= 0.1) {
+    if (balanceNum !== Number(settings.balanceStartSol)) {
+      patch.balanceStartSol = balanceNum;
+      notes.push('starting balance saved — the % baseline moves now, cash changes on the next reset');
+    }
+  } else {
+    notes.push(`starting balance "${balanceRaw}" rejected (must be ≥ 0.1 SOL) — kept ${settings.balanceStartSol}`);
+  }
+
+  const presets = parseNumberList($('qs-presets').value, 1000, 'quick-buy presets', notes);
+  if (presets) patch.presetsBuy = presets;
+  const sellPcts = parseNumberList($('qs-sellpcts').value, 100, 'quick-sell presets', notes, { dedupe: true });
+  if (sellPcts) patch.sellPcts = sellPcts;
+
+  const feeChoice = $('qs-fees').value;
+  if (FEE_PRESETS[feeChoice]) Object.assign(patch, FEE_PRESETS[feeChoice]);
+
+  if (!Object.keys(patch).length) {
+    $('status').textContent = notes.length ? notes.join(' · ') : 'Nothing to change.';
+    return;
+  }
+  await chrome.storage.local.set({ pt_settings: { ...settings, ...patch } });
+  chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  qsFilled = false; // re-fill from what was actually saved
+  await load();
+  $('status').textContent = ['Applied — open trading tabs pick it up live.', ...notes].join(' · ');
 }
 
 async function toggleOverlay() {

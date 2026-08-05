@@ -783,6 +783,24 @@
     renderAll();
     // The resolver may have just supplied the first quote this coin ever had.
     flushArmedBuy();
+    publishPageState();
+  }
+
+  /* Tell the MAIN-world bridge whether ANY tick consumer exists on this page
+   * (Turbo). Ticks feed exactly two things: the page's resolved token and the
+   * screener row chips. On every other page the bridge's transport taps parse
+   * the site's frames for nobody — so the bridge gates parsing on this signal.
+   * Sent only on change; the bridge's boot default is "wanted", so a missed
+   * first message costs correctness nothing (it merely parses as before). */
+  let lastWantsTicks = null;
+  function publishPageState() {
+    const chipPage = Boolean(site && site.rowBuy
+      && settings.listQuickBuyEnabled !== false
+      && site.rowBuy.listPaths.test(location.pathname));
+    const wants = Boolean(token) || chipPage;
+    if (wants === lastWantsTicks) return;
+    lastWantsTicks = wants;
+    sendPadreMarker('page-state', { wantsTicks: wants });
   }
 
   /**
@@ -1178,6 +1196,10 @@
   // price would be a lie. The old 10 s window routinely filled 30-50% away
   // from the live market on a moving memecoin (DEFECT F-01).
   const STALE_FILL_MAX_AGE_MS = 3000;
+  // An on-screen price at most this old is recent enough to arbitrate when
+  // the chain read disagrees with it (F-33 showed the chain path CAN be
+  // wrong). Sub-second, so a genuine fast move never trips the comparison.
+  const ONCHAIN_SCREEN_CHECK_MAX_AGE_MS = 600;
 
   function quoteSnapshot() {
     if (!token || !(Number(token.priceNative) > 0)) return null;
@@ -1245,11 +1267,26 @@
     const atClickAge = atClick ? clickAt - atClick.receivedAt : Infinity;
 
     // Chain state is the authority. It is the only source that is not behind
-    // by construction, so it is asked first and trusted absolutely.
+    // by construction, so it is asked first — but never blindly: F-33 proved
+    // the chain path can be systematically wrong (a starved vault leg filled
+    // 13% under the chart for a whole session). When the page feed produced a
+    // price moments before the click and the chain read disagrees with it by
+    // more than any real sub-second move, the fill takes the price the trader
+    // actually clicked on, and the divergence is logged so a report comes
+    // with evidence instead of a shrug.
     const observation = await R.onchainQuote(startMint);
     if (!token || token.mint !== startMint) return null;
     const onchain = quoteFromOnchain(observation);
-    if (onchain) return onchain;
+    if (onchain) {
+      const screenFresh = atClick && atClickAge <= ONCHAIN_SCREEN_CHECK_MAX_AGE_MS;
+      if (screenFresh && !Q.fillSourcesAgree(onchain.priceNative, atClick.priceNative)) {
+        console.debug('PaperTrench: on-chain quote ' + onchain.priceNative
+          + ' diverges from the on-screen price ' + atClick.priceNative
+          + ' (' + atClickAge + 'ms old) — filling at the on-screen price');
+        return atClick;
+      }
+      return onchain;
+    }
 
     // The freshest local price, judged by its age AT CLICK time — the round
     // trip above must not have aged it out of its own window.
@@ -1402,6 +1439,9 @@
         updateOverlayVisibility();
         applyOverlaySize();
         renderPositionsBar();
+        // A settings flip can change whether this page has tick consumers
+        // (e.g. list quick-buy chips toggled) — republish the feed demand.
+        publishPageState();
       }
 
       const stateChange = changes[E.STORAGE_KEYS.state];
@@ -4348,6 +4388,13 @@
     // after 5 minutes without ANY content-script message (O-04/C-17), so an
     // alive-but-quiet overlay must keep speaking.
     if (!bridgePingTimer) bridgePingTimer = managedInterval(() => sendPadreMarker('bridge-ping'), 30_000);
+    // Waking from sleep, the wall clock has jumped: the bridge reads the gap
+    // as content-script silence and (Turbo) gates frame parsing on it. The
+    // moment the tab is visible again, one ping restores the feed instead of
+    // waiting out the 30 s heartbeat.
+    const onVisibleAgain = () => { if (!document.hidden && contextAlive()) sendPadreMarker('bridge-ping'); };
+    document.addEventListener('visibilitychange', onVisibleAgain);
+    onMountCleanup(() => { try { document.removeEventListener('visibilitychange', onVisibleAgain); } catch (_) {} });
 
     // Sniping cadence: while an address is detected but not yet indexed by any
     // source, retry rapidly. This is the difference between being able to
@@ -4401,6 +4448,9 @@
     token = null;
     armedBuy = null;
     lastHref = '';
+    // The standdown told the bridge "no consumers"; forget the last published
+    // demand so a re-enable on the same page re-announces it fresh.
+    lastWantsTicks = null;
     // C-19/C-01: per-page routing probe and line-repost state die with the
     // overlay (bridgeNativeCapable itself is a page property and survives).
     if (nativeProbeTimer) { clearTimeout(nativeProbeTimer); nativeProbeTimer = null; }

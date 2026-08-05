@@ -14,7 +14,7 @@ const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 
-function runBridge() {
+function runBridge(opts = {}) {
   const timers = [];
   const emitted = [];
   const listeners = {};
@@ -103,7 +103,12 @@ function runBridge() {
 
   const sandbox = {
     window: win,
-    location: { href: 'https://trade.padre.gg/trade/Mint1' },
+    // Turbo host-gates the SharedWorker tap to gmgn.ai, so the harness must
+    // carry a real hostname; GMGN-only paths pass a GMGN href.
+    location: (() => {
+      const href = opts.href || 'https://trade.padre.gg/trade/Mint1';
+      return { href, hostname: new URL(href).hostname };
+    })(),
     console,
     Date,
     Math,
@@ -307,7 +312,9 @@ test('GMGN market-cap candles emit their latest close as the exact chart-scale t
 });
 
 test('GMGN SharedWorker price messages are forwarded as live page quotes', () => {
-  const env = runBridge();
+  // The SharedWorker tap is scoped to GMGN, the one audited site that carries
+  // prices this way — so this test must boot on a GMGN page, not Padre.
+  const env = runBridge({ href: 'https://gmgn.ai/sol/token/Mint1' });
   const worker = new env.win.SharedWorker('gmgn-realtime-worker.js');
   const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
   worker.port.emit({ token: { priceUsd: '0.00001234', mint } });
@@ -317,4 +324,16 @@ test('GMGN SharedWorker price messages are forwarded as live page quotes', () =>
   assert.equal(message.payload.mint, mint);
   assert.equal(message.payload.candidates[0].value, 0.00001234);
   assert.equal(message.payload.candidates[0].unit, 'usd');
+});
+
+test('non-GMGN sites keep their native SharedWorker untouched', () => {
+  // The tap has a side effect on an object the host owns (port.start()), and
+  // GMGN is the only audited site whose feed rides a SharedWorker — on Padre
+  // the wrapper must not install at all (Turbo per-site tap scope).
+  const env = runBridge(); // padre href
+  const worker = new env.win.SharedWorker('padre-worker.js');
+  worker.port.emit({ token: { priceUsd: '0.00001234', mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' } });
+
+  assert.ok(!env.emitted.some((m) => m.type === 'tick' && m.payload?.source === 'shared-worker'),
+    'no bridge listener may ride a non-GMGN SharedWorker port');
 });

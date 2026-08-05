@@ -555,6 +555,24 @@
     return now - lastPriceAt > STALE_AFTER_MS;
   }
 
+  // A chain-read fill price and an on-screen price from moments before the
+  // click can legitimately differ by sub-second drift — never by double
+  // digits. Beyond this ratio one of the two sources is broken (wrong pool,
+  // starved vault leg, a decode fault), and the fill must side with the price
+  // the trader is actually looking at: a fill 13% away from the chart books
+  // instant fake P&L and teaches a wrong lesson, which is worse than losing
+  // a few hundred milliseconds of freshness.
+  var ONSCREEN_AGREE_RATIO = 1.06;
+
+  /** True when the two prices are close enough to be the same market. */
+  function fillSourcesAgree(onchainNative, screenNative) {
+    if (!(onchainNative > 0) || !(screenNative > 0)) return true; // nothing to compare
+    var ratio = onchainNative > screenNative
+      ? onchainNative / screenNative
+      : screenNative / onchainNative;
+    return ratio <= ONSCREEN_AGREE_RATIO;
+  }
+
   /* ------------------------------------------------------------------ *
    * 5. Live position mark
    * ------------------------------------------------------------------ */
@@ -848,6 +866,7 @@
     withinBand,
     shouldRequote,
     isPriceStale,
+    fillSourcesAgree,
     positionMark,
     tokenFromJupiter,
     solUsdFromJupiter,
@@ -863,6 +882,7 @@
     formatMarketCap,
     formatUsdPrice,
     ACCEPT_RATIO,
+    ONSCREEN_AGREE_RATIO,
     POLL_INTERVAL_MS,
     FEED_FRESH_MS,
     STALE_AFTER_MS,

@@ -316,6 +316,28 @@ instead of a lie that tracks the price. Locked by a behavioral test proving
 the level holds through moving closes without a fresh spec, and that honest
 fresh specs recompute to the same invariant entry level.
 
+**F-33 · S1 · Paper fills on migrated (AMM) tokens executed ~13% away from the live chart — the on-chain feed starved one vault leg of every trade**
+`onchain-feed.js` handleMessage (shared `entry.slot` guard) · Padre, video
+evidence from lev (buy toast $59.8K MC against a $67.6K chart, instant fake
++14.6% unrealized; sell at $57.8K against $64.5K) · **fixed v2.7.0**
+A swap moves BOTH vaults of a constant-product pool in the SAME slot, and
+they arrive as two separate accountNotifications carrying that slot. The
+out-of-order guard compared each frame against one per-ENTRY slot, so the
+first leg of every trade was accepted and its sibling dropped as "old".
+Subscription delivery order is stable per connection, so the same leg kept
+losing: one vault tracked every trade while the other froze at its last
+first-arrival, and price = quote/base walked away from the chart by the full
+drift between them — while still LOOKING fresh (observedAt updated on every
+accepted leg), so the fill ladder's "chain state is the authority" step
+served it on every click. Fix is per-vault slot guards (single-account pools
+keep the strict per-entry guard). Defense in depth: quoteForTrade now
+reconciles the chain quote against a sub-second-fresh on-screen price and
+sides with the screen beyond a 6% divergence (Q.fillSourcesAgree), logging
+the divergence — the fill the trader gets is never double digits away from
+the chart they clicked, whatever breaks upstream next time. Locked by a
+behavioral same-slot vault-pair test, a per-leg rewind-refusal test, and
+source pins on the ladder order.
+
 ## O — Overlay lifecycle & movability (audit: 2026-08-05, verified against source)
 
 Community reports covered: "overlay on pages it doesn't need to be on", "can't move

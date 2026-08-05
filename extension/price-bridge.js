@@ -122,6 +122,29 @@
   const CONTENT_SILENCE_LIMIT_MS = 5 * 60_000;
   let lastContentMessageAt = Date.now();
 
+  /* ---------------- feed demand gate (Turbo) ------------------------------
+   * Parsing is the bridge's whole main-thread cost, and most of the frames it
+   * parses have no consumer: ticks feed exactly (a) the page's resolved token
+   * and (b) screener row chips. On every other page — wallet, portfolio,
+   * settings, a list page with chips disabled — every clone().text() and
+   * JSON.parse is pure jank donated to the host site. The content script
+   * publishes whether any consumer exists ('page-state'); with none, frames
+   * are dropped BEFORE the body copy and the parse, not after.
+   *
+   * The boot default is TRUE: the bridge runs at document_start, the content
+   * script at document_idle, and the first tick of a brand-new coin must not
+   * be lost to a gate that nobody has evaluated yet. Silence (the O-04/C-17
+   * stamp) still wins over a stale TRUE: a dead extension stops costing the
+   * page within CONTENT_SILENCE_LIMIT_MS no matter what it last said, and
+   * 'standdown' backdates that stamp so the master switch stops the parsing
+   * the instant it is thrown, not five minutes later.
+   */
+  let feedWanted = true;
+
+  function feedActive() {
+    return feedWanted && Date.now() - lastContentMessageAt <= CONTENT_SILENCE_LIMIT_MS;
+  }
+
   /* DEFECT F-26: the widget sweep must not scan forever on sites that never
    * mount a TradingView chart. After WIDGET_SWEEP_MISS_LIMIT consecutive
    * empty scans (~1 minute at the 1 s cadence) it drops to a 10 s cadence;
@@ -330,6 +353,8 @@
   }
 
   function forwardJson(raw, source, url) {
+    // No consumer, no parse — the cheapest frame is the one never read.
+    if (!feedActive()) return;
     let parsed = raw;
     if (typeof raw === 'string') {
       const trimmed = raw.trimStart();
@@ -443,9 +468,19 @@
       const requestUrl = typeof input === 'string' ? input : (input && input.url) || '';
       promise.then((response) => {
         try {
+          // Gate BEFORE the clone: response.clone().text() materializes a
+          // second copy of the body on the page's main thread, which is most
+          // of this tap's cost. With no tick consumer the copy never happens.
+          if (!feedActive()) return;
           const type = response.headers && response.headers.get('content-type');
           if (type && !/json/i.test(type)) return;
-          response.clone().text().then((text) => forwardJson(text, 'fetch', response.url || requestUrl), () => {});
+          const finalUrl = response.url || requestUrl;
+          // Bodies the parse guard would drop anyway are not worth copying.
+          // The GMGN mcap-candles route is the one audited fetch/XHR path
+          // allowed past the guard (F-06), so it alone skips this pre-gate.
+          const length = Number(response.headers && response.headers.get('content-length'));
+          if (length > FRAME_GUARD_BYTES && !/\/api\/v1\/token_mcap_candles\//.test(finalUrl)) return;
+          response.clone().text().then((text) => forwardJson(text, 'fetch', finalUrl), () => {});
         } catch (_) {}
       }, () => {});
       return promise;
@@ -492,8 +527,17 @@
   // worker port gives the page's newest quote without polling or modifying the
   // worker protocol. Returning the original worker object preserves instanceof
   // checks and application behavior.
+  //
+  // GMGN is the ONLY audited site that carries prices this way (per-site
+  // matrix, DEFECTS.md), and this wrapper is the one tap with a side effect —
+  // port.start() — on an object the host site owns. Other sites keep their
+  // native SharedWorker untouched.
   const OriginalSharedWorker = window.SharedWorker;
-  if (typeof OriginalSharedWorker === 'function') {
+  const bridgeHostname = (() => {
+    try { return location.hostname || new URL(location.href).hostname; } catch (_) { return ''; }
+  })();
+  const hostUsesSharedWorkerFeed = /(^|\.)gmgn\.ai$/.test(bridgeHostname);
+  if (typeof OriginalSharedWorker === 'function' && hostUsesSharedWorkerFeed) {
     const WrappedSharedWorker = function (url, options) {
       const worker = options === undefined
         ? new OriginalSharedWorker(url)
@@ -1726,6 +1770,14 @@
     lastContentMessageAt = Date.now();
     if (type === 'paper-axis' || type === 'paper-lines') widgetSweepMisses = 0;
 
+    // Feed demand. 'page-state' is the explicit signal; a token anchor or a
+    // chip scan is proof of a consumer regardless of message ordering.
+    if (type === 'page-state') {
+      feedWanted = Boolean(payload && payload.wantsTicks);
+      return;
+    }
+    if (type === 'paper-axis' || type === 'row-scan') feedWanted = true;
+
     if (type === 'standdown') {
       // The content script is going away (overlay disabled, or extension
       // reload teardown): erase every native drawing this bridge owns and
@@ -1743,6 +1795,9 @@
       clearGmgnFillMarkers();
       refreshPadreMarks();
       lastContentMessageAt = Date.now() - CONTENT_SILENCE_LIMIT_MS;
+      // A standdown also ends feed demand outright: "PaperTrench off" must
+      // cost the page zero parses from this instant, not from the next tick.
+      feedWanted = false;
       return;
     }
 

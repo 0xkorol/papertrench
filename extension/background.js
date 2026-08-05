@@ -623,18 +623,52 @@ async function warmReveal(tab, url) {
   try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (_) {}
 }
 
+/** An x.com tab the user already has open can BE the viewer. Routing into it
+ * is what people expect — "open it in my X tab" — and it is exactly the case
+ * from the field where a lost registration made the cold path spawn a
+ * duplicate x.com tab NEXT TO the one already sitting there (lev's community
+ * link "opens them separately"). Never a tab the user is looking at, never a
+ * pinned one, never one playing audio — those are in use, and a viewer gets
+ * silently navigated by clicks and hover prefetch. Prefer a tab parked on
+ * /home (nothing to lose there), then the most recently used. */
+async function warmAdoptableTab() {
+  const tabs = await new Promise((resolve) => chrome.tabs.query({
+    url: ['https://x.com/*', 'https://*.x.com/*', 'https://twitter.com/*', 'https://*.twitter.com/*'],
+  }, (result) => resolve(result || [])));
+  const candidates = tabs.filter((tab) => tab && Number.isFinite(tab.id)
+    && !tab.active && !tab.pinned && !tab.audible);
+  if (!candidates.length) return null;
+  const parked = candidates.filter((tab) => {
+    try { return new URL(tab.pendingUrl || tab.url || '').pathname === '/home'; } catch (_) { return false; }
+  });
+  const pool = parked.length ? parked : candidates;
+  return pool.reduce((best, tab) => ((tab.lastAccessed || 0) > (best.lastAccessed || 0) ? tab : best));
+}
+
+/** Ensure a viewer exists: adopt an existing X tab, else create the hidden
+ * one. Callers must already hold warmSerial. Adopted tabs register as
+ * used:true — they are the user's tabs, so a later toggle-off must never
+ * close them. */
+async function warmEnsureViewerLocked() {
+  const settings = await getSettings();
+  if (!warmFeatureOn(settings)) return;
+  if (await validWarmTab()) return;
+  const adopted = await warmAdoptableTab();
+  if (adopted) {
+    await writeWarmTab({ tabId: adopted.id, used: true, createdAt: Date.now() });
+    console.debug('PaperTrench warm links: adopted an existing X tab as the viewer');
+    return;
+  }
+  const tab = await chrome.tabs.create({ url: WARM_IDLE_URL, active: false });
+  try { await chrome.tabs.update(tab.id, { muted: true }); } catch (_) {}
+  await writeWarmTab({ tabId: tab.id, used: false, createdAt: Date.now() });
+}
+
 /** Pre-create the hidden viewer so the session's FIRST click is already warm.
  * Idempotent under warmSerial: n trading tabs announcing themselves create
  * one viewer, not n. */
 function warmPrewarm() {
-  return warmSerial(async () => {
-    const settings = await getSettings();
-    if (!warmFeatureOn(settings)) return;
-    if (await validWarmTab()) return;
-    const tab = await chrome.tabs.create({ url: WARM_IDLE_URL, active: false });
-    try { await chrome.tabs.update(tab.id, { muted: true }); } catch (_) {}
-    await writeWarmTab({ tabId: tab.id, used: false, createdAt: Date.now() });
-  });
+  return warmSerial(warmEnsureViewerLocked);
 }
 
 function warmSupersede(tabId) {
@@ -755,7 +789,22 @@ async function warmOpen(rawUrl, sender, settings) {
 
   return warmSerial(async () => {
     const startedAt = Date.now();
-    const valid = await validWarmTab();
+    let valid = await validWarmTab();
+
+    if (!valid) {
+      // No registered viewer. Before spawning a separate tab, adopt an X tab
+      // the user already keeps — the field failure was exactly a community
+      // link opening in a fresh tab NEXT TO the user's own x.com tab. The
+      // adopted tab goes through the normal warm route below (the relay
+      // scripts run on every x.com tab, so SPA works there too).
+      const adopted = await warmAdoptableTab();
+      if (adopted) {
+        const state = { tabId: adopted.id, used: true, createdAt: Date.now() };
+        await writeWarmTab(state);
+        valid = { tab: adopted, state };
+        console.debug('PaperTrench warm links: route continues in an adopted X tab');
+      }
+    }
 
     if (!valid) {
       // Cold path — and the new tab immediately becomes the viewer, so only
@@ -914,11 +963,25 @@ async function warmSettingsChanged(settings) {
   } catch (_) { /* already gone */ }
 }
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   warmSupersede(tabId);
   warmSerial(async () => {
     const state = await readWarmTab();
-    if (state && state.tabId === tabId) await clearWarmTabState();
+    if (!state || state.tabId !== tabId) return;
+    await clearWarmTabState();
+    // An accidentally-closed viewer must not degrade the feature until the
+    // user rediscovers the toggle ("I closed the x tab and had to turn
+    // instant mode off and on to get the hot tab open" — lev). While the
+    // toggle is on and a trading tab is open, a fresh hidden viewer takes
+    // its place immediately; turning the feature off remains the one way to
+    // not have a viewer. A closing WINDOW is the browser going away, not the
+    // user aiming at our tab — never spawn tabs into a shutdown.
+    if (removeInfo && removeInfo.isWindowClosing) return;
+    const settings = await getSettings();
+    if (!warmFeatureOn(settings)) return;
+    const trading = await new Promise((resolve) => chrome.tabs.query({ url: WARM_PLATFORM_URLS }, (result) => resolve(result || [])));
+    if (!trading.length) return;
+    await warmEnsureViewerLocked();
   });
 });
 

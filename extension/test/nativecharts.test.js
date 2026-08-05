@@ -261,7 +261,9 @@ function runBridge(opts = {}) {
   FakeXHR.prototype.addEventListener = function () {};
 
   const win = {
-    fetch: () => Promise.resolve({
+    // opts.fetchResponse(url) lets a test hand the tap an instrumented
+    // response (clone counters, content-length headers) per requested URL.
+    fetch: (...args) => Promise.resolve(opts.fetchResponse ? opts.fetchResponse(args[0]) : {
       url: '', headers: { get: () => 'application/json' },
       clone: () => ({ text: () => Promise.resolve('{}') }),
     }),
@@ -1020,8 +1022,11 @@ test('rapid unrelated batches never starve the watched mint (per-mint throttle)'
   // was discarded whole. The throttle is now per mint.
   const env = runBridge({ gmgnMounted: true });
   const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
-  env.send('paper-axis', { mint: WATCHED, symbol: 'BONK' });
+  // One clock for everything: the axis message must be stamped on the same
+  // (fake) clock the frames arrive on, or the bridge's liveness gate reads
+  // the jump as five months of content-script silence and drops the frames.
   env.setNow(1_800_000_000_000);
+  env.send('paper-axis', { mint: WATCHED, symbol: 'BONK' });
 
   let watchedTicks = 0;
   for (let batch = 0; batch < 40; batch++) {
@@ -1046,8 +1051,9 @@ test('rapid unrelated batches never starve the watched mint (per-mint throttle)'
 test('malformed frames between valid ones do not kill the feed', () => {
   const env = runBridge({ gmgnMounted: true });
   const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
-  env.send('paper-axis', { mint: WATCHED });
+  // Same-clock ordering as above: axis first ON the fake clock.
   env.setNow(1_800_000_000_000);
+  env.send('paper-axis', { mint: WATCHED });
 
   injectActivityFrame(env, '{"channel":"token_activity","data":[{'); // truncated
   injectActivityFrame(env, 'null');
@@ -1768,4 +1774,142 @@ test("F-31: paper shapes and marks can never render ahead of the newest bar", ()
     "emitPadreBar must record the newest bar chart time");
   assert.match(bridge, /lastBarTimeSec = 0;/,
     "the bar time must reset on token change");
+});
+
+/* ------------------------------------------------------------------ *
+ * Turbo: the feed-demand gate — no consumer, no parse
+ *
+ * Ticks feed exactly two things: the page's resolved token and the
+ * screener row chips. The bridge must stop parsing the site's frames
+ * the instant neither exists ('standdown', page-state wantsTicks:false)
+ * and resume the instant demand is proven again (paper-axis, row-scan).
+ * The fetch tap must gate BEFORE the body copy — clone().text() is the
+ * cost, not just JSON.parse.
+ * ------------------------------------------------------------------ */
+
+test('Turbo: standdown stops frame parsing instantly; a revived axis restores it', () => {
+  const env = runBridge({ gmgnMounted: true });
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.setNow(1_800_000_000_000);
+  env.send('paper-axis', { mint: WATCHED });
+
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    channel: 'token_activity', data: [{ a: WATCHED, pu: '0.001', e: 'buy' }],
+  }));
+  assert.ok(env.emitted.some((m) => m.type === 'tick' && m.payload?.mint === WATCHED),
+    'with a resolved token, frames must tick');
+
+  env.advance(150);
+  env.send('standdown');
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    channel: 'token_activity', data: [{ a: WATCHED, pu: '0.002', e: 'buy' }],
+  }));
+  assert.equal(env.emitted.filter((m) => m.type === 'tick').length, 0,
+    'after standdown ("PaperTrench off") the page must not pay for a single parse');
+
+  env.advance(150);
+  env.send('paper-axis', { mint: WATCHED });
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    channel: 'token_activity', data: [{ a: WATCHED, pu: '0.003', e: 'buy' }],
+  }));
+  assert.ok(env.emitted.some((m) => m.type === 'tick' && m.payload?.mint === WATCHED),
+    'a revived content script restores the feed with its first axis message');
+});
+
+test('Turbo: page-state wantsTicks:false gates frames; a row scan proves demand again', () => {
+  // rowDom: the row-scan message drives the real chip machinery, which needs
+  // the harness's chip-capable document (createElement, elementFromPoint).
+  const env = runBridge({ gmgnMounted: true, rowDom: true });
+  const WATCHED = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+  env.setNow(1_800_000_000_000);
+
+  env.send('page-state', { wantsTicks: false });
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    channel: 'token_activity', data: [{ a: WATCHED, pu: '0.001', e: 'buy' }],
+  }));
+  assert.equal(env.emitted.filter((m) => m.type === 'tick').length, 0,
+    'a page with no tick consumer must not parse frames');
+
+  // A chip scan is proof of a consumer regardless of message ordering.
+  env.advance(150);
+  env.send('row-scan', {
+    amount: 0.1, size: 1, linkSelectors: [], placement: 'badge', containerMode: 'heuristic',
+  });
+  env.emitted.length = 0;
+  injectActivityFrame(env, JSON.stringify({
+    channel: 'token_activity', data: [{ a: WATCHED, pu: '0.002', e: 'buy' }],
+  }));
+  assert.ok(env.emitted.some((m) => m.type === 'tick'),
+    'an active chip page must get its mint-tagged ticks back');
+});
+
+test('Turbo: the fetch tap never copies a body while the feed is gated', async () => {
+  let cloned = 0;
+  const env = runBridge({
+    fetchResponse: (url) => ({
+      url,
+      headers: { get: (h) => (String(h).toLowerCase() === 'content-type' ? 'application/json' : null) },
+      clone: () => { cloned += 1; return { text: () => Promise.resolve('{}') }; },
+    }),
+  });
+  env.setNow(1_800_000_000_000);
+  env.send('standdown');
+
+  await env.win.fetch('https://gmgn.ai/api/v1/anything');
+  await microtasks();
+  assert.equal(cloned, 0, 'a gated feed must skip clone().text() entirely — the copy IS the cost');
+
+  env.advance(150);
+  env.send('paper-axis', { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' });
+  await env.win.fetch('https://gmgn.ai/api/v1/anything');
+  await microtasks();
+  assert.equal(cloned, 1, 'restored demand must restore the tap');
+});
+
+test('Turbo: oversized fetch bodies are dropped before the copy; mcap candles stay exempt', async () => {
+  const clonedUrls = [];
+  const env = runBridge({
+    fetchResponse: (url) => ({
+      url,
+      headers: {
+        get: (h) => {
+          const name = String(h).toLowerCase();
+          if (name === 'content-type') return 'application/json';
+          if (name === 'content-length') return String(3_000_000);
+          return null;
+        },
+      },
+      clone: () => {
+        clonedUrls.push(url);
+        return { text: () => Promise.resolve('{"code":0,"data":{"list":[{"close":1}]}}') };
+      },
+    }),
+  });
+
+  await env.win.fetch('https://gmgn.ai/api/v1/rank_list_giant');
+  await env.win.fetch('https://gmgn.ai/api/v1/token_mcap_candles/sol/Mint1?resolution=1m');
+  await microtasks();
+
+  assert.deepEqual(clonedUrls, ['https://gmgn.ai/api/v1/token_mcap_candles/sol/Mint1?resolution=1m'],
+    'a body the parse guard would drop must not be copied — except the audited candles route');
+});
+
+test('Turbo source contract: the content script publishes page-state demand', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const setTokenBody = content.slice(
+    content.indexOf('function setToken('),
+    content.indexOf('let lastWantsTicks'),
+  );
+  assert.match(setTokenBody, /publishPageState\(\);/,
+    'every token change must republish feed demand');
+  assert.match(content, /sendPadreMarker\('page-state', \{ wantsTicks: wants \}\)/,
+    'the demand signal must reach the bridge as page-state');
+  assert.match(content, /lastWantsTicks = null;/,
+    'teardown must reset the publisher so a re-enable re-announces');
+  assert.match(content, /settings\.listQuickBuyEnabled !== false\s*\n?\s*&& site\.rowBuy\.listPaths\.test\(location\.pathname\)/,
+    'chip pages count as demand only while chips are enabled and on a list path');
 });

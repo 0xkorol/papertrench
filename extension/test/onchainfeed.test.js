@@ -104,3 +104,110 @@ test("F-21: a subscribe on a cold socket must not orphan a pending entry", () =>
   assert.doesNotMatch(block, /pending\.set\([\s\S]*?send\(\{/,
     "the old set-before-send order must be gone");
 });
+
+/* ---------------- F-33: per-vault slot guard (lev, stale Padre fills) ----
+ *
+ * A swap moves BOTH vaults of a constant-product pool in the SAME slot, and
+ * the RPC delivers them as two separate accountNotifications carrying that
+ * same slot. The old guard compared each frame against one shared entry.slot,
+ * so the first leg of every trade was accepted and its sibling was dropped as
+ * out-of-order. Whichever vault kept losing the race stayed frozen at its
+ * last first-arrival while the other tracked every trade — the computed
+ * price walked away from the chart by the whole drift between them. Reported
+ * from a live Padre session as paper buys filling ~13% below the on-screen
+ * chart with instant fake profit.
+ */
+
+const Onchain = require('../onchain.js');
+
+function tokenAccountB64(amount) {
+  // 165-byte SPL token account: mint pubkey at 0 (zeroed — decoder tolerates
+  // it), u64 LE amount at 64.
+  const bytes = Buffer.alloc(165);
+  bytes.writeBigUInt64LE(BigInt(amount), 64);
+  return bytes.toString('base64');
+}
+
+function vaultNotification(subscription, slot, amount) {
+  return JSON.stringify({
+    method: 'accountNotification',
+    params: {
+      subscription,
+      result: { context: { slot }, value: { data: [tokenAccountB64(amount)] } },
+    },
+  });
+}
+
+function seedCpPool(mint) {
+  Feed._watched.set(mint, {
+    desc: {
+      kind: 'cp-vaults', watch: 'BASEVAULT', watchQuote: 'QUOTEVAULT', mint,
+      decimals: { [mint]: 6, [Onchain.WSOL_MINT]: 9 },
+    },
+    slot: 0,
+    subIds: [901, 902],
+  });
+  Feed._subToMint.set(901, { mint, account: 'BASEVAULT' });
+  Feed._subToMint.set(902, { mint, account: 'QUOTEVAULT' });
+}
+
+function cleanupCpPool(mint, off) {
+  Feed._watched.delete(mint);
+  Feed._subToMint.delete(901);
+  Feed._subToMint.delete(902);
+  if (off) off();
+}
+
+test('F-33: the second vault leg of a same-slot trade must be accepted, not dropped', () => {
+  const MINT = 'LevMint111111111111111111111111111111111111';
+  const quotes = [];
+  const off = Feed.onQuote((q) => { if (q.mint === MINT) quotes.push(q); });
+  seedCpPool(MINT);
+  try {
+    // One swap: both vault frames carry slot 100.
+    Feed._handleMessage(vaultNotification(901, 100, 1_000_000_000_000)); // 1M tokens (6dp)
+    Feed._handleMessage(vaultNotification(902, 100, 5_000_000_000));     // 5 SOL (9dp)
+
+    // Both legs present -> the price MUST exist and be quote/base.
+    const entry = Feed._watched.get(MINT);
+    assert.equal(entry.baseAmount, 1_000_000_000_000,
+      'the base leg must be recorded');
+    assert.equal(entry.quoteAmount, 5_000_000_000,
+      'the quote leg of the SAME slot must be recorded — this is the frame the old shared-slot guard dropped');
+    assert.ok(quotes.length >= 1, 'a complete vault pair must emit a quote');
+    const last = quotes[quotes.length - 1];
+    assert.ok(Math.abs(last.priceNative - 5 / 1_000_000) < 1e-12,
+      'price must be computed from the same-slot vault PAIR');
+
+    // Next swap, slot 101: the quote leg arrives FIRST this time. Both must
+    // land regardless of arrival order.
+    Feed._handleMessage(vaultNotification(902, 101, 6_000_000_000));
+    Feed._handleMessage(vaultNotification(901, 101, 900_000_000_000));
+    assert.ok(Math.abs(entry.priceNative - 6 / 0.9 / 1_000_000) < 1e-12,
+      'both legs of the next slot must update the price');
+
+    // A genuinely stale frame (older slot for a leg we already saw) is
+    // still refused — per leg.
+    Feed._handleMessage(vaultNotification(901, 99, 111));
+    assert.equal(entry.baseAmount, 900_000_000_000,
+      'an out-of-order frame for a leg must not rewind that leg');
+
+    const fresh = Feed.currentQuote(MINT);
+    assert.ok(fresh, 'a just-updated pool must serve a fill-fresh quote');
+    assert.ok(Math.abs(fresh.priceNative - 6 / 0.9 / 1_000_000) < 1e-12);
+  } finally {
+    cleanupCpPool(MINT, off);
+  }
+});
+
+test('F-33: single-account pools keep the strict newer-slot guard', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'onchain-feed.js'), 'utf8');
+  const fnStart = src.indexOf('function handleMessage(');
+  const block = src.slice(fnStart, src.indexOf('\n  }', fnStart) + 4);
+  // The per-entry guard must survive for whirlpool/CLMM/pump-curve (one
+  // account = one frame per slot), and the cp branch must guard per leg.
+  assert.match(block, /isNewerObservation\(slot, entry\.slot\)/,
+    'single-account pools still refuse out-of-order frames');
+  assert.match(block, /legKey/,
+    'cp-vaults frames must be guarded per vault leg, not per entry');
+});

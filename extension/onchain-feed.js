@@ -341,25 +341,37 @@
     const entry = watched.get(info.mint);
     if (!entry) return;
 
-    // Out-of-order frames must never overwrite fresher state.
-    if (!O.isNewerObservation(slot, entry.slot)) return;
-
     const bytes = O.bytesFromBase64(value.data[0]);
     const desc = entry.desc;
 
     if (desc.kind === 'cp-vaults') {
+      // A trade moves BOTH vaults in the SAME slot, and they arrive as two
+      // separate notifications. The out-of-order guard is therefore
+      // per-vault, never per-entry: a shared entry.slot accepted whichever
+      // leg landed first and then dropped its sibling as "old", so one vault
+      // tracked every trade while the other stayed frozen at its last lucky
+      // first-arrival — and the price walked away from the chart by the full
+      // drift between them (reported at ~13% low on a fast Padre runner,
+      // filling paper buys with instant fake profit).
+      if (!(slot > 0)) return;
+      const legKey = info.account === desc.watch ? 'baseSlot' : 'quoteSlot';
+      if (entry[legKey] > 0 && slot < entry[legKey]) return;
       const decoded = O.decodeTokenAccount(bytes);
       if (!decoded) return;
       if (info.account === desc.watch) entry.baseAmount = decoded.amount;
       else entry.quoteAmount = decoded.amount;
+      entry[legKey] = slot;
     } else {
+      // Single-account pools: out-of-order frames must never overwrite
+      // fresher state.
+      if (!O.isNewerObservation(slot, entry.slot)) return;
       entry.raw = bytes;
     }
 
     const priceNative = priceFromEntry(entry);
     if (!(priceNative > 0)) return;
 
-    entry.slot = slot;
+    entry.slot = Math.max(Number(entry.slot) || 0, slot);
     entry.priceNative = priceNative;
     entry.observedAt = Date.now();
 
@@ -448,6 +460,7 @@
     _describePool: describePool,
     _handleMessage: handleMessage,
     _watched: watched,
+    _subToMint: subToMint,
     _priceFromEntry: priceFromEntry,
   };
 

@@ -644,3 +644,27 @@ test('fill errors reach the trader — withState no longer swallows them', () =>
   assert.match(contentSrc, /toast\(err\.message \|\| 'Buy failed'\)/);
   assert.match(contentSrc, /toast\(err\.message \|\| 'Sell failed'\)/);
 });
+
+test('quoteForTrade reconciles the chain authority with the price on screen (F-33 guard)', () => {
+  // F-33: the chain path CAN be systematically wrong (a starved vault leg
+  // filled 13% under the Padre chart for a whole session, booking instant
+  // fake profit on every buy). The chain quote may therefore only fill when
+  // it AGREES with a sub-second-fresh on-screen price; on divergence the fill
+  // takes the price the trader actually clicked on, with a console.debug
+  // trail so the report carries evidence.
+  const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const fnStart = contentSrc.indexOf('async function quoteForTrade()');
+  const block = contentSrc.slice(fnStart, contentSrc.indexOf('\n  }', fnStart) + 4);
+
+  assert.match(block, /fillSourcesAgree\(onchain\.priceNative, atClick\.priceNative\)/,
+    'the chain quote must be compared against the click-time on-screen price');
+  assert.match(block, /ONCHAIN_SCREEN_CHECK_MAX_AGE_MS/,
+    'only a sub-second-fresh screen price may arbitrate');
+  assert.match(contentSrc, /const ONCHAIN_SCREEN_CHECK_MAX_AGE_MS = 600/,
+    'the arbitration window must stay sub-second so genuine fast moves never trip it');
+  const divergeAt = block.indexOf('fillSourcesAgree');
+  const returnScreenAt = block.indexOf('return atClick', divergeAt);
+  const returnChainAt = block.indexOf('return onchain', divergeAt);
+  assert.ok(returnScreenAt !== -1 && returnChainAt !== -1 && returnScreenAt < returnChainAt,
+    'on divergence the on-screen price must win; agreement falls through to the chain quote');
+});

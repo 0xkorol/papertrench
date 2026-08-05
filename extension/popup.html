@@ -117,6 +117,22 @@
       background: rgba(255,255,255,0.028); border: 1px solid var(--line); border-radius: 10px;
       font-size: 11px; line-height: 1.5; color: var(--faint);
     }
+
+    /* Quick settings — the handful of knobs people re-tune mid-session
+       (lev: "it will be nice to have these on the tab for quick fixes"). */
+    .qs { padding: 0 16px; }
+    .qs .qs-field { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+    .qs label {
+      flex: 0 0 132px; font-size: 11px; color: var(--dim); line-height: 1.3;
+    }
+    .qs input, .qs select {
+      flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px;
+      background: var(--raised); border: 1px solid var(--line-2); color: var(--text);
+      font-family: var(--mono); font-size: 12px;
+    }
+    .qs select { font-family: inherit; }
+    .qs input:focus, .qs select:focus { outline: none; border-color: rgba(255, 157, 69, 0.55); }
+    .qs .btns { padding: 3px 0 0; }
     #status { padding: 8px 16px 14px; font-size: 11px; color: var(--faint); min-height: 14px; }
     .badge.badge-off {
       background: rgba(255, 95, 86, 0.13); border-color: rgba(255, 95, 86, 0.35);
@@ -170,6 +186,23 @@
   <div class="btns">
     <button id="xray" class="btn-backup">⌖ X-Ray on x.com: Off</button>
   </div>
+
+  <div class="section-label" style="padding-top:14px">Quick settings</div>
+  <div class="qs">
+    <div class="qs-field"><label for="qs-balance">Starting balance (SOL)</label><input id="qs-balance" type="number" min="0.1" step="0.1"></div>
+    <div class="qs-field"><label for="qs-presets">Quick-buy presets (SOL)</label><input id="qs-presets" type="text" placeholder="0.1, 0.5, 1, 2"></div>
+    <div class="qs-field"><label for="qs-sellpcts">Quick-sell presets (%)</label><input id="qs-sellpcts" type="text" placeholder="25, 50, 75, 100"></div>
+    <div class="qs-field"><label for="qs-fees">Fees &amp; costs</label>
+      <select id="qs-fees">
+        <option value="custom">Keep current</option>
+        <option value="bot">≈ Axiom/Padre bot</option>
+        <option value="fast">≈ Aggressive sniper</option>
+        <option value="zero">No costs</option>
+      </select>
+    </div>
+    <div class="btns"><button id="qs-apply" class="btn-backup">Apply quick settings</button></div>
+  </div>
+
   <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
   <button id="reset" class="btn-sec">Reset wallet</button>
 

@@ -200,7 +200,18 @@ function warmWorker(opts = {}) {
           return tab;
         },
         remove: async (id) => { calls.removed.push(id); tabsById.delete(id); },
-        query: (query, callback) => callback(opts.platformTabs || []),
+        query: (query, callback) => {
+          // Route by the query's URL patterns, the way Chrome does: the warm
+          // feature asks two different questions ("any trading tabs open?"
+          // and "any x.com tabs to adopt?") and conflating them would let a
+          // trading tab be adopted as an X viewer in these tests.
+          const urls = Array.isArray(query && query.url) ? query.url : [];
+          if (urls.some((u) => u.includes('x.com'))) {
+            callback((opts.xTabs || []).filter((t) => tabsById.has(t.id)).map((t) => tabsById.get(t.id)));
+            return;
+          }
+          callback(opts.platformTabs || []);
+        },
         sendMessage: async (id, msg) => {
           calls.sent.push({ id, msg });
           if (opts.spaSendFails) throw new Error('Receiving end does not exist');
@@ -215,6 +226,14 @@ function warmWorker(opts = {}) {
       offscreen: { hasDocument: async () => false, createDocument: async () => {} },
     },
   };
+  // Pre-existing x.com tabs (adoption candidates) live in the same tab map
+  // as everything else so tabs.update/get work on them after adoption.
+  for (const t of opts.xTabs || []) {
+    tabsById.set(t.id, {
+      windowId: 1, index: 0, active: false, pinned: false, audible: false,
+      discarded: false, status: 'complete', ...t,
+    });
+  }
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   const context = vm.createContext(sandbox);
@@ -996,4 +1015,111 @@ test('classification never rewrites the link: path and query survive byte-for-by
     assert.ok(got, `${href} must classify`);
     assert.equal(got.url, expected, `${href} must not be rewritten beyond host canonicalization`);
   }
+});
+
+/* ------------- accidental close: the hot tab comes back (lev) ------------- */
+
+test('closing the viewer respawns a fresh hidden one while a trading tab is open', async () => {
+  // "i accidentally closed the x tab and i have to turn instant mode on off
+  // to make it work again or to get the hot tab open" — the toggle is the
+  // way to NOT have a viewer; an accidental close must heal itself.
+  const worker = warmWorker({ platformTabs: [{ id: 9 }] });
+  const viewer = worker.seedViewer();
+  worker.tabsById.delete(viewer.id);
+  worker.listeners.onRemoved(viewer.id, { isWindowClosing: false });
+  await worker.settle();
+
+  assert.equal(worker.calls.created.length, 1, 'a replacement viewer must be created');
+  const created = worker.calls.created[0];
+  assert.equal(created.url, 'https://x.com/home');
+  assert.equal(created.active, false, 'the replacement stays hidden — no focus theft on a close');
+  assert.ok(worker.calls.updated.some((u) => u.id === created.id && u.props.muted === true),
+    'the replacement is muted like every hidden viewer');
+  assert.equal(worker.session.pt_warm_tab.tabId, created.id, 'and it is registered');
+  assert.equal(worker.session.pt_warm_tab.used, false);
+});
+
+test('a closing window never triggers a respawn', async () => {
+  const worker = warmWorker({ platformTabs: [{ id: 9 }] });
+  const viewer = worker.seedViewer();
+  worker.tabsById.delete(viewer.id);
+  worker.listeners.onRemoved(viewer.id, { isWindowClosing: true });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 0, 'spawning tabs into a browser shutdown is hostile');
+  assert.equal(worker.session.pt_warm_tab, undefined, 'the registration is still cleared');
+});
+
+test('no trading tab open: a closed viewer stays closed', async () => {
+  const worker = warmWorker(); // platformTabs defaults to none
+  const viewer = worker.seedViewer();
+  worker.tabsById.delete(viewer.id);
+  worker.listeners.onRemoved(viewer.id, { isWindowClosing: false });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 0, 'a viewer with nobody to serve is not respawned');
+});
+
+test('feature off: a closed viewer is never respawned', async () => {
+  const worker = warmWorker({ enabled: false, platformTabs: [{ id: 9 }] });
+  const viewer = worker.seedViewer();
+  worker.tabsById.delete(viewer.id);
+  worker.listeners.onRemoved(viewer.id, { isWindowClosing: false });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 0);
+});
+
+/* ------------- adoption: the user's own X tab IS the viewer (lev) ---------- */
+
+test('a click with no registered viewer adopts the existing X tab instead of opening a separate one', async () => {
+  // Field failure: a community link opened in a fresh tab NEXT TO the x.com
+  // tab the user already kept ("it opens them separately").
+  const worker = warmWorker({ xTabs: [{ id: 71, url: 'https://x.com/home' }] });
+  const response = await send(worker.listener, {
+    type: 'pt_warm_open', url: 'https://x.com/i/communities/2028091248674840898',
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(worker.calls.created.length, 0, 'no separate tab — the existing X tab is the viewer');
+  assert.equal(worker.session.pt_warm_tab.tabId, 71, 'the existing tab is now registered');
+  assert.equal(worker.session.pt_warm_tab.used, true, 'adopted tabs are the user\'s: toggle-off never closes them');
+  assert.ok(worker.calls.sent.some((s) => s.id === 71 && s.msg.type === 'pt_warm_spa'
+    && s.msg.url === 'https://x.com/i/communities/2028091248674840898'),
+    'the community target rides the SPA route into the adopted tab');
+  assert.ok(worker.calls.updated.some((u) => u.id === 71 && u.props.active === true),
+    'the adopted tab is revealed');
+});
+
+test('adoption never claims a tab the user is looking at, nor a pinned or audible one', async () => {
+  const worker = warmWorker({
+    xTabs: [
+      { id: 72, url: 'https://x.com/somebody/status/1', active: true },
+      { id: 73, url: 'https://x.com/home', pinned: true },
+      { id: 74, url: 'https://x.com/i/spaces/xyz', audible: true },
+    ],
+  });
+  const response = await send(worker.listener, { type: 'pt_warm_open', url: POST });
+  assert.equal(response.route, 'cold_tab', 'tabs in use are left alone — a fresh viewer is created');
+  assert.equal(worker.calls.created.length, 1);
+  assert.equal(worker.session.pt_warm_tab.tabId, worker.calls.created[0].id);
+});
+
+test('prewarm adopts an existing X tab rather than spawning a second one', async () => {
+  const worker = warmWorker({ xTabs: [{ id: 75, url: 'https://x.com/home' }] });
+  await send(worker.listener, { type: 'pt_warm_prewarm' });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 0, 'one X surface, not two');
+  assert.equal(worker.session.pt_warm_tab.tabId, 75);
+  assert.equal(worker.session.pt_warm_tab.used, true);
+});
+
+test('adoption prefers a tab parked on /home over one parked on a thread', async () => {
+  const worker = warmWorker({
+    xTabs: [
+      { id: 76, url: 'https://x.com/somebody/status/42', lastAccessed: 2000 },
+      { id: 77, url: 'https://x.com/home', lastAccessed: 1000 },
+    ],
+  });
+  await send(worker.listener, { type: 'pt_warm_prewarm' });
+  await worker.settle();
+  assert.equal(worker.session.pt_warm_tab.tabId, 77,
+    'a /home tab has nothing to lose to a navigation; a parked thread might be someone\'s reading');
 });
