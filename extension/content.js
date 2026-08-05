@@ -2291,12 +2291,10 @@
      * Toggle is settings.panelFocusMode (Dashboard → Settings). The class
      * rides on .pt-box so every rule below scopes to the panel. */
     .pt-box.pt-focus .pt-banner,
-    .pt-box.pt-focus .pt-watermark,
     .pt-box.pt-focus .pt-spark,
     .pt-box.pt-focus .pt-footer,
     .pt-box.pt-focus #pt-thesis,
     .pt-box.pt-focus #pt-closed { display: none; }
-    .pt-box.pt-focus .pt-body { padding-top: 8px; }
     /* Community (lev): focus mode should be genuinely COMPACT — hide the
        position-detail rows (P&L + quick sell carry the signal while
        streaming) and tighten the whole panel toward the size of the site's
@@ -2305,8 +2303,8 @@
     .pt-box.pt-focus { font-size: 12px; }
     .pt-box.pt-focus .pt-body { padding: 6px 8px 8px; }
     .pt-box.pt-focus .pt-preset { padding: 5px 4px; font-size: 11px; }
-    .pt-box.pt-focus .pt-buy-btn { padding: 9px 0; font-size: 12.5px; }
-    .pt-box.pt-focus .pt-custom input, .pt-box.pt-focus .pt-custom { font-size: 11.5px; }
+    .pt-box.pt-focus .pt-buy { padding: 9px 0; font-size: 12.5px; }
+    .pt-box.pt-focus .pt-custom { font-size: 11.5px; }
     .pt-box.pt-focus .pt-sell-row button { padding: 5px 0; font-size: 11px; }
     .pt-box.pt-focus .pt-label { margin-top: 5px; font-size: 9px; }
     /* Round 2 (lev, screenshot vs Axiom's own widget): "the less information
@@ -2329,7 +2327,6 @@
     .pt-box.pt-focus .pt-costs { display: none; }
     .pt-box.pt-focus .pt-custom { margin-top: 5px; padding: 6px 9px; }
     .pt-box.pt-focus .pt-token-row { margin-bottom: 4px; }
-    .pt-box.pt-focus .pt-costs { margin-top: 4px; }
     /* Quick reset lives in the header ONLY in focus mode (lev streams fresh
        runs per coin). Two-step inline confirm instead of a popup: first tap
        arms it for 3 s, second tap resets. */
@@ -2337,16 +2334,11 @@
     .pt-box.pt-focus #pt-quickreset { display: inline-flex; }
     #pt-quickreset.armed { color: #FF5F56; font-weight: 800; }
 
-    .pt-watermark {
-      position: absolute; top: 50%; left: 50%;
-      transform: translate(-50%, -50%) rotate(-20deg);
-      font-size: 62px; font-weight: 900; letter-spacing: 6px; white-space: nowrap;
-      color: transparent;
-      -webkit-text-stroke: 1.5px rgba(255, 157, 69, 0.07);
-      pointer-events: none; z-index: 0;
-    }
-
-    /* ---------------- paper banner ---------------- */
+    /* ---------------- paper banner ----------------
+     * The ONE honesty cue on the panel (UI-OVERHAUL Wave 1): the diagonal
+     * watermark, the "(PAPER)" button suffix and the rest of the seven
+     * restatements are gone — the banner carries it, stated once, clearly.
+     * The PnL-card watermark doctrine is separate and untouched. */
 
     .pt-banner {
       position: relative; z-index: 2;
@@ -3000,15 +2992,19 @@
     .pt-bar-tab:hover { transform: translateY(1px); border-color: var(--pt-amber); }
 
     @media (prefers-reduced-motion: reduce) {
-      .pt-bar { animation: none; }
-      .pt-chip:hover { transform: none; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .pt-box, .pt-pos, .pt-closed, .pt-toast { animation: none; }
+      .pt-bar, .pt-box, .pt-pos, .pt-closed, .pt-toast { animation: none; }
       .pt-banner::after, .pt-dot.on { animation: none; }
+      .pt-chip:hover { transform: none; }
       .pt-buy::after { display: none; }
     }
+
+    /* One movement system (UI-OVERHAUL Wave 1): every drag handle refuses
+       the browser's scroll gesture — pointer capture alone never did that
+       (O-25's real completion) — and every draggable surface says so with
+       its cursor instead of masquerading as a plain button. */
+    .pt-header, .pt-bar-grip, .pt-minipill, .pt-bar-tab,
+    .pt-resize, .pt-rz-tl, .pt-rz-tr, .pt-rz-bl { touch-action: none; }
+    .pt-minipill, .pt-bar-tab { cursor: grab; user-select: none; }
   `;
 
   /* -------------------- ONE drag system --------------------
@@ -3126,7 +3122,9 @@
       if (!dragging || !start) return;
       const dx = (e.clientX || 0) - sx;
       const dy = (e.clientY || 0) - sy;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+      // 5px, not 2 (UI-OVERHAUL Wave 1): a shaky tap on a pill must still be
+      // a tap — 2px swallowed clicks for anyone whose finger wobbled.
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true;
       if (e.cancelable && e.preventDefault) e.preventDefault();
       spec.move(start, dx, dy);
     };
@@ -3217,7 +3215,6 @@
         <button class="pt-bar-tab" id="pt-bar-tab" title="Show paper positions">POSITIONS</button>
         <button class="pt-game-hud pt-hidden" id="pt-game-hud" title="Game on — click to open the Game tab"></button>
         <div class="pt-box" id="pt-box">
-          <div class="pt-watermark">PAPER</div>
           <div class="pt-banner"><b>Paper Trading</b> · Simulated Funds</div>
           <div class="pt-header" id="pt-drag">
             <div class="pt-icon">P</div>
@@ -3258,7 +3255,7 @@
               </div>
             </div>
             <input class="pt-custom" id="pt-custom" type="number" min="0" step="0.01" placeholder="Or type a custom SOL amount…" />
-            <button class="pt-buy" id="pt-buy">BUY (PAPER)</button>
+            <button class="pt-buy" id="pt-buy">BUY</button>
             <div id="pt-position"></div>
             <div id="pt-thesis"></div>
             <div id="pt-closed"></div>
@@ -3490,8 +3487,11 @@
     if (sectionOn && els.buyLabel) els.buyLabel.textContent = buyLabelText();
     renderCosts();
     if (!presetsOn) return;
+    // Wave 1: in instant mode a chip IS an order button — pre-highlighting
+    // one the user never chose made "selected" and "tap = buy" conflicting
+    // claims on the same pixel. Selection exists only in two-step mode.
     els.buyPresets.innerHTML = list.map((a, i) =>
-      `<button class="pt-preset${i === 1 ? ' sel' : ''}" data-amt="${a}" title="${instant ? 'Buy this amount instantly' : 'Select this amount'}">${a} SOL</button>`
+      `<button class="pt-preset${!instant && i === 1 ? ' sel' : ''}" data-amt="${a}" title="${instant ? 'Buy this amount instantly' : 'Select this amount'}">${a} SOL</button>`
     ).join('');
     els.buyPresets.querySelectorAll('.pt-preset').forEach((b) => {
       b.addEventListener('click', () => {
@@ -3525,12 +3525,15 @@
     els.costs.style.display = '';
     const feePct = (Number(settings.feeBps) || 0) / 100;
     const slipPct = (Number(settings.slippageBps) || 0) / 100;
-    const chips = [
-      `Fee ${feePct}%`,
-      `Gas ${Number(settings.gasSolPerTx) > 0 ? settings.gasSolPerTx : 0}`,
-      `Tip ${Number(settings.tipSolPerTx) > 0 ? settings.tipSolPerTx : 0}`,
-      `Slip ${slipPct}%`,
-    ];
+    // Wave 1: only costs that EXIST get a chip — "Gas 0 · Tip 0 · Slip 0%"
+    // was three no-op chips narrating settings forever. The full set always
+    // lives in the ✎ editor; an all-zero setup shows one honest word.
+    const chips = [];
+    if (feePct > 0) chips.push(`Fee ${feePct}%`);
+    if (Number(settings.gasSolPerTx) > 0) chips.push(`Gas ${settings.gasSolPerTx}`);
+    if (Number(settings.tipSolPerTx) > 0) chips.push(`Tip ${settings.tipSolPerTx}`);
+    if (slipPct > 0) chips.push(`Slip ${slipPct}%`);
+    if (!chips.length) chips.push('No costs set');
     els.costs.innerHTML = chips.map((c) => `<span>${c}</span>`).join('');
   }
 
@@ -4106,7 +4109,7 @@
       return;
     }
     els.btnBuy.classList.remove('pt-buy-armed');
-    els.btnBuy.textContent = ready ? 'BUY (PAPER)' : 'BUY WHEN QUOTED';
+    els.btnBuy.textContent = ready ? 'BUY' : 'BUY WHEN QUOTED';
   }
 
 
@@ -4856,8 +4859,11 @@
     if (!shadow || !PC) return;
     const wrap = document.createElement('div');
     wrap.className = 'pt-flex-modal';
-    const flags = FLEX_FLAGS.map(([key, label]) =>
-      `<label><input type="checkbox" data-flag="${key}"> ${label}</label>`).join('');
+    // Wave 1: a control that can never do anything must not render — the
+    // trench flag only exists for gaming users.
+    const flags = FLEX_FLAGS
+      .filter(([key]) => key !== 'showTrench' || gamingOn())
+      .map(([key, label]) => `<label><input type="checkbox" data-flag="${key}"> ${label}</label>`).join('');
     const accents = Object.keys(PC.ACCENTS).map((name) =>
       `<button class="pt-accent-swatch" data-accent="${name}" title="${name}" style="background:${PC.ACCENTS[name]}"></button>`).join('');
     wrap.innerHTML = `

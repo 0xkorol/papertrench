@@ -485,7 +485,9 @@ test('focus mode strips the decoration via the pt-focus class', async () => {
   // The shipped CSS must actually hide every decoration under that class,
   // and leave the execution controls alone.
   const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
-  for (const selector of ['.pt-banner', '.pt-watermark', '.pt-spark', '.pt-footer', '#pt-thesis', '#pt-closed']) {
+  // Wave 1: the diagonal watermark is gone entirely — the banner is the
+  // panel's single honesty cue, so focus mode has one less thing to hide.
+  for (const selector of ['.pt-banner', '.pt-spark', '.pt-footer', '#pt-thesis', '#pt-closed']) {
     assert.ok(content.includes(`.pt-box.pt-focus ${selector}`),
       `focus mode must hide ${selector}`);
   }
