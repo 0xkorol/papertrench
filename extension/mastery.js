@@ -110,7 +110,19 @@
     // If the schema never records a thesis on rounds, say so instead of
     // failing everyone silently.
     if (!carrying.length) return null;
-    const withText = rounds.filter((r) => typeof r.thesis === 'string' && r.thesis.trim().length > 0);
+    // The engine stores the NORMALIZED OBJECT (normalizeThesis) on rounds;
+    // bare strings are the legacy shape. Both count — but only with
+    // substance: an empty object thesis is still an empty thesis box.
+    const hasSubstance = (t) => {
+      if (typeof t === 'string') return t.trim().length > 0;
+      if (t && typeof t === 'object') {
+        return Boolean((typeof t.text === 'string' && t.text.trim().length > 0)
+          || (Array.isArray(t.tags) && t.tags.length > 0)
+          || t.plan);
+      }
+      return false;
+    };
+    const withText = rounds.filter((r) => hasSubstance(r.thesis));
     return withText.length / rounds.length;
   }
 

@@ -159,3 +159,26 @@ test("the graduation bar is wired into the coach view", () => {
   assert.match(dash, /PTMastery/, "the panel must consume the mastery module");
   assert.match(dash, /never counts as a pass/, "the unknown-is-not-a-pass doctrine must be stated to the user");
 });
+
+test('object-shaped theses (the engine schema since normalizeThesis) count toward coverage', () => {
+  // engine.attachThesis stores the NORMALIZED OBJECT on the position, and
+  // closeRound copies it onto the round — production rounds carry
+  // { text, tags, plan, ... }, never a bare string. Coverage that only
+  // counts strings silently fails every real journaler.
+  const rounds = Array.from({ length: 12 }, (_, i) => round(i % 2 ? 0.2 : -0.1, {
+    closedAt: 1_800_000_000_000 + i * 120_000,
+    thesis: { text: 'breakout continuation', tags: [], plan: 'scalp', conviction: 3, targetPct: 50, stopPct: 30, at: 1 },
+  }));
+  const g = M.graduation(state(rounds));
+  const thesis = g.criteria.find((c) => c.id === 'thesis');
+  assert.equal(thesis.status, 'pass',
+    'object theses are theses — the criterion must count the shipped schema, not the legacy string');
+  // An object thesis with no substance is still not a thesis.
+  const empty = Array.from({ length: 12 }, (_, i) => round(0.2, {
+    closedAt: 1_800_000_000_000 + i * 120_000,
+    thesis: { text: '', tags: [], plan: null, conviction: null, targetPct: null, stopPct: null, at: 1 },
+  }));
+  const g2 = M.graduation(state(empty));
+  assert.notEqual(g2.criteria.find((c) => c.id === 'thesis').status, 'pass',
+    'an empty thesis object must not count as a written thesis');
+});

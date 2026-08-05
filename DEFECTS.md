@@ -992,6 +992,19 @@ sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · con
 **D-53 · S5** dashboard.js loaded before #card-modal — currently safe only by accident of async init — `dashboard.html:643-644`.
 **fixed v2.0.0** — the modal now precedes the dashboard.js script tag for real.
 
+**D-54 · S2 · The graduation thesis criterion could never pass — coverage counted only legacy STRING theses while the engine stores objects**
+`mastery.js` thesisCoverage · dashboard graduation bar, all users ·
+found building the gamification rank ladder on top of the criterion
+(2026-08-05) · **fixed (unreleased, post-v2.9.1)**
+`normalizeThesis` has stored the thesis as an OBJECT ({ text, tags, plan,
+… }) since it exists, and closeRound copies that object onto rounds — but
+thesisCoverage counted `typeof r.thesis === 'string'` only, so every real
+journaler measured 0% coverage and the criterion failed regardless of
+behavior (the fixtures used bare strings, which is why the suite never
+noticed). Coverage now accepts both shapes, with substance required — an
+empty thesis object is still an empty thesis box. Locked by a test proven
+failing against the pre-fix mastery.js.
+
 ### Seq-protocol answer (cross-context write safety)
 
 Writers: content.js:1107 ✔ · dashboard.js:166 ✔ (but RMW, D-22) · dashboard reset ✔
