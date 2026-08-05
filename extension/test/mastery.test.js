@@ -138,3 +138,24 @@ test('a genuinely qualifying journal graduates', () => {
   const g2 = M.graduation(state(withStreak));
   assert.equal(g2.overall, true, 'the full bar is clearable by an honest journal');
 });
+
+/* ---------------- dashboard integration ---------------- */
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+test("the graduation bar is wired into the coach view", () => {
+  const ROOT = path.join(__dirname, "..");
+  const html = fs.readFileSync(path.join(ROOT, "dashboard.html"), "utf8");
+  const dash = fs.readFileSync(path.join(ROOT, "dashboard.js"), "utf8");
+
+  const masteryAt = html.indexOf('<script src="mastery.js">');
+  const dashAt = html.indexOf('<script src="dashboard.js">');
+  assert.ok(masteryAt !== -1, "dashboard.html must load mastery.js");
+  assert.ok(masteryAt < dashAt, "mastery.js must load before dashboard.js");
+
+  assert.match(dash, /function renderGraduationPanel\(\)/);
+  assert.match(dash, /\$\{renderGraduationPanel\(\)\}/, "the coach view must render the panel");
+  assert.match(dash, /PTMastery/, "the panel must consume the mastery module");
+  assert.match(dash, /never counts as a pass/, "the unknown-is-not-a-pass doctrine must be stated to the user");
+});

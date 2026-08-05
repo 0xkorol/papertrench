@@ -2157,6 +2157,7 @@ function renderCoach(el) {
       </div>
     </div>
     ${renderDisciplinePanel()}
+    ${renderGraduationPanel()}
     ${renderThesisPanel()}
     ${reviewedCount ? `
       <div class="card" style="margin-top:16px">
@@ -2181,6 +2182,53 @@ function renderCoach(el) {
 
 
 /** Journaling payoff: which setups you actually trade, and how they do. */
+
+/* Phase 6: the graduation bar — docs/GRADUATION.md evaluated over the user's
+ * own journal by mastery.js. The doctrine holds here too: ○ (unknown) means
+ * missing evidence and never counts as a pass. */
+function gradValue(c) {
+  if (c.value === null || c.value === undefined) return '—';
+  switch (c.id) {
+    case 'sample': return String(c.value) + ' closed';
+    case 'expectancy': return (c.value >= 0 ? '+' : '') + Number(c.value).toFixed(3) + ' SOL/round';
+    case 'lossSize': return Number(c.value).toFixed(2) + '× win size';
+    case 'holdSymmetry': return Number(c.value).toFixed(1) + '× longer';
+    case 'revenge': return c.value === 0 ? 'none' : String(c.value) + ' found';
+    case 'thesis': return Math.round(c.value * 100) + '%';
+    case 'coldStreak': return c.value ? String(c.value) + ' losses' : '—';
+    default: return String(c.value);
+  }
+}
+
+function renderGraduationPanel() {
+  const M = window.PTMastery;
+  if (!M) return '';
+  const g = M.graduation(state);
+  const passCount = g.criteria.filter((c) => c.status === 'pass').length;
+  const icon = (s) => (s === 'pass'
+    ? '<span class="green" style="font-weight:800">✓</span>'
+    : s === 'fail'
+      ? '<span class="red" style="font-weight:800">✗</span>'
+      : '<span class="dim" style="font-weight:800">○</span>');
+  return `
+    <div class="card" style="margin-top:16px">
+      <h3>Graduation bar ${g.overall
+        ? '<span class="tag" style="background:rgba(52,211,153,.15);color:var(--green)">CLEARED</span>'
+        : `<span class="tag">${passCount}/${g.criteria.length}</span>`}</h3>
+      <p class="dim" style="margin-top:0;font-size:12.5px;line-height:1.55">
+        The honest "am I ready for real money?" checklist, computed from your own
+        journal. Paper failure is definitive; clearing this bar earns a small,
+        careful start — not a bankroll. ○ means not enough evidence yet, and
+        missing evidence never counts as a pass.
+      </p>
+      ${g.criteria.map((c) => `
+        <div class="stat" title="${esc(c.detail)}">
+          <span>${icon(c.status)} ${esc(c.label)}</span>
+          <span style="font-weight:750">${esc(gradValue(c))}</span>
+        </div>`).join('')}
+      <p class="dim" style="font-size:11.5px;margin-bottom:0">The reasoning behind every line: docs/GRADUATION.md in the repo.</p>
+    </div>`;
+}
 
 /**
  * The two habits that most often separate a learning trader from a consistent
