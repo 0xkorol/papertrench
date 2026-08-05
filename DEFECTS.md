@@ -674,7 +674,7 @@ Baseline changes without touching cashSol → fresh wallet + set 1 → "Total re
 
 **D-08 · S1 · Open-position % and closed-round % use different denominators — the % jumps ~2×feeBps at close with no price move**
 `dashboard.js:503` (net-of-fee cost) vs `engine.js:358` (gross invested) · confirmed ·
-open
+**fixed v1.3.0** (gross-invested basis for open AND closed %, netInvestedSol tracked through partials)
 
 **D-09 · S1 · Share card entry/exit mcap understated when any fill lacks mcap**
 `dashboard.js:1512-1519` · confirmed · open — null-mcap fills contribute qty to the
@@ -745,7 +745,7 @@ button stuck disabled "Analyzing…" (with D-04, the wrong button at that).
 
 **D-22 · S2 · saveState() is read-modify-write, no CAS/retry — dashboard and tab at seq N both write N+1, loser vanishes**
 `dashboard.js:161-169,767-777,796-804` (contrast content.js:1294-1307) · confirmed ·
-open
+**fixed v1.3.0** (mutateState: fresh read, mutation callback, seq re-check, bounded retry)
 
 **D-23 · S2 · slippageBps ≥ 10000 makes every sell throw "No live price available"**
 `engine.js:196,291`, no upper bound in UI · confirmed · **fixed v1.3.0** (slippage clamp makes the misleading error unreachable) — feed error shown for a
