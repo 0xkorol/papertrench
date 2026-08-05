@@ -102,8 +102,9 @@ test('row buys run the full fill pipeline and never navigate the row', () => {
   assert.match(content, /doRowBuy[\s\S]{0,2400}commitFill\(trade\)/);
   // The screener's own realtime price is preferred when fresh.
   assert.match(content, /recentRowPrices/);
-  // The new position surfaces immediately in the rail.
-  assert.match(content, /doRowBuy[\s\S]{0,2400}renderPositionsBar\(\)/);
+  // The new position surfaces immediately in the rail. (Window widened when
+  // the F-04 freshness fix added its rationale comment to doRowBuy.)
+  assert.match(content, /doRowBuy[\s\S]{0,2800}renderPositionsBar\(\)/);
   // The scanner runs on the positions-bar cadence, which works on pages with
   // no detected token — exactly the screener situation.
   assert.match(content, /renderPositionsBar\(\);\s*\n\s*\/\/ Screener rows render continuously; catch new ones on this cadence\.\s*\n\s*scanRowBuys\(\);/);

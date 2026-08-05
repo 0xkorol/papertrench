@@ -54,7 +54,8 @@ keep last per mint) is the correct pattern, applied to exactly one site.
 
 **F-04 · S1 · Row quick-buy fills from a 60 s resolver cache with no age check**
 `content.js:2969-2982`, `resolver.js:19-27,92-93` · Axiom Pulse, Padre Trenches, GMGN
-Trenches · confirmed · open
+Trenches · confirmed · **fixed v1.2.18** (resolve() accepts maxAgeMs; row buys demand
+≤3 s; behavioral test in resolver.test.js)
 `doRowBuy` prices from `R.resolve()` which serves cache up to `TTL_MS = 60000` with no
 staleness check before `E.buy`. The `recentRowPrices` override only fires on mint-tagged
 row ticks — exactly what F-02/F-03 fail to produce. A chip tap on a token seen 55 s ago
@@ -140,7 +141,9 @@ state (incl. `attestChain`, never truncated). Fill latency grows linearly with l
 fill count; the only feedback is "Buy already in progress…", which reads as broken.
 
 **F-15 · S2 · doSell has no in-flight guard — double-tap sells the wrong quantity silently**
-`content.js:1389` (vs `buyInFlight` at :1313,:1321) · all sites · confirmed · open
+`content.js:1389` (vs `buyInFlight` at :1313,:1321) · all sites · confirmed ·
+**fixed v1.2.18** (sellInFlight guard, cleared in finally; locked in
+statepersist.test.js)
 Two fast taps on "SELL 50 %" both quote and both commit; the second sells 50 % of the
 remainder → 75 % total, two success toasts, zero errors. (`doRowBuy` also uses a
 separate flag from `doBuy` — chip tap and panel BUY can interleave.)
@@ -262,7 +265,9 @@ certain buttons".
 ### S1 — wrong numbers / wrong token
 
 **O-01 · S1 · detectLoop adopts a stale resolve after navigating away — wrong token resurrected**
-`content.js:396-446` (:434 await, :446 setToken) · all sites · confirmed · open
+`content.js:396-446` (:434 await, :446 setToken) · all sites · confirmed ·
+**fixed v1.2.18** (resolve results dropped when href changed mid-flight; locked in
+statepersist.test.js)
 `detectLoop` awaits `R.resolve()` then calls `setToken(data)` with no re-check that
 `location.href`/candidate is still current (contrast `requote()` :634 which guards).
 Navigate away mid-resolve → teardown → late resolve lands → token A resurrected: price
@@ -270,7 +275,8 @@ loop, title signal, onchain watch, markers, panel un-hidden — on the wrong pag
 Repro: slow network, open token, click back to Pulse within ~1 s.
 
 **O-02 · S1 · Navigation during an in-flight resolve is permanently swallowed — panel trades token A on token B's page**
-`content.js:401-408` · all sites · confirmed · open
+`content.js:401-408` · all sites · confirmed · **fixed v1.2.18** (lastHref commits
+only when the tick acts; locked in statepersist.test.js)
 `lastHref = location.href` commits at :402 BEFORE the `if (resolving) return` at :407.
 A nav landing in that window is recorded but never acted on; every later tick
 early-returns (`href === lastHref && settled`). Panel keeps token A's card and sell
@@ -689,14 +695,17 @@ above the tick.
 
 **D-13 · S2 · background.js writes pt_state WITHOUT bumping seq — both its writers lose data**
 `background.js:96-103`, callers :180 (recording refs), :450 (aiReview);
-`content.js:1297` adopts only on strictly-greater seq · confirmed · open
+`content.js:1297` adopts only on strictly-greater seq · confirmed · **fixed v1.2.18**
+(setState advances seq; behavioral test in background.test.js)
 Background write lands at equal seq → no tab adopts it → next 800 ms heartbeat
 overwrites it. Why AI reviews vanish and the Recording column shows "—".
 THE seq-protocol hole: all other writers bump (dashboard :166, popup reset :127 —
 double-bumped with :2013 = D-51), background doesn't.
 
 **D-14 · S2 · Backup restore writes the backup's seq verbatim — an open tab immediately resurrects the old wallet**
-`popup.js:192-194` (vs resetWallet :125-127 which does it right) · confirmed · open
+`popup.js:192-194` (vs resetWallet :125-127 which does it right) · confirmed ·
+**fixed v1.2.18** (restored seq = max(live, backup)+1; locked in statepersist.test.js).
+Shape validation (the `{pt_state:{}}` half) still open — tracked by D-16/D-24.
 Also zero shape validation beyond `typeof === 'object'` → `{pt_state:{}}` accepted,
 then detonates the dashboard (D-16).
 
@@ -840,3 +849,7 @@ All four Phase 1 code audits complete (2026-08-05): **139 findings**
 (F 29 · O 29 · C 28 · D 53), of which 26 are S1 (wrong numbers), 41 are S2 (silent
 death / lost data). Phase 1 exit criterion additionally requires the live-site visual
 sweep (Phase 4 prep) — code-side register is DONE.
+
+Fixed so far: **6** — v1.2.18 closed O-01, O-02, F-04, F-15, D-13, D-14
+(the wrong-token navigation pair, the double-sell, the stale row-buy fill, and both
+seq-protocol holes).

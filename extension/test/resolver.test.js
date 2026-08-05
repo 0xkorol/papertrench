@@ -174,3 +174,36 @@ test('live Dexscreener lookup returns a usable quote', async (t) => {
   assert.ok(liveToken.priceNative > 0, 'live lookup must carry a positive price');
   assert.notEqual(liveToken.symbol, liveToken.mint, 'live symbol must not be the address');
 });
+
+test('a fill-path resolve can demand freshness the display cache cannot satisfy', async () => {
+  // DEFECT F-04: screener quick-buy chips priced fills from the resolver's
+  // 60 s display cache — a tap on a token last seen 55 s ago filled at the
+  // 55 s price. resolve() accepts { maxAgeMs } so the fill path can refuse a
+  // stale entry and refetch, while display callers keep the long TTL.
+  let moved = false;
+  const R = loadResolver((url) => {
+    if (url.includes('api.dexscreener.com') && url.includes('/tokens/')) {
+      if (!moved) return jsonResponse(tokensPayload);
+      const shifted = JSON.parse(JSON.stringify(tokensPayload));
+      for (const pair of shifted.pairs || []) {
+        if (pair.priceNative) pair.priceNative = String(Number(pair.priceNative) * 2);
+        if (pair.priceUsd) pair.priceUsd = String(Number(pair.priceUsd) * 2);
+      }
+      return jsonResponse(shifted);
+    }
+    return notFound();
+  });
+
+  const first = await R.resolve(BONK_MINT);
+  assert.ok(first && first.priceNative > 0, 'baseline resolve must price');
+  moved = true; // the market moves after the cache entry is taken
+
+  const cached = await R.resolve(BONK_MINT);
+  assert.equal(cached.priceNative, first.priceNative,
+    'a plain resolve keeps serving the display cache');
+
+  await new Promise((r) => setTimeout(r, 15));
+  const fresh = await R.resolve(BONK_MINT, { maxAgeMs: 5 });
+  assert.ok(fresh && fresh.priceNative > first.priceNative,
+    'a fill-path resolve with maxAgeMs must refetch instead of filling at the stale price');
+});

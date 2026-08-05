@@ -288,6 +288,23 @@ test('a failed storage read resolves to safe defaults instead of acting on garba
   assert.equal(replays.length, 0, 'a failed replays read resolves an empty list');
 });
 
+test('background state writes advance the seq counter so tabs adopt them', async () => {
+  // DEFECT D-13: content tabs adopt a stored state only when its seq is
+  // STRICTLY greater than their own. The background's writers (AI review,
+  // recording refs) wrote at the seq they read — invisible to every tab and
+  // overwritten by the next 800 ms heartbeat. That is how AI reviews and
+  // recording filenames vanished from the dashboard within a second.
+  const worker = serviceWorker();
+
+  await worker.storage.setState({ seq: 5, cashSol: 3 });
+  assert.equal(worker.values.pt_state.seq, 6,
+    'a background write must land strictly ahead of the seq it read');
+
+  await worker.storage.setState({ cashSol: 3 });
+  assert.equal(worker.values.pt_state.seq, 1,
+    'a state missing seq starts the counter rather than staying invisible');
+});
+
 test('a failed storage write resolves instead of hanging the caller', async () => {
   const worker = serviceWorker({ failWrites: true });
 

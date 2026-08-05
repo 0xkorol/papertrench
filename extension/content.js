@@ -20,7 +20,7 @@
     return (reply && typeof reply === 'object' && !reply.error) ? reply : null;
   }
   const R = {
-    resolve: (address) => sendMessage({ type: 'pt_resolve', address }).then(okOrNull),
+    resolve: (address, opts) => sendMessage({ type: 'pt_resolve', address, maxAgeMs: opts && opts.maxAgeMs }).then(okOrNull),
     refresh: (token) => sendMessage({ type: 'pt_refresh', token }).then(okOrNull),
     solUsd: () => sendMessage({ type: 'pt_sol_usd' }).then((r) => (typeof r === 'number' && r > 0 ? r : 0)).catch(() => 0),
     onchainWatch: (mint, pool) => sendMessage({ type: 'pt_onchain_watch', mint, pool }).then(okOrNull),
@@ -399,13 +399,18 @@
     // would only retry when the URL changed — i.e. never.
     const settled = token && !token.pending;
     if (location.href === lastHref && settled) return;
-    lastHref = location.href;
     site = S.currentSite();
     const candidate = site.detect();
-    if (!candidate) { setToken(null); return; }
-    if (settled && (token.mint === candidate.address || token.pairAddress === candidate.address || token.srcAddress === candidate.address)) return;
+    if (!candidate) { lastHref = location.href; setToken(null); return; }
+    if (settled && (token.mint === candidate.address || token.pairAddress === candidate.address || token.srcAddress === candidate.address)) { lastHref = location.href; return; }
+    // lastHref is only committed once this tick actually acts on the URL. If a
+    // resolve is still in flight, leave it uncommitted so a navigation that
+    // landed during the resolve is retried on the next tick instead of being
+    // recorded as handled and then ignored forever.
     if (resolving) return;
     resolving = true;
+    lastHref = location.href;
+    const resolveHref = lastHref;
 
     // Show the pending state immediately so the panel is honest during the
     // resolve rather than displaying a fabricated number. Rebuilding this on
@@ -432,6 +437,10 @@
 
     try {
       const data = await R.resolve(candidate.address);
+      // The page may have navigated while the resolve was in flight. Adopting
+      // the result now would resurrect the old token on the new page — and
+      // route fills to it. Bail; the next tick handles the current URL.
+      if (location.href !== resolveHref) return;
       if (!data) {
         // NOT a teardown. A brand-new coin is simply not indexed yet, and
         // tearing the token down here is what caused the visible flashing:
@@ -1386,8 +1395,23 @@
     renderAll();
   }
 
+  // Re-entrancy guard for sells, mirroring buyInFlight. Without it a double-tap
+  // on "SELL 50%" fills twice — the second tap sells 50% of the REMAINDER, so
+  // 75% total leaves the position, silently, with two success toasts.
+  let sellInFlight = false;
+
   async function doSell(fraction) {
     if (!token) return toast('No token detected on this page');
+    if (sellInFlight) return toast('Sell already in progress…');
+    sellInFlight = true;
+    try {
+      await doSellInner(fraction);
+    } finally {
+      sellInFlight = false;
+    }
+  }
+
+  async function doSellInner(fraction) {
     const fillQuote = await quoteForTrade();
     if (!fillQuote) return toast('Could not obtain a fresh price — paper sell not filled.');
     try {
@@ -2966,7 +2990,11 @@
     primeAudio();
     try {
       const amount = (settings.presetsBuy || [0.1])[0];
-      const data = await R.resolve(address);
+      // A screener chip fill must not price from a minute-old display cache
+      // (the resolver keeps entries 60 s for display use). Demand a quote no
+      // older than the live-feed staleness bound; the resolver refetches when
+      // its entry is older — one short round trip instead of a stale fill.
+      const data = await R.resolve(address, { maxAgeMs: 3000 });
       if (!data || !(data.priceNative > 0)) {
         toast('Could not price that token yet — open its chart to buy');
         return;

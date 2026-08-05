@@ -191,6 +191,15 @@ async function restoreWallet(ev) {
   if (!confirm(`Restore this backup? It replaces your current wallet (${rounds} closed rounds in the backup).`)) return;
   const write = {};
   for (const key of BACKUP_KEYS) if (data[key] !== undefined) write[key] = data[key];
+  // The backup's own seq is meaningless in this browser: any open trading tab
+  // holding a higher write counter would treat the restored wallet as stale
+  // and overwrite it on its next heartbeat — resurrecting the wallet the user
+  // just replaced. Land the restore strictly ahead of everything alive, the
+  // same way resetWallet does.
+  const current = await chrome.storage.local.get(['pt_state']);
+  const liveSeq = Number(current.pt_state && current.pt_state.seq) || 0;
+  const backupSeq = Number(write.pt_state.seq) || 0;
+  write.pt_state.seq = Math.max(liveSeq, backupSeq) + 1;
   await chrome.storage.local.set(write);
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
   $('status').textContent = 'Backup restored.';

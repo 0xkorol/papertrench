@@ -94,6 +94,12 @@ function getState() {
 }
 
 function setState(state) {
+  // Every writer must advance the wallet's write counter. Content tabs adopt a
+  // stored state only when its seq is STRICTLY greater than their own, so a
+  // write that leaves seq unchanged is invisible to open tabs and gets
+  // overwritten by their next heartbeat — which is how AI reviews and
+  // recording references used to vanish within a second.
+  if (state && typeof state === 'object') state.seq = (Number(state.seq) || 0) + 1;
   return new Promise((resolve) => chrome.storage.local.set({ pt_state: state }, () => {
     if (chrome.runtime && chrome.runtime.lastError) {
       console.warn('PaperTrench: state write failed', chrome.runtime.lastError.message);
@@ -584,10 +590,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Price resolution is done from the service worker so it is not subject to
       // the page origin's CORS or CSP. The content script supplies only mints
       // and addresses; the background decides which public APIs to call.
-      case 'pt_resolve':
+      case 'pt_resolve': {
         if (!isSolanaAddress(message.address)) { sendResponse(null); break; }
-        try { sendResponse(await R.resolve(message.address)); } catch (e) { sendResponse(null); }
+        const maxAgeMs = Number(message.maxAgeMs);
+        const opts = Number.isFinite(maxAgeMs) && maxAgeMs >= 0 ? { maxAgeMs } : undefined;
+        try { sendResponse(await R.resolve(message.address, opts)); } catch (e) { sendResponse(null); }
         break;
+      }
 
       case 'pt_sol_usd':
         try { sendResponse(await R.solUsd()); } catch (e) { sendResponse(0); }

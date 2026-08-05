@@ -19,10 +19,14 @@
   var TTL_MS = 60000;
   var cache = new Map(); // address -> { at, data }
 
-  function cacheGet(address) {
+  function cacheGet(address, maxAgeMs) {
     var hit = cache.get(address);
     if (!hit) return null;
-    if (Date.now() - hit.at >= TTL_MS) { cache.delete(address); return null; }
+    var age = Date.now() - hit.at;
+    if (age >= TTL_MS) { cache.delete(address); return null; }
+    // A caller about to FILL a trade at this price can demand tighter
+    // freshness than the display TTL. The entry stays cached for display use.
+    if (typeof maxAgeMs === 'number' && maxAgeMs >= 0 && age > maxAgeMs) return null;
     return hit.data;
   }
 
@@ -86,10 +90,10 @@
    * Dexscreener still returns `pairs: null`. Racing them means a sniper is not
    * blocked waiting for whichever source is slower to index.
    */
-  async function resolve(address) {
+  async function resolve(address, opts) {
     if (!address) return null;
 
-    var cached = cacheGet(address);
+    var cached = cacheGet(address, opts && opts.maxAgeMs);
     if (cached) return cached;
 
     var results = await Promise.all([

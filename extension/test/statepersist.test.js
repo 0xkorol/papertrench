@@ -499,3 +499,79 @@ test('disableOverlay and shutdown null posEls so sell buttons rebuild', () => {
   assert.match(shutdownBlock, /posEls\s*=\s*null/,
     'shutdown must null posEls to prevent stale-cache sell-button loss');
 });
+
+/* ---------------- DEFECTS O-01 / O-02: wrong token after fast navigation ----
+ *
+ * O-02: detectLoop committed lastHref BEFORE its `if (resolving) return`
+ * guard. A navigation landing while a resolve was in flight was recorded as
+ * handled and then ignored on every later tick — the panel kept showing (and
+ * doBuy kept FILLING) the previous token on the new token's page.
+ *
+ * O-01: a resolve that finished after the user navigated away was adopted
+ * unconditionally, resurrecting the old token — price loop, markers, panel —
+ * on a page it does not belong to.
+ *
+ * Pinned in source because the harness cannot drive detectLoop's async timing
+ * (real timers + an in-flight resolver promise racing a location change).
+ */
+test('detectLoop cannot swallow a navigation or adopt a stale resolve', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const fnStart = content.indexOf('async function detectLoop()');
+  assert.ok(fnStart !== -1, 'detectLoop must exist');
+  const block = content.slice(fnStart, content.indexOf('\n  }', fnStart) + 4);
+
+  // O-02 — the old shape: lastHref committed on the line right after the
+  // same-URL early return, i.e. before the resolving guard. Must be gone.
+  assert.doesNotMatch(block,
+    /if \(location\.href === lastHref && settled\) return;\s*\n\s*lastHref = location\.href;/,
+    'lastHref must not be committed before the resolving guard — a navigation during an in-flight resolve would be swallowed forever');
+
+  // O-02 — the new shape: the main commit happens only after the resolving
+  // gate has been passed.
+  assert.match(block, /resolving = true;\s*\n\s*lastHref = location\.href;/,
+    'lastHref for a resolve tick is committed only once the tick actually starts the resolve');
+
+  // O-01 — a resolve landing after navigation must be discarded, not adopted.
+  assert.match(block, /await R\.resolve\([^)]*\);[\s\S]*?if \(location\.href !== resolveHref\) return;/,
+    'a resolve result must be dropped when the page navigated while it was in flight');
+});
+
+/* ---------------- DEFECT F-15: double-tap sell fills twice ----------------
+ *
+ * doBuy is guarded by buyInFlight, but doSell had no guard at all. Two fast
+ * taps on "SELL 50%" both quoted and both committed — the second sold 50% of
+ * the REMAINDER (75% total), silently, with two success toasts.
+ */
+test('doSell carries a re-entrancy guard symmetric with buyInFlight', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const fnStart = content.indexOf('async function doSell(fraction)');
+  assert.ok(fnStart !== -1, 'doSell must exist');
+  const block = content.slice(fnStart, content.indexOf('\n  }', fnStart) + 4);
+
+  assert.match(block, /if \(sellInFlight\) return toast/,
+    'a sell while one is in flight must be refused, not stacked');
+  assert.match(block, /sellInFlight = true;/,
+    'doSell must arm the guard before quoting');
+  assert.match(block, /finally\s*\{\s*\n?\s*sellInFlight = false;/,
+    'the guard must clear in finally so a failed sell does not brick selling');
+});
+
+/* ---------------- DEFECT D-14: restore resurrection race ------------------
+ *
+ * resetWallet lands its write strictly ahead of every open tab
+ * (fresh.seq = baseSeq + 1), but restoreWallet wrote the backup's seq
+ * verbatim. A backup taken at seq 40 restored over a live wallet at seq 900
+ * was silently overwritten by the trading tab's next heartbeat — the user's
+ * restore vanished within a second.
+ */
+test('restoreWallet lands the restored wallet ahead of every live writer', () => {
+  const popup = fs.readFileSync(path.join(ROOT, 'popup.js'), 'utf8');
+  const fnStart = popup.indexOf('async function restoreWallet');
+  assert.ok(fnStart !== -1, 'restoreWallet must exist');
+  const block = popup.slice(fnStart, popup.indexOf('\n}', fnStart) + 2);
+
+  assert.match(block, /chrome\.storage\.local\.get\(\['pt_state'\]\)/,
+    'restore must read the live wallet seq before writing');
+  assert.match(block, /Math\.max\(liveSeq, backupSeq\) \+ 1/,
+    'the restored seq must land strictly greater than both the live and backup counters');
+});
