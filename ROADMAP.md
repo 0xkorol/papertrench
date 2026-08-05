@@ -1,5 +1,11 @@
 # PaperTrench — Road out of Alpha
 
+> **Status (2026-08-05): SHIPPED as v2.0.0.** All phases executed. 116 of the
+> 139 audited defects fixed with locking regression tests; 4 carry explicit
+> engineering dispositions; the remainder is the enumerated v2.1 polish
+> backlog in DEFECTS.md. Suite: 553/553. Remaining human step: a
+> docs/QA-MATRIX.md pass on the built zip against the live sites.
+
 **Mission:** memecoins are minting losers faster than any market in history because
 newcomers have nowhere to practice. Every existing tool wants them funded and bleeding.
 PaperTrench is the free, open-source flight simulator for the trenches: real sites, real
