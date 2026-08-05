@@ -28,9 +28,13 @@ no pre-selected preset; mint copies; trench flag gaming-only; footer reset
 gone — two-tap ⟲ everywhere) · dashboard 13–14, 16–21 (bug pair; dead
 replay CSS; warm terminal links in Settings; Total-return tile dropped;
 receipts heading demoted; ranking prose behind details; X-Ray paragraph;
-one slider spec). Open: overlay 12 (radii/color tokenize — folds into Wave
-2's token pass), dashboard 15 (renames + their pinned tests) and 22 (stack
-rule — folds into Wave 2).
+one slider spec). Landed too: dashboard 15 — the de-jargon renames ("Buying", "Guardrails",
+"Loss-streak cooldown", "One-tap buy buttons on token lists", "AI server
+address", plain fee/tip/slippage labels) with their pinned tests updated in
+the same commit. Note: fee/slippage inputs stay in bps this wave — the
+%-unit input conversion touches validation + the popup quick-fill and rides
+Wave 3's settings regroup. Open: overlay 12 (radii/color tokenize) and
+dashboard 22 (stack rule) — both fold into Wave 2's token pass.
 
 Overlay (content.js):
 1. PAPER stated once per surface: keep the banner; delete the watermark div

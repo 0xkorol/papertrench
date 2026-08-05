@@ -184,7 +184,8 @@ test("the dashboard surfaces The After and the Guardrails honestly", () => {
   assert.match(dash, /Dumps dodged/);
 
   // Guardrails settings card + gathered keys with engine-mirroring bounds.
-  assert.match(dash, /Guardrails \(training wheels\)/);
+  // Wave-1 de-jargon: the card is titled plainly now.
+  assert.match(dash, /<h3>Guardrails<\/h3>/);
   for (const id of ["set-guard-tilt", "set-guard-tilt-losses", "set-guard-tilt-minutes", "set-guard-max-pct", "set-guard-daily-loss", "set-post-exit-watch"]) {
     assert.ok(dash.includes(`id="${id}"`), `${id} must exist in settings`);
   }

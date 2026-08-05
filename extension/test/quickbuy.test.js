@@ -40,16 +40,16 @@ test('the settings page exposes the one-click toggle', () => {
 
 test('the quick-buy controls live in their own labeled card (discoverability)', () => {
   // Reported: a user could not FIND the QB toggle. The controls existed but
-  // were buried mid-list inside "Wallet & Trading". They now sit in a card
-  // literally titled "Quick-buy (QB)", so searching for QB lands on them.
-  const cardOpen = dashJs.indexOf('<h3>Quick-buy (QB)</h3>');
-  assert.ok(cardOpen !== -1, 'a "Quick-buy (QB)" settings card must exist');
+  // were buried mid-list inside "Wallet & Trading". They live in one card —
+  // renamed "Buying" in the Wave-1 de-jargon pass (UI-OVERHAUL.md).
+  const cardOpen = dashJs.indexOf('<h3>Buying</h3>');
+  assert.ok(cardOpen !== -1, 'a "Buying" settings card must exist');
   // Every QB control must come AFTER the card heading (i.e. inside the card,
   // not scattered elsewhere in the page).
   for (const id of ['set-presets', 'set-instant-buy', 'set-list-quick-buy', 'set-panel-buy', 'set-panel-presets']) {
     const at = dashJs.indexOf(`id="${id}"`);
     assert.ok(at !== -1, `${id} must exist`);
-    assert.ok(at > cardOpen, `${id} must live inside the Quick-buy card`);
+    assert.ok(at > cardOpen, `${id} must live inside the Buying card`);
   }
 });
 
