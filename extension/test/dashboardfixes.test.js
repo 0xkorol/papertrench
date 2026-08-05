@@ -1010,3 +1010,15 @@ test('D-26: emptying replays mid-playback stops the timer instead of looping Typ
   assert.match(build, /if \(!replay\) \{/,
     'a missing replay degrades to an empty view, never a TypeError');
 });
+
+test("D-12: the replay shell identity covers the round outcome and session count", () => {
+  const dash = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'dashboard.js'), 'utf8');
+  const fnStart = dash.indexOf("function renderReplay(");
+  const block = dash.slice(fnStart, dash.indexOf("\nfunction buildReplayView", fnStart));
+  assert.match(block, /replay\.status/,
+    "a round closing while the user watches must rebuild the hero (it showed OPEN forever)");
+  assert.match(block, /replays\.length/,
+    "a new session must be able to appear in the list");
+  assert.doesNotMatch(block, /replayShell\.sessionId !== replay\.sessionId\) \{/,
+    "the old sessionId-only reuse condition must be gone");
+});

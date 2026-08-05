@@ -1413,9 +1413,15 @@ function renderReplay(el) {
 
   const view = buildReplayView(replay);
   // Reuse the existing DOM whenever we are still on the same session, so the
-  // video element survives and keeps playing.
-  if (!replayShell || replayShell.root.parentNode !== el || replayShell.sessionId !== replay.sessionId) {
+  // video element survives and keeps playing — but the shell identity also
+  // covers the round OUTCOME and the session count (DEFECT D-12): a round
+  // closing while the user watches must rebuild the hero (it showed OPEN
+  // forever), and a new session must appear in the list. The video only
+  // restarts on those semantic changes, never on cursor moves.
+  const shellKey = `${replay.sessionId}·${replay.status}·${replay.roundId || ''}·${replays.length}`;
+  if (!replayShell || replayShell.root.parentNode !== el || replayShell.key !== shellKey) {
     mountReplayShell(el, replay, view);
+    if (replayShell) replayShell.key = shellKey;
   }
   updateReplayView(view);
 }
