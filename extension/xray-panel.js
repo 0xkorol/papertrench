@@ -8,6 +8,13 @@
  *     painted from the background's stored ledger in the same beat the route
  *     is recognized — no spinner, no click, no "analyze" button. Live digests
  *     from the page's own load then update it in place.
+ *  4. Live where the eye already is. A profile header has a large dead zone —
+ *     right of the name stack, under the Follow row, above the tabs — and the
+ *     card docks into it so the intel reads as part of the profile, not as a
+ *     box floating over the timeline. The dock is an overlay from <body>
+ *     (X's React tree is never touched); when there is no room, no header
+ *     yet, or the route is a post, the card falls back to the old fixed
+ *     top-right position.
  *
  * Everything on the card is either a fact from X's own payloads or a labeled
  * statement about what this device has observed. Watch-window fields (bio /
@@ -126,8 +133,9 @@
 
   const CSS = [
     ':host{all:initial}',
-    '.wrap{position:fixed;top:64px;right:14px;width:310px;max-height:calc(100vh - 96px);',
-    'z-index:2147483645;box-sizing:border-box;background:#0E1219;color:#EAEFF7;',
+    // Placement lives on the host (see place()); the wrap only shapes the box.
+    '.wrap{position:relative;width:100%;max-height:calc(100vh - 96px);',
+    'box-sizing:border-box;background:#0E1219;color:#EAEFF7;',
     'border:1px solid rgba(255,255,255,.13);border-radius:12px;overflow:hidden;',
     'font:12.5px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Inter,sans-serif;',
     'box-shadow:0 14px 44px -12px rgba(0,0,0,.75);display:flex;flex-direction:column}',
@@ -172,7 +180,7 @@
     if (!document.body) return false;
     host = document.createElement('div');
     host.id = HOST_ID;
-    host.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;';
+    host.style.cssText = FLOAT_CSS;
     shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = CSS;
@@ -203,12 +211,105 @@
     shadow.append(style, wrap);
     document.body.appendChild(host);
     shadow.__who = who;
+    shadow.__wrap = wrap;
     return true;
   }
 
   function removeCard() {
     if (host && host.parentNode) host.parentNode.removeChild(host);
     host = null; shadow = null; body = null;
+    placement = null;
+  }
+
+  /* -------------------- placement -------------------- */
+
+  const PANEL_W = 310;
+  const DOCK_GAP = 12;      // breathing room from the anchors around the dock
+  const DOCK_EDGE = 16;     // matches the header's own horizontal padding
+  const DOCK_MIN_H = 150;   // below this the card is a squint, not a read
+  const HOST_BASE = 'z-index:2147483645;width:' + PANEL_W + 'px;';
+  const FLOAT_CSS = HOST_BASE + 'position:fixed;top:64px;right:14px;';
+  const FLOAT = { mode: 'float' };
+
+  let placement = null;     // last applied: FLOAT or { mode:'dock', top, left, maxH }
+
+  /** The profile header pieces the dock is measured against. Null means "no
+   * dockable header here" — not an error; the caller floats instead. */
+  function headerAnchors() {
+    if (!route || route.kind !== 'profile') return null;
+    if (!document.querySelector) return null;
+    try {
+      const col = document.querySelector('[data-testid="primaryColumn"]');
+      if (!col) return null;
+      const name = col.querySelector('[data-testid="UserName"]');
+      const tabs = col.querySelector('nav[role="tablist"]');
+      if (!name || !tabs) return null;
+      // During SPA navigation the previous profile's header lingers for a few
+      // frames. Docking against the wrong account's geometry is worse than
+      // floating for a beat.
+      if (!((name.textContent || '').toLowerCase().includes('@' + route.handle))) return null;
+      const actions = col.querySelector('[data-testid="placementTracking"]')
+        || col.querySelector('[data-testid="editProfileButton"]')
+        || col.querySelector('[data-testid="userActions"]');
+      const stack = [name].concat(Array.from(col.querySelectorAll(
+        '[data-testid="UserDescription"],[data-testid="UserProfileHeader_Items"],'
+        + 'a[href$="/following"],a[href$="/verified_followers"],a[href$="/followers_you_follow"]')));
+      return { col, name, tabs, actions, stack };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Measure the header's dead zone — right of the name stack, under the
+   * Follow row, above the tabs. Returns a dock placement in document
+   * coordinates, the kept placement when the header cannot be measured
+   * honestly right now, or null meaning "float". */
+  function computeDock() {
+    const a = headerAnchors();
+    const kept = placement && placement.mode === 'dock' ? placement : null;
+    // Anchors vanish for a frame whenever React repaints the header; a dock
+    // that flickered to floating and back would be worse than either.
+    if (!a) return kept;
+    const colR = a.col.getBoundingClientRect();
+    const nameR = a.name.getBoundingClientRect();
+    const tabsR = a.tabs.getBoundingClientRect();
+    if (!colR.width || !nameR.width) return kept;
+    // Header scrolled out of view: X pins its mini-header and the tab bar to
+    // the viewport, so their rects stop describing the header's real place in
+    // the document. Nothing on screen needs fixing — keep what we had.
+    if (nameR.bottom < 60) return kept;
+    const actR = a.actions ? a.actions.getBoundingClientRect() : null;
+    const top = (actR && actR.bottom ? actR.bottom : nameR.top) + DOCK_GAP;
+    const left = colR.right - DOCK_EDGE - PANEL_W;
+    const maxH = tabsR.top - DOCK_GAP - top;
+    if (maxH < DOCK_MIN_H) return null;
+    // The dead zone is only dead when the name/bio/counts stack stays clear
+    // of it. A long bio or a narrow window means there is no zone at all.
+    for (const el of a.stack) {
+      const r = el.getBoundingClientRect();
+      if (r.width && r.bottom > top && r.top < tabsR.top && r.right > left - DOCK_GAP) return null;
+    }
+    return {
+      mode: 'dock',
+      top: Math.round(top + (window.scrollY || 0)),
+      left: Math.round(left + (window.scrollX || 0)),
+      maxH: Math.round(maxH),
+    };
+  }
+
+  function place() {
+    if (!host || !shadow) return;
+    const next = computeDock() || FLOAT;
+    if (placement && placement.mode === next.mode && placement.top === next.top
+        && placement.left === next.left && placement.maxH === next.maxH) return;
+    placement = next;
+    if (next.mode === 'dock') {
+      host.style.cssText = HOST_BASE + 'position:absolute;top:' + next.top + 'px;left:' + next.left + 'px;';
+      shadow.__wrap.style.maxHeight = next.maxH + 'px';
+    } else {
+      host.style.cssText = FLOAT_CSS;
+      shadow.__wrap.style.maxHeight = '';
+    }
   }
 
   /* -------------------- rendering -------------------- */
@@ -251,6 +352,7 @@
   function render() {
     if (!enabled || !route) { removeCard(); return; }
     if (!ensureCard()) return;
+    place();
     const now = Date.now();
     shadow.__who.textContent = '@' + (intel ? intel.handle : route.handle);
     body.replaceChildren();
@@ -417,6 +519,8 @@
     });
   });
 
+  window.addEventListener('resize', () => { place(); });
+
   function pushState() {
     try {
       window.postMessage({ source: STATE_TAG, enabled }, window.location.origin);
@@ -429,6 +533,7 @@
     route = next;
     subject = null;
     intel = null;
+    placement = null;
     clearTimeout(scanTimer);
     if (!route) { removeCard(); return; }
     render();       // instant frame: the shell, then cache, then live data
@@ -444,6 +549,10 @@
     routeTimer = setInterval(() => {
       if (!contextAlive()) { teardown(); return; }
       onRoute();
+      // The header settles late (banner and avatar loads move it) and the
+      // dead zone resizes with the window. Re-measuring is a handful of rect
+      // reads — the same poll-over-observer trade as the route check above.
+      place();
     }, ROUTE_POLL_MS);
     onRoute();
   }

@@ -122,11 +122,52 @@ function visibleText(node) {
   return [own, inner, kids].filter(Boolean).join(' ');
 }
 
+/** A profile header as the panel's dock sees it: a handful of anchor nodes
+ * that answer querySelector and report hand-picked geometry. */
+function installProfileHeader(doc, spec) {
+  const rect = (r) => ({ width: r.right - r.left, height: r.bottom - r.top, ...r });
+  const geoNode = (r, text) => {
+    const n = makeNode('div');
+    n.getBoundingClientRect = () => rect(r);
+    if (text) n.textContent = text;
+    return n;
+  };
+  const col = geoNode(spec.col);
+  const name = geoNode(spec.name, spec.nameText);
+  const tabs = geoNode(spec.tabs);
+  const actions = spec.actions ? geoNode(spec.actions) : null;
+  const stack = (spec.stack || []).map((r) => geoNode(r));
+  col.querySelector = (sel) => {
+    if (sel.includes('UserName')) return name;
+    if (sel.includes('tablist')) return tabs;
+    if (sel.includes('placementTracking') || sel.includes('editProfileButton') || sel.includes('userActions')) return actions;
+    return null;
+  };
+  col.querySelectorAll = () => stack;
+  doc.querySelector = (sel) => (sel.includes('primaryColumn') ? col : null);
+}
+
+/** Geometry shaped like a real profile: a 600px column, the Follow row at the
+ * top right, a narrow name/bio stack on the left, tabs at y=520. The dead
+ * zone this leaves is the space the card should claim. */
+function roomyHeader(overrides = {}) {
+  return {
+    nameText: 'Degen Labs @degenlabs',
+    col: { left: 0, top: 0, right: 600, bottom: 900 },
+    actions: { left: 400, top: 90, right: 584, bottom: 126 },
+    name: { left: 16, top: 140, right: 200, bottom: 190 },
+    tabs: { left: 0, top: 520, right: 600, bottom: 573 },
+    stack: [{ left: 16, top: 196, right: 220, bottom: 216 }],
+    ...overrides,
+  };
+}
+
 function mountPanel(opts = {}) {
   const doc = {};
   doc.createElement = (tag) => makeNode(tag);
   doc.body = makeNode('body');
   doc.body.isConnected = true;
+  if (opts.header) installProfileHeader(doc, opts.header);
 
   const listeners = { message: [] };
   const posted = [];
@@ -136,6 +177,8 @@ function mountPanel(opts = {}) {
 
   const win = {
     location: { pathname, search: '', href: 'https://x.com' + pathname, origin: 'https://x.com' },
+    scrollX: 0,
+    scrollY: opts.scrollY || 0,
     addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
     removeEventListener: () => {},
     postMessage: (data) => posted.push(data),
@@ -180,6 +223,8 @@ function mountPanel(opts = {}) {
     text() { return visibleText(doc.body); },
     settle() { return new Promise((resolve) => setImmediate(resolve)); },
     fireMessage(data) { for (const fn of listeners.message) fn({ source: win, data }); },
+    card() { return doc.body.children.find((c) => c.id === 'papertrench-xray') || null; },
+    wrap() { const c = this.card(); return c && c.shadow ? c.shadow.children[1] : null; },
   };
 }
 
@@ -289,6 +334,70 @@ test('digests from the page world are forwarded and repaint the card in place', 
   panel.fireMessage({ source: 'something-else', digest: { op: 'UserTweets' } });
   await panel.settle();
   assert.equal(panel.sent.length, before, 'messages that are not X-Ray digests are ignored');
+});
+
+/* ---------------- placement ----------------
+ *
+ * The card belongs in the profile header's dead zone — right of the name
+ * stack, under the Follow row, above the tabs — so the intel reads as part
+ * of the profile. Floating is the fallback, never the default on a profile
+ * that has room. */
+
+test('on a profile with room, the card docks into the header dead zone', async () => {
+  const panel = mountPanel({ intel: intelFixture(), header: roomyHeader() });
+  await panel.settle();
+  const style = panel.card().style.cssText;
+  assert.match(style, /position:absolute/, 'docked into the page, not fixed over it');
+  assert.match(style, /top:138px/, 'below the Follow row (126) plus the gap');
+  assert.match(style, /left:274px/, 'right-aligned in the 600px column: 600 - 16 - 310');
+  assert.equal(panel.wrap().style.maxHeight, '370px',
+    'capped above the tabs at 520 — the card must never cover Posts/Replies');
+  assert.match(panel.text(), /@degenlabs/, 'and it is still the same card');
+});
+
+test('a dock accounts for page scroll — document coordinates, not viewport', async () => {
+  const panel = mountPanel({ intel: intelFixture(), header: roomyHeader(), scrollY: 50 });
+  await panel.settle();
+  assert.match(panel.card().style.cssText, /top:188px/, '138 viewport + 50 scrolled');
+});
+
+test('a wide bio leaves no dead zone, so the card floats like before', async () => {
+  const wide = roomyHeader({ stack: [{ left: 16, top: 196, right: 560, bottom: 216 }] });
+  const panel = mountPanel({ intel: intelFixture(), header: wide });
+  await panel.settle();
+  assert.match(panel.card().style.cssText, /position:fixed/,
+    'overlapping the bio would hide the very text the trader is vetting');
+});
+
+test('a squeezed header floats rather than docking a card too short to read', async () => {
+  const short = roomyHeader({ tabs: { left: 0, top: 260, right: 600, bottom: 313 } });
+  const panel = mountPanel({ intel: intelFixture(), header: short });
+  await panel.settle();
+  assert.match(panel.card().style.cssText, /position:fixed/);
+});
+
+test('a lingering header from the previous profile is never docked against', async () => {
+  const stale = roomyHeader({ nameText: 'Someone Else @someoneelse' });
+  const panel = mountPanel({ intel: intelFixture(), header: stale });
+  await panel.settle();
+  assert.match(panel.card().style.cssText, /position:fixed/,
+    'during SPA navigation the old header lingers; wrong geometry is worse than floating');
+});
+
+test('post pages and headerless moments keep the floating card', async () => {
+  const post = mountPanel({
+    path: '/degenlabs/status/1800000000000000001',
+    intel: intelFixture(),
+    header: roomyHeader(),
+  });
+  await post.settle();
+  assert.match(post.card().style.cssText, /position:fixed/,
+    'a post page has no profile header to dock into, even if one is still in the DOM');
+
+  const bare = mountPanel({ intel: intelFixture() });
+  await bare.settle();
+  assert.match(bare.card().style.cssText, /position:fixed/,
+    'before the header renders the card still paints — instantly, floating');
 });
 
 test('the observer is told the toggle state so it can stop reading responses', async () => {
