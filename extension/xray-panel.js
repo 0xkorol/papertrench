@@ -8,14 +8,12 @@
  *     painted from the background's stored ledger in the same beat the route
  *     is recognized — no spinner, no click, no "analyze" button. Live digests
  *     from the page's own load then update it in place.
- *  4. Live where the eye already is. A profile header has a dead zone —
- *     right of the name stack, under the Follow row, above the tabs — and the
- *     card docks into it, flexing its width to the room the bio leaves and
- *     styled like one of X's own cards so it reads as part of the profile,
- *     not as a box floating over the timeline. The dock is an overlay from
- *     <body> (X's React tree is never touched); the old fixed top-right
- *     float survives only as a last resort — post pages, windows too narrow
- *     to seat a readable card, or a header that has not rendered yet.
+ *  4. Live where the eye already is. On a profile the card is a real block
+ *     in the header flow — inserted above the Posts/Replies bar, taking its
+ *     own space and pushing the timeline down, styled like one of X's own
+ *     cards so it reads as part of the profile. The fixed top-right float
+ *     survives only where there is no profile tab bar to sit above — post
+ *     pages, or a header that has not rendered yet.
  *
  * Everything on the card is either a fact from X's own payloads or a labeled
  * statement about what this device has observed. Watch-window fields (bio /
@@ -165,10 +163,14 @@
     'background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:#D7DEEA;cursor:pointer}',
     '.chip:hover{border-color:rgba(255,157,69,.5);color:#fff}',
     '.chip .d{color:#7C8698;font-weight:500;margin-left:4px}',
-    // Docked, the card must read as one of X's own: their card border and
-    // radius, page-black background (opaque — it may sit over the joined-date
-    // tail), and no overlay shadow.
+    // Inline in the header flow, the card must read as one of X's own: their
+    // card border and radius, page-black background, no overlay shadow — and
+    // at column width the sections sit two-up so it reads as a panel, not a
+    // stretched sidebar.
     '.wrap.dock{background:#000;border-radius:16px;border-color:rgba(255,255,255,.12);box-shadow:none}',
+    '.dock .bd{display:grid;grid-template-columns:1fr 1fr;column-gap:24px;align-items:start;padding:4px 16px 12px}',
+    '.dock .bd .sec:nth-child(2){border-top:0}',
+    '.dock .bd .sec:only-child{grid-column:1/-1}',
     '.who{display:flex;align-items:center;gap:6px;margin-top:5px}',
     '.who img{width:19px;height:19px;border-radius:50%;flex:0 0 auto;background:#222}',
     '.who .n{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -228,120 +230,77 @@
 
   /* -------------------- placement -------------------- */
 
-  const PANEL_W = 310;      // the width the card wants
-  const PANEL_MIN = 220;    // the narrowest card still worth reading
-  const DOCK_GAP = 12;      // breathing room from the anchors around the dock
-  const DOCK_EDGE = 16;     // matches the header's own horizontal padding
-  const DOCK_MIN_H = 150;   // below this the card is a squint, not a read
-  const HOST_BASE = 'z-index:2147483645;';
-  const FLOAT_CSS = HOST_BASE + 'position:fixed;top:64px;right:14px;width:' + PANEL_W + 'px;';
-  const FLOAT = { mode: 'float' };
+  // The card is a real block in the profile header flow — inserted above the
+  // Posts/Replies bar, taking its own space and pushing the timeline down,
+  // exactly like the inline profile panels the trenches already know
+  // (TwitterScan, Uxento) and like PaperTrench's own panels on the trading
+  // sites. Geometry-free: nothing to measure, nothing to overlap, nothing to
+  // cover. Inserting into X's React-managed column is deliberate; when a
+  // re-render sweeps the host out, the 400ms poll seats it again. The fixed
+  // top-right float survives only where there is no profile tab bar at all —
+  // post pages, or a header not rendered yet — and every float names its
+  // reason on the host (data-pt-dock="float:<why>") so a report is one
+  // devtools glance, not a guessing game.
+  const FLOAT_CSS = 'z-index:2147483645;position:fixed;top:64px;right:14px;width:310px;';
+  const INLINE_CSS = 'display:block;margin:4px 16px 12px;';
+  const INLINE_MAX_H = '420px';   // the header grows by this at most; the card scrolls inside
 
-  let placement = null;     // last applied: FLOAT or { mode:'dock', top, left, width, maxH }
+  let placement = null;     // 'inline' | 'float' — last applied mode
   let dockWhy = '';         // why the last placement floated — surfaced as data-pt-dock
 
-  /** The profile header pieces the dock is measured against. Null means "no
-   * dockable header here" — not an error; the caller floats instead, and
-   * dockWhy records which anchor failed so a float is diagnosable from the
-   * live page (inspect the host's data-pt-dock attribute) instead of by
-   * guessing at geometry. */
-  function headerAnchors() {
+  /** The profile tab bar names its own profile: its tab links point at
+   * /<handle> and /<handle>/…, so one element both locates the insertion
+   * slot and proves it belongs to the routed account — a lingering bar from
+   * the previous profile fails the handle match and is never used. This is
+   * the ONLY DOM assumption the dock makes (role=tablist with <a href> tabs;
+   * verified against real x.com markup 2026-08-05). */
+  function headerSlot() {
     if (!route || route.kind !== 'profile') { dockWhy = 'route'; return null; }
-    if (!document.querySelector) { dockWhy = 'no-dom'; return null; }
+    if (!document.querySelectorAll) { dockWhy = 'no-dom'; return null; }
     try {
-      const col = document.querySelector('[data-testid="primaryColumn"]');
-      if (!col) { dockWhy = 'no-column'; return null; }
-      const name = col.querySelector('[data-testid="UserName"]');
-      if (!name) { dockWhy = 'no-name'; return null; }
-      // X renders the Posts/Replies bar as a DIV with role=tablist (inside a
-      // nav whose role is "navigation") — verified against x.com markup
-      // 2026-08-05. `nav[role="tablist"]` matches nothing, and that silent
-      // null floated every profile for three releases. Match the role alone.
-      const tabs = col.querySelector('[role="tablist"]');
-      if (!tabs) { dockWhy = 'no-tabs'; return null; }
-      // During SPA navigation the previous profile's header lingers for a few
-      // frames. Docking against the wrong account's geometry is worse than
-      // floating for a beat.
-      if (!((name.textContent || '').toLowerCase().includes('@' + route.handle))) { dockWhy = 'stale-header'; return null; }
-      const actions = col.querySelector('[data-testid="placementTracking"]')
-        || col.querySelector('[data-testid="editProfileButton"]')
-        || col.querySelector('[data-testid="userActions"]');
-      // The avoid-list is only what the card cannot replace: name, bio, the
-      // website link (scam vetting lives there), location, follower counts.
-      // The joined date and the "Followed by …" row may sit under the card —
-      // it shows richer versions of both facts (Created + age + drift watch;
-      // Smart Following), so covering their tails loses the trader nothing.
-      // A no-overlap-with-anything rule floats on nearly every real profile.
-      const stack = [name].concat(Array.from(col.querySelectorAll(
-        '[data-testid="UserDescription"],[data-testid="UserUrl"],[data-testid="UserLocation"],'
-        + 'a[href$="/following"],a[href$="/verified_followers"]')));
-      return { col, name, tabs, actions, stack };
+      const base = '/' + route.handle;
+      for (const tabs of document.querySelectorAll('[role="tablist"]')) {
+        for (const a of tabs.querySelectorAll('a[href]')) {
+          const href = (a.getAttribute('href') || '').toLowerCase();
+          if (href === base || href.indexOf(base + '/') === 0) {
+            // Logged-in X wraps the tab strip in a <nav>; insert above that.
+            // Shells without the wrapper get the strip itself as the marker.
+            const ref = (tabs.closest && tabs.closest('nav')) || tabs;
+            if (!ref.parentNode) { dockWhy = 'no-slot'; return null; }
+            return ref;
+          }
+        }
+      }
+      dockWhy = 'no-tabs';
+      return null;
     } catch (_) {
       dockWhy = 'error';
       return null;
     }
   }
 
-  /** Measure the header's dead zone — right of the name stack, under the
-   * Follow row, above the tabs. Returns a dock placement in document
-   * coordinates, the kept placement when the header cannot be measured
-   * honestly right now, or null meaning "float". */
-  function computeDock() {
-    const a = headerAnchors();
-    const kept = placement && placement.mode === 'dock' ? placement : null;
-    // Anchors vanish for a frame whenever React repaints the header; a dock
-    // that flickered to floating and back would be worse than either.
-    if (!a) return kept;
-    const colR = a.col.getBoundingClientRect();
-    const nameR = a.name.getBoundingClientRect();
-    const tabsR = a.tabs.getBoundingClientRect();
-    if (!colR.width || !nameR.width) { dockWhy = 'hidden'; return kept; }
-    // Header scrolled out of view: X pins its mini-header and the tab bar to
-    // the viewport, so their rects stop describing the header's real place in
-    // the document. Nothing on screen needs fixing — keep what we had.
-    if (nameR.bottom < 60) return kept;
-    const actR = a.actions ? a.actions.getBoundingClientRect() : null;
-    const top = (actR && actR.bottom ? actR.bottom : nameR.top) + DOCK_GAP;
-    const maxH = tabsR.top - DOCK_GAP - top;
-    if (maxH < DOCK_MIN_H) { dockWhy = 'short'; return null; }
-    // The card flexes to the room the header leaves it: right-aligned in the
-    // column, left edge pushed out by whichever irreplaceable row (see the
-    // avoid-list above) reaches furthest right. Only when even the narrowest
-    // readable card cannot seat does the float fallback fire.
-    let clearLeft = colR.left + DOCK_EDGE;
-    for (const el of a.stack) {
-      const r = el.getBoundingClientRect();
-      if (r.width && r.bottom > top && r.top < tabsR.top && r.right > clearLeft) clearLeft = r.right;
-    }
-    const left = Math.max(clearLeft + DOCK_GAP, colR.right - DOCK_EDGE - PANEL_W);
-    const width = colR.right - DOCK_EDGE - left;
-    if (width < PANEL_MIN) { dockWhy = 'narrow'; return null; }
-    return {
-      mode: 'dock',
-      top: Math.round(top + (window.scrollY || 0)),
-      left: Math.round(left + (window.scrollX || 0)),
-      width: Math.round(width),
-      maxH: Math.round(maxH),
-    };
-  }
-
   function place() {
     if (!host || !shadow) return;
-    const next = computeDock() || FLOAT;
-    if (placement && placement.mode === next.mode && placement.top === next.top
-        && placement.left === next.left && placement.width === next.width
-        && placement.maxH === next.maxH) return;
-    placement = next;
-    if (next.mode === 'dock') {
-      host.style.cssText = HOST_BASE + 'position:absolute;top:' + next.top + 'px;left:' + next.left
-        + 'px;width:' + next.width + 'px;';
-      shadow.__wrap.classList.add('dock');
-      shadow.__wrap.style.maxHeight = next.maxH + 'px';
-      host.setAttribute('data-pt-dock', 'docked');
+    const ref = headerSlot();
+    if (ref) {
+      if (host.parentNode !== ref.parentNode || host.nextSibling !== ref) {
+        ref.parentNode.insertBefore(host, ref);
+      }
+      if (placement !== 'inline') {
+        placement = 'inline';
+        host.style.cssText = INLINE_CSS;
+        shadow.__wrap.classList.add('dock');
+        shadow.__wrap.style.maxHeight = INLINE_MAX_H;
+        host.setAttribute('data-pt-dock', 'inline');
+      }
     } else {
-      host.style.cssText = FLOAT_CSS;
-      shadow.__wrap.classList.remove('dock');
-      shadow.__wrap.style.maxHeight = '';
+      if (document.body && host.parentNode !== document.body) document.body.appendChild(host);
+      if (placement !== 'float') {
+        placement = 'float';
+        host.style.cssText = FLOAT_CSS;
+        shadow.__wrap.classList.remove('dock');
+        shadow.__wrap.style.maxHeight = '';
+      }
       host.setAttribute('data-pt-dock', 'float:' + (dockWhy || 'unknown'));
     }
   }
@@ -553,8 +512,6 @@
     });
   });
 
-  window.addEventListener('resize', () => { place(); });
-
   function pushState() {
     try {
       window.postMessage({ source: STATE_TAG, enabled }, window.location.origin);
@@ -583,9 +540,9 @@
     routeTimer = setInterval(() => {
       if (!contextAlive()) { teardown(); return; }
       onRoute();
-      // The header settles late (banner and avatar loads move it) and the
-      // dead zone resizes with the window. Re-measuring is a handful of rect
-      // reads — the same poll-over-observer trade as the route check above.
+      // The tab bar mounts late on a cold load, and X's re-renders can sweep
+      // the host out of the header. Re-seating is a cheap no-op when nothing
+      // moved — the same poll-over-observer trade as the route check above.
       place();
     }, ROUTE_POLL_MS);
     onRoute();

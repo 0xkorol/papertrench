@@ -91,11 +91,28 @@ function makeNode(tagName) {
     contains: (c) => node.className.includes(c),
   };
   node.appendChild = (child) => {
+    if (child.parentNode) child.parentNode.removeChild(child);
     node.children.push(child);
     child.parentNode = node;
     child.isConnected = node.isConnected;
     return child;
   };
+  node.insertBefore = (child, ref) => {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    const i = ref ? node.children.indexOf(ref) : -1;
+    if (i === -1) node.children.push(child); else node.children.splice(i, 0, child);
+    child.parentNode = node;
+    child.isConnected = node.isConnected;
+    return child;
+  };
+  Object.defineProperty(node, 'nextSibling', {
+    get: () => {
+      const p = node.parentNode;
+      if (!p) return null;
+      const i = p.children.indexOf(node);
+      return i === -1 ? null : (p.children[i + 1] || null);
+    },
+  });
   node.append = (...kids) => { for (const k of kids) node.appendChild(k); };
   node.removeChild = (child) => {
     const i = node.children.indexOf(child);
@@ -122,52 +139,29 @@ function visibleText(node) {
   return [own, inner, kids].filter(Boolean).join(' ');
 }
 
-/** A profile header as the panel's dock sees it: a handful of anchor nodes
- * that answer querySelector and report hand-picked geometry. */
-function installProfileHeader(doc, spec) {
-  const rect = (r) => ({ width: r.right - r.left, height: r.bottom - r.top, ...r });
-  const geoNode = (r, text) => {
-    const n = makeNode('div');
-    n.getBoundingClientRect = () => rect(r);
-    if (text) n.textContent = text;
-    return n;
-  };
-  const col = geoNode(spec.col);
-  const name = geoNode(spec.name, spec.nameText);
-  const tabs = geoNode(spec.tabs);
-  const actions = spec.actions ? geoNode(spec.actions) : null;
-  // Stack rows carry the marker the panel's selector would match them by
-  // (a data-testid or an href tail); rows without one act as the bio. The
-  // fake only hands back rows the given selector actually names, so a test
-  // can put a row in the header that the dock is expected to ignore.
-  const stack = (spec.stack || []).map((r) => ({ marker: r.marker || 'UserDescription', node: geoNode(r) }));
-  col.querySelector = (sel) => {
-    if (sel.includes('UserName')) return name;
-    // On the real x.com the Posts/Replies bar is a DIV with role=tablist —
-    // a selector that demands a <nav> tag finds nothing. The fake must fail
-    // the same way; a nav-shaped tablist here is how `nav[role="tablist"]`
-    // shipped and silently floated every profile for three releases.
-    if (sel.includes('tablist')) return sel.includes('nav[') ? null : tabs;
-    if (sel.includes('placementTracking') || sel.includes('editProfileButton') || sel.includes('userActions')) return actions;
-    return null;
-  };
-  col.querySelectorAll = (sel) => stack.filter((s) => sel.includes(s.marker)).map((s) => s.node);
-  doc.querySelector = (sel) => (sel.includes('primaryColumn') ? col : null);
-}
-
-/** Geometry shaped like a real profile: a 600px column, the Follow row at the
- * top right, a narrow name/bio stack on the left, tabs at y=520. The dead
- * zone this leaves is the space the card should claim. */
-function roomyHeader(overrides = {}) {
-  return {
-    nameText: 'Degen Labs @degenlabs',
-    col: { left: 0, top: 0, right: 600, bottom: 900 },
-    actions: { left: 400, top: 90, right: 584, bottom: 126 },
-    name: { left: 16, top: 140, right: 200, bottom: 190 },
-    tabs: { left: 0, top: 520, right: 600, bottom: 573 },
-    stack: [{ left: 16, top: 196, right: 220, bottom: 216 }],
-    ...overrides,
-  };
+/** A profile header shaped like the real x.com markup (verified 2026-08-05):
+ * the Posts/Replies bar is a DIV with role=tablist whose tab links carry the
+ * profile's own handle (/degenlabs, /degenlabs/with_replies), wrapped in a
+ * <nav>, sitting after the header content in the column flow. The tab links
+ * are the ONLY thing the dock reads — so they are the only thing the fake
+ * models faithfully. */
+function installProfileHeader(doc, spec = {}) {
+  const column = makeNode('div');
+  const headerArea = makeNode('div');   // banner/name/bio stack, opaque to the dock
+  const nav = makeNode('nav');
+  const tabs = makeNode('div');
+  const links = (spec.tabHrefs || ['/degenlabs', '/degenlabs/with_replies']).map((href) => {
+    const a = makeNode('a');
+    a.setAttribute('href', href);
+    return a;
+  });
+  tabs.querySelectorAll = (sel) => (sel.includes('a[href]') ? links : []);
+  tabs.closest = (sel) => (sel === 'nav' && !spec.noNav ? nav : null);
+  doc.body.appendChild(column);
+  column.append(headerArea, nav);
+  nav.appendChild(tabs);
+  doc.querySelectorAll = (sel) => (sel.includes('tablist') ? [tabs] : []);
+  return { column, headerArea, nav, tabs };
 }
 
 function mountPanel(opts = {}) {
@@ -175,7 +169,7 @@ function mountPanel(opts = {}) {
   doc.createElement = (tag) => makeNode(tag);
   doc.body = makeNode('body');
   doc.body.isConnected = true;
-  if (opts.header) installProfileHeader(doc, opts.header);
+  const header = opts.header ? installProfileHeader(doc, opts.header === true ? {} : opts.header) : null;
 
   const listeners = { message: [] };
   const posted = [];
@@ -227,11 +221,19 @@ function mountPanel(opts = {}) {
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'xray-panel.js'), 'utf8'), sandbox, { filename: 'xray-panel.js' });
 
   return {
-    doc, sent, posted, timers,
+    doc, sent, posted, timers, header,
     text() { return visibleText(doc.body); },
     settle() { return new Promise((resolve) => setImmediate(resolve)); },
     fireMessage(data) { for (const fn of listeners.message) fn({ source: win, data }); },
-    card() { return doc.body.children.find((c) => c.id === 'papertrench-xray') || null; },
+    card() {
+      const find = (n) => {
+        if (!n) return null;
+        if (n.id === 'papertrench-xray') return n;
+        for (const k of n.children || []) { const hit = find(k); if (hit) return hit; }
+        return null;
+      };
+      return find(doc.body);
+    },
     wrap() { const c = this.card(); return c && c.shadow ? c.shadow.children[1] : null; },
   };
 }
@@ -346,109 +348,65 @@ test('digests from the page world are forwarded and repaint the card in place', 
 
 /* ---------------- placement ----------------
  *
- * The card belongs in the profile header's dead zone — right of the name
- * stack, under the Follow row, above the tabs — so the intel reads as part
- * of the profile. Floating is the fallback, never the default on a profile
- * that has room. */
+ * On a profile the card is a real block in the header flow, inserted above
+ * the Posts/Replies bar so it is part of the page and pushes the timeline
+ * down — never a box floating over content. Floating survives only where
+ * there is no profile tab bar at all, and always names its reason. */
 
-test('on a profile with room, the card docks into the header dead zone', async () => {
-  const panel = mountPanel({ intel: intelFixture(), header: roomyHeader() });
+test('on a profile the card is inserted into the header flow above the tab bar', async () => {
+  const panel = mountPanel({ intel: intelFixture(), header: true });
   await panel.settle();
-  const style = panel.card().style.cssText;
-  assert.match(style, /position:absolute/, 'docked into the page, not fixed over it');
-  assert.match(style, /top:138px/, 'below the Follow row (126) plus the gap');
-  assert.match(style, /left:274px/, 'right-aligned in the 600px column: 600 - 16 - 310');
-  assert.match(style, /width:310px/, 'with room to spare the card takes its full width');
-  assert.equal(panel.wrap().style.maxHeight, '370px',
-    'capped above the tabs at 520 — the card must never cover Posts/Replies');
+  const host = panel.card();
+  const { column, nav } = panel.header;
+  assert.equal(host.parentNode, column, 'the card lives inside the profile column, not <body>');
+  assert.equal(host.nextSibling, nav, 'seated directly above the Posts/Replies bar');
+  assert.doesNotMatch(host.style.cssText, /fixed|absolute/,
+    'in the flow — the page makes room for it, nothing is covered');
   assert.ok(panel.wrap().classList.contains('dock'),
-    'docked, the card wears X\'s native-card styling — no overlay shadow');
-  assert.equal(panel.card().getAttribute('data-pt-dock'), 'docked',
-    'the host says so inspectably — a float must always name its reason');
+    'inline, the card wears X\'s native-card styling — no overlay shadow');
+  assert.equal(panel.wrap().style.maxHeight, '420px',
+    'the header grows by a bounded amount; the card scrolls inside');
+  assert.equal(host.getAttribute('data-pt-dock'), 'inline',
+    'the host says so inspectably — every placement is readable from devtools');
   assert.match(panel.text(), /@degenlabs/, 'and it is still the same card');
 });
 
-test('a bio reaching into the zone narrows the card instead of evicting it', async () => {
-  // The shape of @a7mnoo on 2026-08-05: the bio ends past where a full-width
-  // card would start. The card must give way, not give up — its left edge
-  // starts where the bio stops, and only a card too narrow to read floats.
-  const snug = roomyHeader({ stack: [{ left: 16, top: 196, right: 320, bottom: 216 }] });
-  const panel = mountPanel({ intel: intelFixture(), header: snug });
-  await panel.settle();
-  const style = panel.card().style.cssText;
-  assert.match(style, /position:absolute/);
-  assert.match(style, /left:332px/, 'flush against the bio edge (320) plus the gap');
-  assert.match(style, /width:252px/, 'the rest of the column: 600 - 16 - 332');
-});
-
-test('a dock accounts for page scroll — document coordinates, not viewport', async () => {
-  const panel = mountPanel({ intel: intelFixture(), header: roomyHeader(), scrollY: 50 });
-  await panel.settle();
-  assert.match(panel.card().style.cssText, /top:188px/, '138 viewport + 50 scrolled');
-});
-
-test('joined-date and followed-by tails may sit under the card', async () => {
-  // Real profiles almost always have these rows reaching into the right-side
-  // space (the shape of @AutorunAlert on 2026-08-05, where a no-overlap rule
-  // floated the card). The card replaces both facts with richer versions, so
-  // they must not block the dock.
-  const busy = roomyHeader({
-    stack: [
-      { left: 16, top: 196, right: 220, bottom: 216 },                                  // bio
-      { marker: 'UserJoinDate', left: 16, top: 230, right: 420, bottom: 250 },          // joined tail
-      { marker: 'followers_you_follow', left: 16, top: 290, right: 400, bottom: 310 },  // Followed by …
-    ],
+test('the tab bar proves whose profile it is — a lingering bar never seats the card', async () => {
+  // During SPA navigation the previous profile's tab bar can still be in the
+  // DOM. Its tab links carry the old handle, so it fails the match and the
+  // card floats for a beat rather than joining the wrong profile.
+  const panel = mountPanel({
+    intel: intelFixture(),
+    header: { tabHrefs: ['/someoneelse', '/someoneelse/with_replies'] },
   });
-  const panel = mountPanel({ intel: intelFixture(), header: busy });
   await panel.settle();
-  assert.match(panel.card().style.cssText, /position:absolute/,
-    'rows the card supersedes are coverable, not blockers');
-});
-
-test('the website link is irreplaceable, so a long URL blocks the dock', async () => {
-  const longUrl = roomyHeader({
-    stack: [{ marker: 'UserUrl', left: 16, top: 230, right: 420, bottom: 250 }],
-  });
-  const panel = mountPanel({ intel: intelFixture(), header: longUrl });
-  await panel.settle();
-  assert.match(panel.card().style.cssText, /position:fixed/,
-    'the profile link is scam-vetting info the card does not carry');
-  assert.equal(panel.card().getAttribute('data-pt-dock'), 'float:narrow',
+  assert.match(panel.card().style.cssText, /position:fixed/);
+  assert.equal(panel.card().parentNode, panel.doc.body);
+  assert.equal(panel.card().getAttribute('data-pt-dock'), 'float:no-tabs',
     'every float names its reason on the host, readable from devtools');
 });
 
-test('a wide bio leaves no dead zone, so the card floats like before', async () => {
-  const wide = roomyHeader({ stack: [{ left: 16, top: 196, right: 560, bottom: 216 }] });
-  const panel = mountPanel({ intel: intelFixture(), header: wide });
+test('a shell that skips the <nav> wrapper still seats the card above the tabs', async () => {
+  // x.com's logged-out shell renders the tab strip without a <nav> around it
+  // (seen live 2026-08-05); the strip itself then marks the insertion slot.
+  const panel = mountPanel({ intel: intelFixture(), header: { noNav: true } });
   await panel.settle();
-  assert.match(panel.card().style.cssText, /position:fixed/,
-    'overlapping the bio would hide the very text the trader is vetting');
-});
-
-test('a squeezed header floats rather than docking a card too short to read', async () => {
-  const short = roomyHeader({ tabs: { left: 0, top: 260, right: 600, bottom: 313 } });
-  const panel = mountPanel({ intel: intelFixture(), header: short });
-  await panel.settle();
-  assert.match(panel.card().style.cssText, /position:fixed/);
-});
-
-test('a lingering header from the previous profile is never docked against', async () => {
-  const stale = roomyHeader({ nameText: 'Someone Else @someoneelse' });
-  const panel = mountPanel({ intel: intelFixture(), header: stale });
-  await panel.settle();
-  assert.match(panel.card().style.cssText, /position:fixed/,
-    'during SPA navigation the old header lingers; wrong geometry is worse than floating');
+  const host = panel.card();
+  assert.equal(host.parentNode, panel.header.nav, 'inserted beside the strip, inside its parent');
+  assert.equal(host.nextSibling, panel.header.tabs);
+  assert.equal(host.getAttribute('data-pt-dock'), 'inline');
 });
 
 test('post pages and headerless moments keep the floating card', async () => {
   const post = mountPanel({
     path: '/degenlabs/status/1800000000000000001',
     intel: intelFixture(),
-    header: roomyHeader(),
+    header: true,
   });
   await post.settle();
   assert.match(post.card().style.cssText, /position:fixed/,
-    'a post page has no profile header to dock into, even if one is still in the DOM');
+    'a post page has no profile header to join, even if a tab bar is in the DOM');
+  assert.equal(post.card().getAttribute('data-pt-dock'), 'float:route');
 
   const bare = mountPanel({ intel: intelFixture() });
   await bare.settle();
