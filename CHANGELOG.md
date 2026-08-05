@@ -3,6 +3,21 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.9.0 — 2026-08-05
+
+Lev round two — the quick fixes now live where he meant them.
+
+- **A pencil on the trading panel.** The ✎ in the panel header opens a
+  compact inline editor right on the trading tab — buy presets, sell
+  percents, and fee/gas/tip/slippage — with the same validation rulebook
+  the dashboard and popup use. Your costs ride as Fee/Gas/Tip/Slip chips
+  under the buy row, click-to-edit, in both modes.
+- **Focus mode is genuinely Axiom-compact now.** No balance card (cash
+  rides inline on the Buy label, refreshed per fill), and while one-tap
+  presets are on the big BUY button gets out of the way — the preset chips
+  ARE the buttons, and Enter in the amount box buys. Instant-buy off keeps
+  the button.
+
 ## v2.8.1 — 2026-08-05
 
 Update from v2.8.0 — it matters this time.
