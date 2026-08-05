@@ -3,6 +3,31 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v1.2.18 — 2026-08-05
+
+First fix batch from the public defect register (`DEFECTS.md`) — six correctness
+fixes on the money paths, every one locked with a regression test.
+
+- **Fast navigation can no longer trade the wrong token.** Switching coins while
+  the previous one was still resolving could leave the panel showing — and
+  **buying** — the previous token on the new page. Navigations that land
+  mid-resolve are now retried instead of silently swallowed, and a resolve that
+  finishes after you've left the page is discarded instead of resurrecting the
+  old token.
+- **Double-tap sells fill once.** Sells carry the same in-flight guard buys
+  always had. A second tap on "SELL 50%" while the first is filling is refused
+  — previously it silently sold 50% of the *remainder* (75% total) with two
+  success toasts.
+- **AI reviews and recording links stop vanishing from the dashboard.** The
+  background service worker now advances the wallet's write counter, so open
+  trading tabs adopt its writes instead of overwriting them within a second.
+- **Backup restore sticks.** A restored wallet lands strictly ahead of every
+  open tab's write counter, so a live tab can no longer resurrect the wallet
+  you just replaced.
+- **Screener quick-buy chips price honestly.** A chip tap now demands a quote
+  no older than 3 seconds; previously it could fill at a price from the
+  resolver's 60-second display cache.
+
 ## v1.2.17 — 2026-08-05
 
 Reliability hardening release — no feature changes.
