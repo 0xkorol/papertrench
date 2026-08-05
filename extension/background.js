@@ -71,26 +71,55 @@ function migrateBackgroundSettings(settings) {
 
 function getSettings() {
   return new Promise((resolve) =>
-    chrome.storage.local.get(['pt_settings'], (value) => resolve(migrateBackgroundSettings({ ...DEFAULTS, ...(value.pt_settings || {}) })))
+    chrome.storage.local.get(['pt_settings'], (value) => {
+      if (chrome.runtime && chrome.runtime.lastError) {
+        console.warn('PaperTrench: settings read failed', chrome.runtime.lastError.message);
+        resolve(migrateBackgroundSettings({ ...DEFAULTS }));
+        return;
+      }
+      resolve(migrateBackgroundSettings({ ...DEFAULTS, ...(value.pt_settings || {}) }));
+    })
   );
 }
 
 function getState() {
-  return new Promise((resolve) => chrome.storage.local.get(['pt_state'], (value) => resolve(value.pt_state || null)));
+  return new Promise((resolve) => chrome.storage.local.get(['pt_state'], (value) => {
+    if (chrome.runtime && chrome.runtime.lastError) {
+      console.warn('PaperTrench: state read failed', chrome.runtime.lastError.message);
+      resolve(null);
+      return;
+    }
+    resolve(value.pt_state || null);
+  }));
 }
 
 function setState(state) {
-  return new Promise((resolve) => chrome.storage.local.set({ pt_state: state }, resolve));
+  return new Promise((resolve) => chrome.storage.local.set({ pt_state: state }, () => {
+    if (chrome.runtime && chrome.runtime.lastError) {
+      console.warn('PaperTrench: state write failed', chrome.runtime.lastError.message);
+    }
+    resolve();
+  }));
 }
 
 function getReplays() {
   return new Promise((resolve) => chrome.storage.local.get([RP.STORAGE_KEY], (value) => {
+    if (chrome.runtime && chrome.runtime.lastError) {
+      console.warn('PaperTrench: replays read failed', chrome.runtime.lastError.message);
+      resolve(RP.normalizeReplayList(null));
+      return;
+    }
     resolve(RP.normalizeReplayList(value[RP.STORAGE_KEY]));
   }));
 }
 
 function setReplays(replays) {
-  return new Promise((resolve) => chrome.storage.local.set({ [RP.STORAGE_KEY]: replays }, resolve));
+  return new Promise((resolve) => chrome.storage.local.set({ [RP.STORAGE_KEY]: replays }, () => {
+    if (chrome.runtime && chrome.runtime.lastError) {
+      console.warn('PaperTrench: replays write failed', chrome.runtime.lastError.message);
+    }
+    resolve();
+  }));
 }
 
 function openDashboard() {

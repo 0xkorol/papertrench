@@ -101,7 +101,7 @@
   // Bumped when a default changes in a way existing users should receive.
   // Stored settings normally win over defaults, so without this a user who
   // installed before the change would keep the old value forever.
-  const SETTINGS_REVISION = 6;
+  const SETTINGS_REVISION = 7;
 
   /**
    * Merge stored settings over defaults, applying one-time migrations.
@@ -123,6 +123,10 @@
    *
    * Revision 6 persists the positions bar's collapsed/expanded state, so
    * hiding it once keeps it hidden everywhere.
+   *
+   * Revision 7 clears orphaned AI credentials (apiKey/model) when the stored
+   * endpoint is empty and no endpoint was explicitly configured, preventing
+   * stale keys from being sent to whatever endpoint the user pastes next.
    */
   const OLD_LOCAL_AI_ENDPOINT = 'http://127.0.0.1:8765/v1';
   function mergeSettings(stored) {
@@ -150,6 +154,17 @@
     }
     if (revision < 6) {
       merged.positionsBarHidden = DEFAULT_SETTINGS.positionsBarHidden;
+    }
+    // Revision 7: clear any orphaned AI credentials tied to the removed insecure
+    // local endpoint. If the stored endpoint is the old default or empty and
+    // aiAllowLocalEndpoint is off, the saved key/model are useless and
+    // potentially leaked to whatever endpoint the user pastes next.
+    if (revision < 7) {
+      const endpointEmptyOrInsecure = merged.aiEndpoint === '' || merged.aiEndpoint === OLD_LOCAL_AI_ENDPOINT;
+      if (endpointEmptyOrInsecure && !merged.aiAllowLocalEndpoint && (merged.aiApiKey || merged.aiModel)) {
+        merged.aiApiKey = '';
+        merged.aiModel = '';
+      }
     }
     merged.settingsRevision = SETTINGS_REVISION;
     return merged;

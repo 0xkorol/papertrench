@@ -484,6 +484,46 @@ test('revision 6 persists the positions bar collapse state', () => {
   assert.equal(merged.positionsBarHidden, true);
 });
 
+test('revision 7 clears orphaned AI credentials left behind with no usable endpoint', () => {
+  // An install that stored a key/model for the removed insecure local default
+  // (or for no endpoint at all) would silently send that stale key to whatever
+  // endpoint the user pastes next. The migration clears the orphans once.
+  const rev6 = {
+    settingsRevision: 6,
+    aiEndpoint: 'http://127.0.0.1:8765/v1',
+    aiApiKey: 'stale-key',
+    aiModel: 'stale-model',
+    balanceStartSol: 7,
+  };
+  const migrated = E.mergeSettings(rev6);
+  assert.equal(migrated.aiApiKey, '', 'orphaned API key is cleared');
+  assert.equal(migrated.aiModel, '', 'orphaned model is cleared');
+  assert.equal(migrated.settingsRevision, E.SETTINGS_REVISION);
+  assert.equal(migrated.balanceStartSol, 7, 'unrelated settings must survive');
+
+  // Credentials tied to a deliberately configured public endpoint survive.
+  const configured = {
+    settingsRevision: 6,
+    aiEndpoint: 'https://ai.example.com/v1',
+    aiApiKey: 'live-key',
+    aiModel: 'live-model',
+  };
+  const kept = E.mergeSettings(configured);
+  assert.equal(kept.aiApiKey, 'live-key');
+  assert.equal(kept.aiModel, 'live-model');
+
+  // A local-endpoint user who explicitly opted in keeps their credentials too.
+  const optedIn = {
+    settingsRevision: 6,
+    aiEndpoint: 'http://127.0.0.1:8765/v1',
+    aiAllowLocalEndpoint: true,
+    aiApiKey: 'local-key',
+  };
+  const keptLocal = E.mergeSettings(optedIn);
+  assert.equal(keptLocal.aiApiKey, 'local-key',
+    'an explicit local opt-in is a deliberate choice and is never wiped');
+});
+
 /* ---------------- reset must outrun in-flight writers ----------------
  *
  * Reported defect: after a reset, the old wallet reappeared. Root cause: the

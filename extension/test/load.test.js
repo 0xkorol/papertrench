@@ -355,8 +355,9 @@ test('the overlay visibility can be toggled between master and auto-hide control
 
   assert.match(engineSrc, /overlayHideWhenNoToken:\s*true/,
     'the default must hide the overlay when no token is detected');
-  assert.match(engineSrc, /SETTINGS_REVISION = 6/,
-    'settings revision must be bumped for the positions bar collapse persistence');
+  const revMatch = engineSrc.match(/SETTINGS_REVISION = (\d+)/);
+  assert.ok(revMatch && Number(revMatch[1]) >= 6,
+    'settings revision must be at least 6 (positions bar collapse persistence)');
   assert.match(contentSrc, /function updateOverlayVisibility/,
     'content.js must hide the main panel when no token is present');
   assert.match(contentSrc, /function toggleOverlayAutoHide/,

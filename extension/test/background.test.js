@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const ROOT = path.join(__dirname, '..');
 const MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
 
-function serviceWorker() {
+function serviceWorker(opts = {}) {
   const values = {
     pt_settings: {
       framesEnabled: false,
@@ -19,7 +19,16 @@ function serviceWorker() {
   let messageListener = null;
   const fetchCalls = [];
   const captureCalls = [];
+  // Real Chrome exposes a storage failure by setting chrome.runtime.lastError
+  // for the duration of the callback only; reading it outside a callback is
+  // meaningless. The fail flags reproduce that exact shape.
+  const failingCallback = (callback, result) => {
+    sandbox.chrome.runtime.lastError = { message: 'quota exceeded (test)' };
+    try { if (callback) callback(result); }
+    finally { delete sandbox.chrome.runtime.lastError; }
+  };
   const get = (keys, callback) => {
+    if (opts.failReads) { failingCallback(callback, {}); return undefined; }
     const names = Array.isArray(keys) ? keys : Object.keys(keys || {});
     const result = {};
     for (const key of names) if (Object.hasOwn(values, key)) result[key] = values[key];
@@ -27,6 +36,7 @@ function serviceWorker() {
     return Promise.resolve(result);
   };
   const set = (update, callback) => {
+    if (opts.failWrites) { failingCallback(callback); return Promise.resolve(); }
     Object.assign(values, update);
     if (callback) callback();
     return Promise.resolve();
@@ -136,7 +146,20 @@ function serviceWorker() {
     }
   };
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8'), context, { filename: 'background.js' });
-  return { values, fetchCalls, captureCalls, get listener() { return messageListener; }, get isAllowedEndpoint() { return context.isAllowedEndpoint; } };
+  return {
+    values, fetchCalls, captureCalls,
+    get listener() { return messageListener; },
+    get isAllowedEndpoint() { return context.isAllowedEndpoint; },
+    get storage() {
+      return {
+        getSettings: context.getSettings,
+        getState: context.getState,
+        setState: context.setState,
+        getReplays: context.getReplays,
+        setReplays: context.setReplays,
+      };
+    },
+  };
 }
 
 function send(listener, message) {
@@ -245,6 +268,36 @@ test('isAllowedEndpoint blocks SSRF targets and allows public endpoints', () => 
   assert.equal(allow('http://[fe80::1]/v1'), false);
   assert.equal(allow('http://[::ffff:127.0.0.1]/v1'), false);
   assert.equal(allow('http://[::ffff:192.168.1.1]/v1', true), true);
+});
+
+test('a failed storage read resolves to safe defaults instead of acting on garbage', async () => {
+  // chrome.storage.local.get reports failure via chrome.runtime.lastError in
+  // the callback; ignoring it means treating {} as real data. The worker must
+  // fall back to defaults (settings), null (state), or an empty list (replays).
+  const worker = serviceWorker({ failReads: true });
+
+  const settings = await worker.storage.getSettings();
+  assert.equal(settings.framesEnabled, true, 'a failed read falls back to default settings');
+  assert.equal(settings.aiEndpoint, '', 'a failed read must not invent an AI endpoint');
+
+  assert.equal(await worker.storage.getState(), null,
+    'a failed state read resolves null, never a fake wallet');
+
+  const replays = await worker.storage.getReplays();
+  assert.equal(Array.isArray(replays), true, 'a failed replays read resolves a list');
+  assert.equal(replays.length, 0, 'a failed replays read resolves an empty list');
+});
+
+test('a failed storage write resolves instead of hanging the caller', async () => {
+  const worker = serviceWorker({ failWrites: true });
+
+  // Both writes must settle — an unresolved promise here would wedge every
+  // awaiting message handler in the worker.
+  await worker.storage.setState({ cashSol: 5 });
+  await worker.storage.setReplays([]);
+
+  assert.equal(worker.values.pt_state.positions instanceof Object, true,
+    'the failed write must not corrupt what storage already held');
 });
 
 test('ai proxy blocks disallowed endpoints and fetches allowed ones', async () => {
