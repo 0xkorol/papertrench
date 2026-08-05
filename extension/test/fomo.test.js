@@ -145,6 +145,16 @@ function runFomoBridge(opts = {}) {
 
   const timeouts = new Map();
   let timeoutSeq = 0;
+  // Controllable clock (nativecharts pattern): the stale-clamp tests need
+  // minutes to pass between a live bar and a fill, deterministically.
+  const RealDate = Date;
+  let fakeNow = null;
+  class TestDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0 && fakeNow !== null) { super(fakeNow); } else { super(...args); }
+    }
+    static now() { return fakeNow !== null ? fakeNow : RealDate.now(); }
+  }
   const sandbox = {
     window: win,
     document: doc,
@@ -152,7 +162,7 @@ function runFomoBridge(opts = {}) {
       href: `https://fomo.family/tokens/solana/${FOMO_MINT}`,
       hostname: 'fomo.family',
     },
-    console, Date, Math, Number, String, Array, Object, Boolean, RegExp,
+    console, Date: TestDate, Math, Number, String, Array, Object, Boolean, RegExp,
     Error, Set, WeakSet, WeakMap, Map, Symbol, JSON, Promise, isFinite,
     MutationObserver: function () { this.observe = () => {}; this.disconnect = () => {}; },
     setInterval(fn) { timers.push(fn); return timers.length; },
@@ -172,6 +182,8 @@ function runFomoBridge(opts = {}) {
     execShapes,
     win,
     fomoDatafeed,
+    setNow(t) { fakeNow = t; },
+    advance(ms) { fakeNow = (fakeNow === null ? RealDate.now() : fakeNow) + ms; },
     subscribed: () => subscribed,
     send(type, payload) {
       listeners.message({
@@ -313,7 +325,107 @@ test('fomo: the average line lands on the mcap axis via the vetted live close', 
 });
 
 /* ------------------------------------------------------------------ *
- * 5. The social feed must never tick the price
+ * 5. Stale live-bar state must not drag fresh fills into the past
+ * ------------------------------------------------------------------ */
+
+test('fomo: a fill placed while live bars are STALE keeps its own time', async () => {
+  const env = runFomoBridge();
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env); // live bar stamped at t0
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: CURRENT_PRICE_NATIVE,
+    currentPriceUsd: CURRENT_PRICE_USD,
+    avgBuyNative: 0.0000065,
+    avgBuyUsd: 0.0013,
+    avgBuyMcap: 1300000,
+  });
+  await microtasks();
+
+  // Five minutes pass with NO live bars (fomo subscribed before the patch,
+  // or volume died) — the export peg owns the price now. F-31's clamp
+  // guards millisecond feed skew; clamping a fresh SELL back onto a
+  // five-minute-old candle renders it far left of the action — the user
+  // reads that as "my sell never showed up".
+  env.advance(5 * 60_000);
+  const sellTs = t0 + 5 * 60_000;
+  env.send('paper-marker', {
+    side: 'sell',
+    priceNative: 0.0000072,
+    priceUsd: 0.00144,
+    mcap: 1440000,
+    solAmount: 0.5,
+    ts: sellTs,
+    symbol: 'Doom',
+  });
+  env.runTimeouts();
+  await microtasks();
+
+  const sell = env.execShapes.find((s) => s.values.setDirection === 'sell');
+  assert.ok(sell, 'the sell must draw as a shape');
+  const drawnSec = sell.values.setTime;
+  assert.ok(Math.abs(drawnSec - Math.floor(sellTs / 1000)) <= 60,
+    `a stale live-bar time must not drag the fill back: drawn at ${drawnSec}, `
+    + `fill was at ${Math.floor(sellTs / 1000)} (delta ${Math.floor(sellTs / 1000) - drawnSec}s)`);
+});
+
+/* ------------------------------------------------------------------ *
+ * 6. The status surface must name what it is doing (X-Ray dock lesson)
+ * ------------------------------------------------------------------ */
+
+test('fomo: marker status admits shapes own rendering on a no-getMarks site', async () => {
+  const env = runFomoBridge();
+  bootWithLiveBar(env);
+  env.send('paper-marker', {
+    side: 'buy', priceNative: 0.0000065, priceUsd: 0.0013, mcap: 1300000,
+    solAmount: 0.5, ts: Date.now(), symbol: 'Doom',
+  });
+  env.runTimeouts();
+  await microtasks();
+  // A second fill reports status AFTER the fallback engaged.
+  env.send('paper-marker', {
+    side: 'buy', priceNative: 0.0000066, priceUsd: 0.00132, mcap: 1320000,
+    solAmount: 0.5, ts: Date.now(), symbol: 'Doom',
+  });
+  await microtasks();
+
+  const statuses = env.statuses('paper-marker-status').filter((s) => s && s.action === 'add');
+  const last = statuses[statuses.length - 1];
+  assert.equal(last.shapeFallback, true,
+    'the status must say execution shapes own rendering, or the UI shows "marks connecting…" forever');
+  assert.ok(last.shapesDrawn >= 1, 'and how many fills are actually on the chart');
+});
+
+test('fomo: a lines refusal names its reason', async () => {
+  const env = runFomoBridge();
+  announceToken(env);
+  env.runTimers(); // discovery, but NO bar has ever ticked and exports are empty
+
+  // A fresh-launch fill: only the NATIVE average is known (C-07's shape —
+  // no USD rate yet), no resolver mcap, and no bar close has ever arrived.
+  // The level is genuinely uncomputable; the status must say so.
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: CURRENT_PRICE_NATIVE,
+    avgBuyNative: 0.0000065,
+  });
+  await microtasks();
+
+  const statuses = env.statuses('paper-lines-status').filter((s) => s && s.action === 'sync');
+  const last = statuses[statuses.length - 1];
+  assert.ok(last, 'a sync attempt must report');
+  assert.equal(last.ok, false,
+    'a wanted level with no close is NOT ok — "LINES ✓" with nothing drawn is a silent false-success');
+  assert.ok(typeof last.reason === 'string' && last.reason.startsWith('no-level'),
+    'a refused line must NAME the reason — "lines connecting…" forever is the X-Ray dock failure again');
+});
+
+/* ------------------------------------------------------------------ *
+ * 7. The social feed must never tick the price
  * ------------------------------------------------------------------ */
 
 // Shaped exactly like the live /feed/token response (items abridged, ids and

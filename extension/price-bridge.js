@@ -985,6 +985,18 @@
   let marksPipelineSeenAt = 0;
   let shapeFallbackActive = false;
 
+  /** F-31's clamp exists for millisecond feed skew between a fill stamp and
+   * the newest candle. When live bars are STALE — the chart subscribed
+   * before the patch (fomo, Axiom-late) or volume died and the export peg
+   * owns the price — the newest live bar is MINUTES old, and clamping a
+   * fresh fill onto it drags the arrow visibly into the past ("my sell
+   * never showed up"). A stale clamp target is no clamp at all. */
+  function freshBarTimeSec() {
+    return lastBarTimeSec > 0 && Date.now() - lastLiveBarAt <= BAR_CLOSE_FRESH_MS
+      ? lastBarTimeSec
+      : 0;
+  }
+
   function marksInRange(from, to) {
     // Once the execution-shape fallback owns rendering, the getMarks pipeline
     // must not duplicate the same fills.
@@ -994,7 +1006,8 @@
     // F-31: a mark stamped ahead of the newest bar clamps onto it — clamp
     // BEFORE the range filter so a "future" fill renders on the last candle
     // instead of silently not rendering at all.
-    const clamp = (t) => (lastBarTimeSec > 0 && t > lastBarTimeSec ? lastBarTimeSec : t);
+    const capSec = freshBarTimeSec();
+    const clamp = (t) => (capSec > 0 && t > capSec ? capSec : t);
     return paperMarks
       .map((mark) => { const t = clamp(mark.time); return t === mark.time ? mark : { ...mark, time: t }; })
       .filter((mark) => mark.time >= lo && mark.time <= hi);
@@ -1427,10 +1440,17 @@
     clearLineSlot(averageExitSlot);
   }
 
+  // The X-Ray dock lesson, applied to lines: a refusal must NAME itself.
+  // "LINES ✓" with nothing on the chart (a wanted level froze null) was a
+  // silent false-success; "lines connecting…" forever named nothing. The
+  // most recent sync's refusal reason rides on paper-lines-status.
+  let lastLineSyncReason = null;
+
   function syncPaperAverageLines() {
+    lastLineSyncReason = null;
     const widget = findTradingViewWidget();
     const charts = getRankedCharts();
-    if (!widget || !charts.length) return false;
+    if (!widget || !charts.length) { lastLineSyncReason = 'no-chart'; return false; }
 
     if (lineWidget && lineWidget !== widget) clearPaperAverageLines();
     lineWidget = widget;
@@ -1457,6 +1477,21 @@
     }
     const buyLevel = paperLineSpec.frozenBuyLevel;
     const sellLevel = paperLineSpec.frozenSellLevel;
+    // A spec that WANTS a line whose level could not be computed is not a
+    // success — report the truth and let the sweep retry when a close
+    // arrives (frozen null levels recompute per sweep by design).
+    const spec = paperLineSpec;
+    const wantsBuy = Number(spec.avgBuyUsd) > 0 || Number(spec.avgBuyNative) > 0
+      || Number(spec.avgBuyMcap) > 0 || Number(spec.avgBuyMcapNative) > 0;
+    const wantsSell = Number(spec.avgSellUsd) > 0 || Number(spec.avgSellNative) > 0
+      || Number(spec.avgSellMcap) > 0 || Number(spec.avgSellMcapNative) > 0;
+    const missingBuy = wantsBuy && !(buyLevel > 0);
+    const missingSell = wantsSell && !(sellLevel > 0);
+    if (missingBuy || missingSell) {
+      lastLineSyncReason = 'no-level:' + (spec.axisBasis || 'no-basis')
+        + (lastBarClose > 0 ? '' : ':no-close');
+    }
+    if (missingBuy && missingSell) return false;
     // The best-ranked chart can still refuse (Axiom's preload chart throws
     // "Value is null" until a series loads); fall through the ranking — but
     // ONLY past charts that refused everything. DEFECT C-15: requiring
@@ -1473,9 +1508,14 @@
       // never be mistakable for a real one.
       const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, 'PAPER Avg. Fill', '#90A8FA99');
       const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, 'PAPER Avg. Exit', '#F7DC8599');
-      if (buyOk && sellOk) return true;
-      if (buyOk || sellOk) return false; // keep the partial chart; retry the other line here
+      if (buyOk && sellOk) {
+        // Every wanted level drew, or one is still waiting on a close —
+        // ok only when nothing wanted is missing.
+        return !(missingBuy || missingSell);
+      }
+      if (buyOk || sellOk) { lastLineSyncReason = lastLineSyncReason || 'draw-refused'; return false; }
     }
+    if (!lastLineSyncReason) lastLineSyncReason = 'draw-refused';
     return false;
   }
 
@@ -1531,12 +1571,14 @@
       const level = shapeLevelFor(levels);
       if (!(level > 0)) continue;
       let handle = null;
+      const capSec = freshBarTimeSec();
       for (const chart of charts) {
         if (typeof chart.createExecutionShape !== 'function') continue;
         handle = spawnExecutionShape(chart, {
           side: levels.side,
-          // F-31: never draw ahead of the chart's newest bar.
-          timeSec: lastBarTimeSec > 0 ? Math.min(mark.time, lastBarTimeSec) : mark.time,
+          // F-31: never draw ahead of the chart's newest bar — but only a
+          // FRESH bar time may clamp; a stale one drags the fill back.
+          timeSec: capSec > 0 ? Math.min(mark.time, capSec) : mark.time,
           level,
           text: levels.side === 'sell' ? 'PT Sell' : 'PT Buy',
         });
@@ -2002,6 +2044,7 @@
       emit('paper-lines-status', {
         action: 'sync',
         ok: synced,
+        reason: synced ? undefined : (lastLineSyncReason || undefined),
         buyVisible: Boolean(averageFillSlot.adapter || averageFillSlot.pending),
         sellVisible: Boolean(averageExitSlot.adapter || averageExitSlot.pending),
       });
@@ -2048,10 +2091,14 @@
       ensureMarksRender();
       emit('paper-marker-status', {
         action: 'add',
-        ok: padreMarksHooked && refreshed,
+        // Shapes owning rendering IS ok — on a no-getMarks datafeed (fomo)
+        // they are the only fill path there will ever be.
+        ok: (padreMarksHooked && refreshed) || shapeFallbackActive,
         id: mark.id,
         count: paperMarks.length,
         marksHooked: padreMarksHooked,
+        shapeFallback: shapeFallbackActive,
+        shapesDrawn: fallbackShapeHandles.size,
       });
     }
   }

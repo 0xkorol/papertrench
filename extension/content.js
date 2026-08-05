@@ -3881,11 +3881,23 @@
     // Padre and Axiom both drive native TradingView marks and order lines, so
     // the hook status is reported against whichever site is in front of us.
     const live = padreHookStatus.barsHooked ? 'LIVE ✓' : 'live connecting…';
-    const markersReady = padreHookStatus.marksHooked ? 'MARKS ✓' : 'marks connecting…';
+    // A no-getMarks datafeed (fomo) renders fills as execution shapes — that
+    // IS the working state there, not "connecting". And a refused line names
+    // its reason instead of connecting forever (the X-Ray dock lesson).
+    const shapesOwn = lastMarkerStatus && lastMarkerStatus.shapeFallback;
+    const markersReady = padreHookStatus.marksHooked ? 'MARKS ✓'
+      : (shapesOwn ? 'MARKS ✓ (shapes)' : 'marks connecting…');
+    const lineOk = (lastLineStatus && lastLineStatus.ok) || padreHookStatus.linesReady;
+    const lineReason = lastLineStatus && !lastLineStatus.ok && lastLineStatus.reason;
     const lines = settings.averagePriceLinesEnabled
-      ? ` · ${(lastLineStatus && lastLineStatus.ok) || padreHookStatus.linesReady ? 'LINES ✓' : 'lines connecting…'}`
+      ? ` · ${lineOk ? 'LINES ✓' : (lineReason ? `lines ✗ ${lineReason}` : 'lines connecting…')}`
       : '';
     els.footSite.textContent = `${site.name} · ${live} · ${markersReady}${lines}${feed}${rug}`;
+    // One devtools glance = a diagnosis (the data-pt-dock pattern).
+    try {
+      els.footSite.dataset.ptMarks = padreHookStatus.marksHooked ? 'native' : (shapesOwn ? 'shapes' : 'connecting');
+      els.footSite.dataset.ptLines = lineOk ? 'ok' : (lineReason || 'connecting');
+    } catch (_) { /* dataset unavailable on exotic hosts */ }
     if (els.subtitle) {
       els.subtitle.textContent = padreHookStatus.barsHooked
         ? `${site.name} · live feed connected`

@@ -1781,11 +1781,20 @@ test("F-31: fill shapes use the same close-corrected level math as the avg lines
 
 test("F-31: paper shapes and marks can never render ahead of the newest bar", () => {
   const bridge = fs.readFileSync(path.join(ROOT, "price-bridge.js"), "utf8");
-  assert.match(bridge, /Math\.min\(mark\.time, lastBarTimeSec\)/,
-    "shape time must clamp to the last bar");
+  // The clamp target must be the FRESHNESS-GATED bar time: an always-on
+  // clamp drags fills minutes into the past when live bars are stale (the
+  // fomo missing-sell), and no clamp at all re-opens the F-31 float.
+  assert.match(bridge, /Math\.min\(mark\.time, capSec\)/,
+    "shape time must clamp to the freshness-gated last bar");
+  assert.match(bridge, /function freshBarTimeSec/,
+    "the clamp target must exist as the gated helper");
+  assert.match(bridge, /lastLiveBarAt <= BAR_CLOSE_FRESH_MS/,
+    "a stale live-bar time may not clamp — the export peg owns stale pages");
   const marksStart = bridge.indexOf("function marksInRange(");
   const marksBlock = bridge.slice(marksStart, bridge.indexOf("\n  }", marksStart) + 4);
   assert.match(marksBlock, /clamp/, "marks must clamp before the range filter");
+  assert.match(marksBlock, /freshBarTimeSec\(\)/,
+    "the getMarks clamp must use the same gated target");
   assert.match(bridge, /lastBarTimeSec = barTimeMs > 1e12/,
     "emitPadreBar must record the newest bar chart time");
   assert.match(bridge, /lastBarTimeSec = 0;/,
