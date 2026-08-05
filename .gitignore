@@ -9,3 +9,6 @@ dist/
 *.zip
 .vscode/
 .idea/
+
+# Internal working notes, never published
+HANDOFF.md
