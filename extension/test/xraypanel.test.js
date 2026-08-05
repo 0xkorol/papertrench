@@ -136,14 +136,18 @@ function installProfileHeader(doc, spec) {
   const name = geoNode(spec.name, spec.nameText);
   const tabs = geoNode(spec.tabs);
   const actions = spec.actions ? geoNode(spec.actions) : null;
-  const stack = (spec.stack || []).map((r) => geoNode(r));
+  // Stack rows carry the marker the panel's selector would match them by
+  // (a data-testid or an href tail); rows without one act as the bio. The
+  // fake only hands back rows the given selector actually names, so a test
+  // can put a row in the header that the dock is expected to ignore.
+  const stack = (spec.stack || []).map((r) => ({ marker: r.marker || 'UserDescription', node: geoNode(r) }));
   col.querySelector = (sel) => {
     if (sel.includes('UserName')) return name;
     if (sel.includes('tablist')) return tabs;
     if (sel.includes('placementTracking') || sel.includes('editProfileButton') || sel.includes('userActions')) return actions;
     return null;
   };
-  col.querySelectorAll = () => stack;
+  col.querySelectorAll = (sel) => stack.filter((s) => sel.includes(s.marker)).map((s) => s.node);
   doc.querySelector = (sel) => (sel.includes('primaryColumn') ? col : null);
 }
 
@@ -359,6 +363,34 @@ test('a dock accounts for page scroll — document coordinates, not viewport', a
   const panel = mountPanel({ intel: intelFixture(), header: roomyHeader(), scrollY: 50 });
   await panel.settle();
   assert.match(panel.card().style.cssText, /top:188px/, '138 viewport + 50 scrolled');
+});
+
+test('joined-date and followed-by tails may sit under the card', async () => {
+  // Real profiles almost always have these rows reaching into the right-side
+  // space (the shape of @AutorunAlert on 2026-08-05, where a no-overlap rule
+  // floated the card). The card replaces both facts with richer versions, so
+  // they must not block the dock.
+  const busy = roomyHeader({
+    stack: [
+      { left: 16, top: 196, right: 220, bottom: 216 },                                  // bio
+      { marker: 'UserJoinDate', left: 16, top: 230, right: 420, bottom: 250 },          // joined tail
+      { marker: 'followers_you_follow', left: 16, top: 290, right: 400, bottom: 310 },  // Followed by …
+    ],
+  });
+  const panel = mountPanel({ intel: intelFixture(), header: busy });
+  await panel.settle();
+  assert.match(panel.card().style.cssText, /position:absolute/,
+    'rows the card supersedes are coverable, not blockers');
+});
+
+test('the website link is irreplaceable, so a long URL blocks the dock', async () => {
+  const longUrl = roomyHeader({
+    stack: [{ marker: 'UserUrl', left: 16, top: 230, right: 420, bottom: 250 }],
+  });
+  const panel = mountPanel({ intel: intelFixture(), header: longUrl });
+  await panel.settle();
+  assert.match(panel.card().style.cssText, /position:fixed/,
+    'the profile link is scam-vetting info the card does not carry');
 });
 
 test('a wide bio leaves no dead zone, so the card floats like before', async () => {

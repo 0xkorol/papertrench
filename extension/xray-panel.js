@@ -251,9 +251,15 @@
       const actions = col.querySelector('[data-testid="placementTracking"]')
         || col.querySelector('[data-testid="editProfileButton"]')
         || col.querySelector('[data-testid="userActions"]');
+      // The avoid-list is only what the card cannot replace: name, bio, the
+      // website link (scam vetting lives there), location, follower counts.
+      // The joined date and the "Followed by …" row may sit under the card —
+      // it shows richer versions of both facts (Created + age + drift watch;
+      // Smart Following), so covering their tails loses the trader nothing.
+      // A no-overlap-with-anything rule floats on nearly every real profile.
       const stack = [name].concat(Array.from(col.querySelectorAll(
-        '[data-testid="UserDescription"],[data-testid="UserProfileHeader_Items"],'
-        + 'a[href$="/following"],a[href$="/verified_followers"],a[href$="/followers_you_follow"]')));
+        '[data-testid="UserDescription"],[data-testid="UserUrl"],[data-testid="UserLocation"],'
+        + 'a[href$="/following"],a[href$="/verified_followers"]')));
       return { col, name, tabs, actions, stack };
     } catch (_) {
       return null;
@@ -283,8 +289,9 @@
     const left = colR.right - DOCK_EDGE - PANEL_W;
     const maxH = tabsR.top - DOCK_GAP - top;
     if (maxH < DOCK_MIN_H) return null;
-    // The dead zone is only dead when the name/bio/counts stack stays clear
-    // of it. A long bio or a narrow window means there is no zone at all.
+    // The zone is only usable while the irreplaceable rows (see the
+    // avoid-list above) stay clear of it. A long bio, a long URL, or a
+    // narrow window means there is no zone at all.
     for (const el of a.stack) {
       const r = el.getBoundingClientRect();
       if (r.width && r.bottom > top && r.top < tabsR.top && r.right > left - DOCK_GAP) return null;
