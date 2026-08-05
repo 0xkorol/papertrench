@@ -238,22 +238,31 @@
   const FLOAT = { mode: 'float' };
 
   let placement = null;     // last applied: FLOAT or { mode:'dock', top, left, width, maxH }
+  let dockWhy = '';         // why the last placement floated — surfaced as data-pt-dock
 
   /** The profile header pieces the dock is measured against. Null means "no
-   * dockable header here" — not an error; the caller floats instead. */
+   * dockable header here" — not an error; the caller floats instead, and
+   * dockWhy records which anchor failed so a float is diagnosable from the
+   * live page (inspect the host's data-pt-dock attribute) instead of by
+   * guessing at geometry. */
   function headerAnchors() {
-    if (!route || route.kind !== 'profile') return null;
-    if (!document.querySelector) return null;
+    if (!route || route.kind !== 'profile') { dockWhy = 'route'; return null; }
+    if (!document.querySelector) { dockWhy = 'no-dom'; return null; }
     try {
       const col = document.querySelector('[data-testid="primaryColumn"]');
-      if (!col) return null;
+      if (!col) { dockWhy = 'no-column'; return null; }
       const name = col.querySelector('[data-testid="UserName"]');
-      const tabs = col.querySelector('nav[role="tablist"]');
-      if (!name || !tabs) return null;
+      if (!name) { dockWhy = 'no-name'; return null; }
+      // X renders the Posts/Replies bar as a DIV with role=tablist (inside a
+      // nav whose role is "navigation") — verified against x.com markup
+      // 2026-08-05. `nav[role="tablist"]` matches nothing, and that silent
+      // null floated every profile for three releases. Match the role alone.
+      const tabs = col.querySelector('[role="tablist"]');
+      if (!tabs) { dockWhy = 'no-tabs'; return null; }
       // During SPA navigation the previous profile's header lingers for a few
       // frames. Docking against the wrong account's geometry is worse than
       // floating for a beat.
-      if (!((name.textContent || '').toLowerCase().includes('@' + route.handle))) return null;
+      if (!((name.textContent || '').toLowerCase().includes('@' + route.handle))) { dockWhy = 'stale-header'; return null; }
       const actions = col.querySelector('[data-testid="placementTracking"]')
         || col.querySelector('[data-testid="editProfileButton"]')
         || col.querySelector('[data-testid="userActions"]');
@@ -268,6 +277,7 @@
         + 'a[href$="/following"],a[href$="/verified_followers"]')));
       return { col, name, tabs, actions, stack };
     } catch (_) {
+      dockWhy = 'error';
       return null;
     }
   }
@@ -285,7 +295,7 @@
     const colR = a.col.getBoundingClientRect();
     const nameR = a.name.getBoundingClientRect();
     const tabsR = a.tabs.getBoundingClientRect();
-    if (!colR.width || !nameR.width) return kept;
+    if (!colR.width || !nameR.width) { dockWhy = 'hidden'; return kept; }
     // Header scrolled out of view: X pins its mini-header and the tab bar to
     // the viewport, so their rects stop describing the header's real place in
     // the document. Nothing on screen needs fixing — keep what we had.
@@ -293,7 +303,7 @@
     const actR = a.actions ? a.actions.getBoundingClientRect() : null;
     const top = (actR && actR.bottom ? actR.bottom : nameR.top) + DOCK_GAP;
     const maxH = tabsR.top - DOCK_GAP - top;
-    if (maxH < DOCK_MIN_H) return null;
+    if (maxH < DOCK_MIN_H) { dockWhy = 'short'; return null; }
     // The card flexes to the room the header leaves it: right-aligned in the
     // column, left edge pushed out by whichever irreplaceable row (see the
     // avoid-list above) reaches furthest right. Only when even the narrowest
@@ -305,7 +315,7 @@
     }
     const left = Math.max(clearLeft + DOCK_GAP, colR.right - DOCK_EDGE - PANEL_W);
     const width = colR.right - DOCK_EDGE - left;
-    if (width < PANEL_MIN) return null;
+    if (width < PANEL_MIN) { dockWhy = 'narrow'; return null; }
     return {
       mode: 'dock',
       top: Math.round(top + (window.scrollY || 0)),
@@ -327,10 +337,12 @@
         + 'px;width:' + next.width + 'px;';
       shadow.__wrap.classList.add('dock');
       shadow.__wrap.style.maxHeight = next.maxH + 'px';
+      host.setAttribute('data-pt-dock', 'docked');
     } else {
       host.style.cssText = FLOAT_CSS;
       shadow.__wrap.classList.remove('dock');
       shadow.__wrap.style.maxHeight = '';
+      host.setAttribute('data-pt-dock', 'float:' + (dockWhy || 'unknown'));
     }
   }
 

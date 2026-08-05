@@ -143,7 +143,11 @@ function installProfileHeader(doc, spec) {
   const stack = (spec.stack || []).map((r) => ({ marker: r.marker || 'UserDescription', node: geoNode(r) }));
   col.querySelector = (sel) => {
     if (sel.includes('UserName')) return name;
-    if (sel.includes('tablist')) return tabs;
+    // On the real x.com the Posts/Replies bar is a DIV with role=tablist —
+    // a selector that demands a <nav> tag finds nothing. The fake must fail
+    // the same way; a nav-shaped tablist here is how `nav[role="tablist"]`
+    // shipped and silently floated every profile for three releases.
+    if (sel.includes('tablist')) return sel.includes('nav[') ? null : tabs;
     if (sel.includes('placementTracking') || sel.includes('editProfileButton') || sel.includes('userActions')) return actions;
     return null;
   };
@@ -359,6 +363,8 @@ test('on a profile with room, the card docks into the header dead zone', async (
     'capped above the tabs at 520 — the card must never cover Posts/Replies');
   assert.ok(panel.wrap().classList.contains('dock'),
     'docked, the card wears X\'s native-card styling — no overlay shadow');
+  assert.equal(panel.card().getAttribute('data-pt-dock'), 'docked',
+    'the host says so inspectably — a float must always name its reason');
   assert.match(panel.text(), /@degenlabs/, 'and it is still the same card');
 });
 
@@ -407,6 +413,8 @@ test('the website link is irreplaceable, so a long URL blocks the dock', async (
   await panel.settle();
   assert.match(panel.card().style.cssText, /position:fixed/,
     'the profile link is scam-vetting info the card does not carry');
+  assert.equal(panel.card().getAttribute('data-pt-dock'), 'float:narrow',
+    'every float names its reason on the host, readable from devtools');
 });
 
 test('a wide bio leaves no dead zone, so the card floats like before', async () => {
