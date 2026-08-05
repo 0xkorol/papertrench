@@ -681,7 +681,9 @@ test('O-16/O-17/O-18: both floating elements clamp on BOTH bounds and re-clamp o
   // clamps rather than re-asserting the saved coordinate.
   assert.match(content, /const onWindowResize = \(\) => \{ positionBar\(\); reclampPanel\(\); \}/,
     'window resize must re-clamp the bar AND the panel');
-  const positionBarFn = content.slice(content.indexOf('function positionBar()'), content.indexOf('function applyBarOffset'));
+  // positionBar grew an optional measured-left parameter for the O-15 settle
+  // loop; the O-18 clamp contract is unchanged.
+  const positionBarFn = content.slice(content.indexOf('function positionBar('), content.indexOf('function applyBarOffset'));
   assert.match(positionBarFn, /clampBarPos\(/,
     'positionBar must clamp the saved coordinate instead of re-asserting it (O-18)');
 });

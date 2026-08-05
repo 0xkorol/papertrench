@@ -80,6 +80,9 @@
   // Liveness ping to the MAIN-world bridge, so it can tell an alive
   // extension from a dead one and stand its sweeps down (O-04/C-17).
   let bridgePingTimer = null;
+  // O-15: re-arms the positions-bar header measurement after SPA navigations
+  // (route changes rebuild headers). Assigned per mount, nulled on teardown.
+  let restartBarSettle = null;
   let lastCmTickPrice = 0;
   // Sustained out-of-band tick rejections force an early anchor refresh
   // instead of waiting out the 30 s cadence (DEFECT F-10).
@@ -390,7 +393,10 @@
       detectLoop();
     }, 30);
   }
-  const onNavEvent = () => scheduleDetect();
+  const onNavEvent = () => {
+    scheduleDetect();
+    if (restartBarSettle) restartBarSettle(); // O-15: headers rebuild on navs
+  };
   window.addEventListener('popstate', onNavEvent, true);
   window.addEventListener('hashchange', onNavEvent, true);
   onTeardown(() => {
@@ -427,6 +433,9 @@
       // The page's router moved (pushState/replaceState in the MAIN world);
       // re-detect immediately instead of waiting for the poll (DEFECT O-14).
       scheduleDetect();
+      // O-15: a route change can rebuild the site header — re-measure the
+      // positions bar's inset until it stabilizes again.
+      if (restartBarSettle) restartBarSettle();
     }
     else if (ev.type === 'padre-hook-status') {
       padreHookStatus = { ...padreHookStatus, ...(ev.payload || {}) };
@@ -4048,8 +4057,10 @@
    * a fixed offset that looks right on Padre would overlap something else on
    * Axiom or Photon. Falls back to a sane default if nothing is measurable.
    */
+  const BAR_DEFAULT_LEFT = 210; // fallback when no header edge is measurable
+
   function measureBarLeft() {
-    const DEFAULT_LEFT = 210;
+    const DEFAULT_LEFT = BAR_DEFAULT_LEFT;
     const MIN_LEFT = 96;
     const MAX_LEFT = 460;
     try {
@@ -4091,11 +4102,13 @@
     }
   }
 
-  /** Position the bar once the page has painted its own header. */
-  function positionBar() {
+  /** Position the bar once the page has painted its own header. The settle
+   * loop passes its own measurement in so the probe never runs twice a beat. */
+  function positionBar(measuredLeft) {
     if (!els.bar) return;
     const left = typeof settings.positionsBarLeft === 'number' && Number.isFinite(settings.positionsBarLeft)
-      ? settings.positionsBarLeft : measureBarLeft();
+      ? settings.positionsBarLeft
+      : (Number.isFinite(measuredLeft) ? measuredLeft : measureBarLeft());
     const top = typeof settings.positionsBarTop === 'number' && Number.isFinite(settings.positionsBarTop)
       ? settings.positionsBarTop : 7;
     // DEFECT O-18: a saved coordinate from a bigger window is pulled back on
@@ -4822,12 +4835,31 @@
     createUI();
     if (!detectLoopTimer) detectLoopTimer = managedInterval(detectLoop, DETECT_MS);
 
-    // The host header may render after us, and SPA route changes can resize it.
-    const earlyBarTimers = [
-      setTimeout(() => { if (contextAlive()) positionBar(); }, 400),
-      setTimeout(() => { if (contextAlive()) positionBar(); }, 1500),
-    ];
-    onMountCleanup(() => { for (const id of earlyBarTimers) clearTimeout(id); });
+    // DEFECT O-15: the host header may render after us, and two blind samples
+    // (400 ms / 1500 ms) missed late-painting headers — the bar sat on the
+    // site's own nav at the fallback inset until a window resize. Instead,
+    // sample until the measurement STABILIZES: the same measured edge twice
+    // in a row ends the loop; a user-saved coordinate needs no measuring at
+    // all. Cost while settling is one probe pass per beat, cost after
+    // settling is zero, and an SPA route change (header rebuilds) re-arms it.
+    let barSettle = { last: null, until: 0, timer: 0 };
+    const barSettleLoop = () => {
+      barSettle.timer = 0;
+      if (!contextAlive() || !host) return;
+      if (typeof settings.positionsBarLeft === 'number') { positionBar(); return; }
+      const measured = measureBarLeft();
+      positionBar(measured);
+      const settled = measured === barSettle.last && measured !== BAR_DEFAULT_LEFT;
+      barSettle.last = measured;
+      if (settled || Date.now() > barSettle.until) return;
+      barSettle.timer = setTimeout(barSettleLoop, 700);
+    };
+    restartBarSettle = () => {
+      clearTimeout(barSettle.timer);
+      barSettle = { last: null, until: Date.now() + 10_000, timer: setTimeout(barSettleLoop, 400) };
+    };
+    restartBarSettle();
+    onMountCleanup(() => { clearTimeout(barSettle.timer); restartBarSettle = null; });
     // O-18: shrinking the window re-clamps BOTH floating elements so neither
     // can be stranded off-screen. Registered per mount, torn down with it.
     const onWindowResize = () => { positionBar(); reclampPanel(); };

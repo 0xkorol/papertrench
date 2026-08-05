@@ -211,7 +211,8 @@ function runOverlayBar(positions, opts) {
 
   function makeNode(tag) {
     const node = {
-      tag, style: { setProperty() {}, removeProperty() {} }, dataset: {},
+      // Recorded, not no-op: the O-15 settle test asserts the bar's inset.
+      tag, style: { _props: {}, setProperty(k, v) { this._props[k] = v; }, removeProperty(k) { delete this._props[k]; } }, dataset: {},
       children: [], childNodes: [], _listeners: {},
       classList: {
         _s: new Set(),
@@ -279,6 +280,13 @@ function runOverlayBar(positions, opts) {
     createElement: (t) => makeNode(t),
     getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
     addEventListener: () => {}, createTreeWalker: () => ({ nextNode: () => null }),
+    // O-15: the header strip the bar measures. options.headerEdge() names the
+    // right edge of the site's painted header, 0 = nothing painted yet.
+    elementFromPoint: (x) => {
+      const edge = options.headerEdge ? options.headerEdge() : 0;
+      if (!(edge > 0) || x >= edge) return null;
+      return { getBoundingClientRect: () => ({ width: Math.min(edge, 400), right: edge, top: 8 }) };
+    },
   };
 
   const url = options.url || 'https://example.com/browse';
@@ -747,4 +755,42 @@ test('a cross-origin postMessage is never read as bridge traffic', async () => {
 
   assert.equal(openPositionCount(ov), 0,
     'a message from a foreign origin must be dropped before any trade logic runs');
+});
+
+/* ---------------- O-15: the bar measures until the header settles ------- */
+
+test('O-15: a late-painting header is measured when it arrives, not missed forever', async () => {
+  // The header paints LATE — after the old fixed 400ms/1500ms samples would
+  // both have fired and given up on the fallback inset over the site's nav.
+  let edge = 0;
+  const ov = runOverlayBar(null, {
+    url: 'https://axiom.trade/pulse',
+    state: seededState(),
+    resolve: pricedResolve(),
+    headerEdge: () => edge,
+  });
+
+  await ov.advance(2000);
+  assert.equal(ov.bar().style._props['--pt-bar-left'], '210px',
+    'with no header painted the bar sits at the fallback inset');
+
+  edge = 300; // the site header finally paints, 2s in
+  await ov.advance(1600); // two settle beats
+  assert.equal(ov.bar().style._props['--pt-bar-left'], '318px',
+    'the settle loop must pick up the real header edge (+18px clearance)');
+});
+
+test('O-15: a user-saved coordinate ends the measuring — their placement wins', async () => {
+  let edge = 300;
+  const ov = runOverlayBar(null, {
+    url: 'https://axiom.trade/pulse',
+    state: seededState(),
+    resolve: pricedResolve(),
+    headerEdge: () => edge,
+    initialSettings: { positionsBarLeft: 42, positionsBarTop: 9 },
+  });
+
+  await ov.advance(2400);
+  assert.equal(ov.bar().style._props['--pt-bar-left'], '42px',
+    'a dragged bar keeps its saved place; measuring must not fight the user');
 });
