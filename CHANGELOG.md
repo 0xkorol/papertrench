@@ -3,6 +3,15 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.7.1 — 2026-08-05
+
+Housekeeping with a straight face: v2.7.0 was tagged and published
+mid-batch, before the last five commits landed. If you downloaded 2.7.0,
+update — it is missing the Instant terminal links, the dashboard
+refresh fix ("stopped re-reading everything every 4 seconds"), and an
+X-Ray dock fix, all described in the v2.7.0 notes below. v2.7.1 is the
+complete batch; nothing else changed.
+
 ## v2.7.0 — 2026-08-05
 
 Community feedback batch #2 (thanks again lev) — all four items, with the
