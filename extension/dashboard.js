@@ -845,7 +845,13 @@ function renderOverview(el) {
   const miniRounds = el.querySelector('#rounds-mini');
   if (miniRounds) miniRounds.innerHTML = renderMiniRounds();
   const openPos = el.querySelector('#open-pos');
-  if (openPos) openPos.innerHTML = renderOpenPositions();
+  if (openPos) {
+    openPos.innerHTML = renderOpenPositions();
+    // The "still holding" flex — share an OPEN position mid-trade, like the
+    // real terminals do. Fresh nodes per render, so direct binding is safe.
+    openPos.querySelectorAll('.share-open-btn').forEach((button) =>
+      button.addEventListener('click', () => openShareCardForPosition(button.dataset.mint)));
+  }
   // The canvas must be in the document before it can be measured and drawn.
 }
 
@@ -1010,6 +1016,7 @@ function renderOpenPositions() {
           <span class="mono" style="font-size:12px" data-pos-qty>${fmt(p.qty, 2)} tokens</span>
           <span class="${win ? 'green' : 'red'}" style="display:block;margin-top:3px;font-weight:800;font-size:14px" data-pos-pnl>${win ? '+' : ''}${fmt(pnl)} SOL (${win ? '+' : ''}${pct.toFixed(1)}%)</span>
         </span>
+        <button class="btn-sec share-open-btn" data-mint="${esc(p.mint)}" style="margin-left:12px">Share</button>
       </div>`;
   }).join('');
 }
@@ -2170,6 +2177,54 @@ async function cardBgRemove(id) {
  * on a shared image are the same ones the journal holds — there is no separate
  * "display" figure that could drift from the real result.
  */
+/**
+ * Share an OPEN position — the "still holding" card. Every number is the
+ * live mark the dashboard already shows: value = qty x last RECORDED price,
+ * unrealized P&L from the engine, USD only where fills genuinely carried it.
+ * The card states OPEN and its middle column reads POSITION, not RETURNED.
+ */
+function openShareCardForPosition(mint) {
+  const pos = (state.positions || {})[mint];
+  if (!pos) return;
+  const qty = Number(pos.qty) || 0;
+  const lastNative = Number(pos.lastPriceNative) || 0;
+  const valueSol = qty * lastNative;
+  const fills = (state.journal || []).filter((t) => t.mint === mint && t.ts >= pos.openedAt);
+  const averages = E.averageFillPrices(state, mint);
+  const lastUsd = Number(pos.lastPriceUsd);
+
+  cardSourceCurrent = {
+    mint: pos.mint,
+    symbol: pos.symbol,
+    site: pos.site,
+    openedAt: pos.openedAt,
+    heldMs: Date.now() - pos.openedAt,
+    investedSol: pos.investedSol,
+    // The live value stands in for proceeds on an open position (the model
+    // labels the column POSITION when open).
+    returnedSol: valueSol,
+    pnlSol: E.unrealizedPnl(pos),
+    pnlPct: E.positionPnlPct(pos),
+    entryPrice: averages && Number(averages.avgBuyNative) > 0 ? averages.avgBuyNative : null,
+    lastPriceNative: lastNative,
+    entryMcap: null,
+    exitMcap: null,
+    investedUsd: PC.usdTotal(fills, 'buy', 'solGross'),
+    // Live value in USD only when the mark genuinely recorded a USD price.
+    returnedUsd: Number.isFinite(lastUsd) && lastUsd > 0 ? qty * lastUsd : null,
+  };
+  cardPrefs = { ...(settings.cardPrefs || {}) };
+
+  cardMedia = null;
+  if (cardMediaUrl) { try { URL.revokeObjectURL(cardMediaUrl); } catch (_) {} cardMediaUrl = null; }
+
+  if (!paintShareCard()) return;
+  document.getElementById('card-modal').classList.add('open');
+  showCardMessage('');
+  syncCardCustomize();
+  refreshCardGallery();
+}
+
 function openShareCard(roundId) {
   const round = (state.rounds || []).find((r) => r.id === roundId);
   if (!round) return;
@@ -3128,6 +3183,12 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-overlay-auto-hide" ${settings.overlayHideWhenNoToken !== false ? 'checked' : ''}> Hide overlay when no token is detected</label><small>The panel disappears on home pages and screeners, then pops back when you open a coin.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-focus-mode" ${settings.panelFocusMode === true ? 'checked' : ''}> Focus mode (Axiom-style)</label><small>Strips the banner, watermark, sparkline, thesis and last-close card from the trade tab — only token, price, balance and buy/sell controls remain. For distraction-free execution.</small></div>
       </div>
+      <div class="card">
+        <h3>Instant X links</h3>
+        <div class="field field-check"><label><input type="checkbox" id="set-warm-x" ${settings.warmXLinksEnabled === true ? 'checked' : ''}> Instant X links</label><small>X posts, profiles, communities, and CA searches clicked on a trading site open in a kept-warm viewer tab (~0.5s instead of ~3.5s), with hover prefetch. Keeps one muted background x.com tab while on. Ctrl/Cmd/middle-click always opens normal tabs.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-warm-cards" ${settings.warmHoverCardsEnabled === true ? 'checked' : ''}> Tweet preview card on hover</label><small>Hover an X link and a large readable preview of the post renders right on the page — the card itself is the click target, so no aiming at a 14px icon. Deleted posts say so before you click. Uses X's public oEmbed endpoint (no login, no tracking — see docs/PERMISSIONS.md).</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-warm-row" ${settings.warmHoverRowEnabled === true ? 'checked' : ''}> Preview from anywhere on the row</label><small>Rest the cursor about a third of a second anywhere on a token row and its X preview appears — no need to find the icon at all. Needs Instant X links on.</small></div>
+      </div>
     </div>
     <div class="card" style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn" id="save-settings">Save settings</button>
@@ -3354,6 +3415,9 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     overlayEnabled: document.getElementById('set-overlay').checked,
     overlayHideWhenNoToken: document.getElementById('set-overlay-auto-hide').checked,
     panelFocusMode: document.getElementById('set-focus-mode').checked,
+    warmXLinksEnabled: document.getElementById('set-warm-x').checked,
+    warmHoverCardsEnabled: document.getElementById('set-warm-cards').checked,
+    warmHoverRowEnabled: document.getElementById('set-warm-row').checked,
   };
 }
 

@@ -6,7 +6,7 @@
 Real prices. Fake money. A record you can actually learn from.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-FF9D45.svg?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-682%20passing-34D399?style=flat-square)](#tests)
+[![Tests](https://img.shields.io/badge/tests-695%20passing-34D399?style=flat-square)](#tests)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-6AA9FF?style=flat-square)](#install)
 [![No tracking](https://img.shields.io/badge/telemetry-none-8D97A9?style=flat-square)](#privacy)
 
@@ -130,7 +130,7 @@ passable as a real one.
 - **No account. No signup. No telemetry.** Nothing is sent anywhere about you.
 - **A real off switch.** The ⏻ button in the popup turns PaperTrench fully dormant — nothing injected or rendered on any site, live in every open tab — until you turn it back on. Wallet and settings are kept.
 - **Everything is local.** Trades, settings, replays, and recordings live in your browser's own storage.
-- **Network calls are only:** the public Dexscreener and Jupiter price APIs, and — only if *you* configure it — your own AI endpoint.
+- **Network calls are only:** the public Dexscreener and Jupiter price APIs, X's public oEmbed endpoint if you opt into hover tweet previews (no login, `dnt=1`, posts you hover only), and — only if *you* configure it — your own AI endpoint.
 - **Recordings never leave your machine.** They're stored in IndexedDB and saved to your downloads folder.
 
 The permissions in `manifest.json` are the minimum needed: storage for your wallet, `tabs`/`activeTab` for chart frames, and `offscreen` for the optional recorder. Content scripts run **only** on the supported trading sites — never anywhere else. The full permission-by-permission audit lives in [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md).
@@ -144,7 +144,7 @@ cd extension
 node --test
 ```
 
-682 tests covering price resolution, tick validation, portfolio arithmetic, the Padre chart bridge, fresh-launch handling, the positions bar, session replay, the attestation chain, and browser-context loading.
+695 tests covering price resolution, tick validation, portfolio arithmetic, the Padre chart bridge, fresh-launch handling, the positions bar, session replay, the attestation chain, and browser-context loading.
 
 The suite is mutation-tested: fixes were verified by reverting them and confirming the tests fail. The one test that hits a live API skips — rather than fails — when offline.
 

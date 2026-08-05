@@ -559,3 +559,34 @@ test('the model is rebuilt per paint so toggles re-derive strings from the same 
   assert.match(paint, /prefs: cardPrefs \|\| settings\.cardPrefs \|\| \{\}/,
     'the working prefs copy drives the flags');
 });
+
+/* ---------------- open-position sharing (the "still holding" flex) ------- */
+
+test("an open position cards honestly: OPEN status, POSITION column, live value", () => {
+  const model = PC.cardModel({
+    mint: MINT, symbol: "PT", site: "padre",
+    openedAt: 1_800_000_000_000, heldMs: 45 * 60_000,
+    investedSol: 8.16, returnedSol: 5.85, pnlSol: -2.31, pnlPct: -28.31,
+    entryPrice: 0.0000041, lastPriceNative: 0.0000029,
+  }, {});
+  assert.ok(model, "an open source must model");
+  assert.equal(model.open, true);
+  assert.match(model.pnlSolHeroText, /^-2\.31/);
+  assert.equal(model.win, false);
+  // The journey line must not claim an EXIT that has not happened.
+  // (drawCard skips the EXIT segment when model.open — pinned below.)
+  const pn = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "pnlcard.js"), "utf8");
+  assert.match(pn, /!model\.open && model\.exitText/, "no EXIT segment on an open card");
+  assert.match(pn, /model\.open \? .POSITION. : .RETURNED./, "the middle column reads POSITION while open");
+});
+
+test("the dashboard offers Share on live open positions", () => {
+  const dash = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "dashboard.js"), "utf8");
+  assert.match(dash, /share-open-btn/, "open-position rows carry a Share button");
+  const fnStart = dash.indexOf("function openShareCardForPosition(");
+  assert.ok(fnStart !== -1);
+  const block = dash.slice(fnStart, dash.indexOf("\nfunction openShareCard(", fnStart));
+  assert.match(block, /E\.unrealizedPnl\(pos\)/, "P&L is the engine live mark, never recomputed ad hoc");
+  assert.match(block, /Number\.isFinite\(lastUsd\) && lastUsd > 0 \? qty \* lastUsd : null/,
+    "USD value only from a genuinely recorded mark — no fabricated conversion");
+});

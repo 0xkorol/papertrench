@@ -33,6 +33,8 @@
   // /handle/status/123... and the handleless embed form /i/web/status/123...
   const POST_RE = /^\/(?:i\/web|([A-Za-z0-9_]{1,15}))\/status(?:es)?\/(\d+)/;
   const PROFILE_RE = /^\/([A-Za-z0-9_]{1,15})\/?$/;
+  // Memecoins live in X communities; GMGN's trench rows link them directly.
+  const COMMUNITY_RE = /^\/i\/communities\/\d+/;
 
   function isXHost(hostname) {
     return X_HOSTS.has(String(hostname || '').toLowerCase());
@@ -41,9 +43,11 @@
   /**
    * Classify an href as a warm-routable X target.
    *
-   * Returns { kind: 'post', handle, postId, url } for a post,
-   *         { kind: 'profile', handle, url } for a profile,
-   *         null for everything else (system routes, other hosts, non-https).
+   * Returns { kind: 'post'|'profile'|'community'|'search', handle, postId,
+   * url }, or null for everything else (system routes, other hosts,
+   * non-https). Posts and profiles carry the fields their arrival check
+   * needs; communities and searches verify by title movement alone, so they
+   * carry only the kind.
    *
    * The returned url is canonicalized onto https://x.com: the viewer tab lives
    * on x.com, and a same-document SPA navigation can only target its own
@@ -57,6 +61,20 @@
       return null;
     }
     if (url.protocol !== 'https:' || !isXHost(url.hostname)) return null;
+
+    // The two forms trading platforms emit that are NOT handle-shaped:
+    // a token's X community (GMGN links these on every trench row) and a
+    // search for its CA/ticker (Axiom's X affordance). Both live under
+    // otherwise-reserved first segments, so they are matched before the
+    // reserved-set check can refuse them.
+    if (COMMUNITY_RE.test(url.pathname)) {
+      return { kind: 'community', handle: null, postId: null,
+        url: 'https://x.com' + url.pathname + url.search };
+    }
+    if ((url.pathname === '/search' || url.pathname === '/search/') && url.searchParams.get('q')) {
+      return { kind: 'search', handle: null, postId: null,
+        url: 'https://x.com/search' + url.search };
+    }
 
     const post = POST_RE.exec(url.pathname);
     if (post) {

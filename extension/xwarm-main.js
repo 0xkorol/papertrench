@@ -9,7 +9,10 @@
  *  - A post has arrived when the rendered article links to its own
  *    /status/<id> (the tweet's timestamp anchor) — an exact, per-post signal.
  *  - A profile has arrived when the title carries its @handle.
- *  - X's error surface ([data-testid="error-detail"]) is an explicit failure.
+ *  - An error surface X renders in response to the navigation (deleted or
+ *    nonexistent post) counts as ARRIVED — reloading a dead URL cannot say
+ *    anything better, and doing so is what made deleted tweets slow. Only an
+ *    error already on screen before the navigation is ignored as a signal.
  *  - Fallback: the title moved to a genuinely different page. Titles are
  *    compared with the "(3) " unread-count prefix stripped — a notification
  *    count ticking over changes the title WITHOUT navigation, and counting
@@ -41,8 +44,20 @@
     return String(title || '').replace(/^\(\d+\)\s*/, '');
   }
 
-  function arrived(target) {
-    if (document.querySelector('main [data-testid="error-detail"]')) return 'error';
+  function errorSurface() {
+    return !!document.querySelector('main [data-testid="error-detail"]');
+  }
+
+  function arrived(target, beforeError) {
+    // An error page X renders IN RESPONSE to this navigation is an ARRIVAL,
+    // not a failure: for a deleted tweet, "this post doesn't exist" is the
+    // answer, and a full reload of the same dead URL spends seconds saying
+    // the same thing (field report: deleted launch tweets felt buggy and
+    // slow — the old code error→repair→reload→same error). A deleted launch
+    // tweet is trading signal; show it instantly. An error that was ALREADY
+    // on screen before the navigation proves nothing and confirms nothing —
+    // those fall through to the title check and, at worst, the repair.
+    if (errorSurface()) return beforeError ? null : 'error_rendered';
     if (target.kind === 'post' && target.postId
         && document.querySelector('main article a[href*="/status/' + target.postId + '"]')) {
       return 'ok';
@@ -54,7 +69,7 @@
     return null;
   }
 
-  function watch(requestId, target, beforeTitle) {
+  function watch(requestId, target, beforeTitle, beforeError) {
     const token = ++watchToken;
     const startedAt = performance.now();
     let lastCheckAt = 0;
@@ -74,9 +89,9 @@
       const now = performance.now();
       if (now - lastCheckAt < CHECK_THROTTLE_MS) return; // X mutates in storms
       lastCheckAt = now;
-      const got = arrived(target);
+      const got = arrived(target, beforeError);
       if (got === 'ok') { finish(true, null); return; }
-      if (got === 'error') { finish(false, 'x_error_page'); return; }
+      if (got === 'error_rendered') { finish(true, 'x_error_page'); return; }
       if (normalizeTitle(document.title) !== normalizeTitle(beforeTitle)) {
         finish(true, 'title_changed');
         return;
@@ -105,8 +120,11 @@
         respond(data.requestId, false, 'cross_origin');
         return;
       }
+      // Posts and profiles have exact arrival signals; communities and
+      // searches verify by title movement (the generic fallback in watch),
+      // so kind is all they carry.
       target = {
-        kind: data.kind === 'profile' ? 'profile' : 'post',
+        kind: ['post', 'profile', 'community', 'search'].includes(data.kind) ? data.kind : 'post',
         handle: typeof data.handle === 'string' ? data.handle.toLowerCase() : null,
         postId: typeof data.postId === 'string' ? data.postId : null,
         path: url.pathname + url.search,
@@ -122,6 +140,7 @@
     }
 
     const beforeTitle = document.title;
+    const beforeError = errorSurface();
     try {
       window.history.pushState({}, '', target.path);
       window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
@@ -129,6 +148,6 @@
       respond(data.requestId, false, 'pushstate_failed');
       return;
     }
-    watch(data.requestId, target, beforeTitle);
+    watch(data.requestId, target, beforeTitle, beforeError);
   });
 })();

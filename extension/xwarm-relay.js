@@ -25,7 +25,7 @@
       source: REQ_TAG,
       requestId: String(msg.requestId || ''),
       url: String(msg.url || ''),
-      kind: msg.kind === 'profile' ? 'profile' : 'post',
+      kind: ['post', 'profile', 'community', 'search'].includes(msg.kind) ? msg.kind : 'post',
       handle: typeof msg.handle === 'string' ? msg.handle : null,
       postId: typeof msg.postId === 'string' ? msg.postId : null,
     }, window.location.origin);

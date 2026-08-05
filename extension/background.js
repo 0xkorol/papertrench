@@ -40,6 +40,8 @@ const DEFAULTS = {
   positionsBarEnabled: true,
   positionsBarHidden: false,
   warmXLinksEnabled: false,
+  warmHoverCardsEnabled: false,
+  warmHoverRowEnabled: false,
   settingsRevision: 6,
   aiEndpoint: '',
   aiModel: '',
@@ -656,6 +658,9 @@ function warmSpaResult(message, sender) {
   // messaged may report, and only for the request that is still live.
   if (!pending || pending.requestId !== message.requestId) return;
   if (message.ok === true) {
+    if (message.reason === 'x_error_page') {
+      console.debug('PaperTrench warm links: target renders X\'s error page (deleted post?) — shown as-is, no reload');
+    }
     warmSupersede(tabId);
     return;
   }
@@ -813,6 +818,80 @@ async function warmOpen(rawUrl, sender, settings) {
   });
 }
 
+/* Hover tweet cards: X's public oEmbed endpoint returns a post's author and
+ * text for any status URL — no auth, no cookies, and `dnt=1` asks for no
+ * tracking. Fetched from the worker (host_permissions covers it), cached hard
+ * (positive AND gone results — a deleted post stays deleted), and requested
+ * only on the same hover dwell that fires the prefetch, never on the click
+ * path. A 404 here is the pre-click rug signal: the card can say "post
+ * unavailable" before the trader spends a click on it.
+ * This is PaperTrench's ONLY third-party call besides the price APIs and the
+ * user's own endpoints — documented in docs/PERMISSIONS.md and README. */
+const WARM_OEMBED_URL = 'https://publish.twitter.com/oembed';
+const WARM_OEMBED_TIMEOUT_MS = 3500;
+const WARM_OEMBED_CACHE_MAX = 200;
+const warmOembedCache = new Map(); // canonical post url -> result
+
+function decodeOembedEntities(s) {
+  return String(s)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&mdash;/g, '—');
+}
+
+/** Text + date out of the oEmbed blockquote HTML. No DOM in a worker, so
+ * this is string surgery on a format that has been stable for a decade. */
+function parseOembedHtml(html) {
+  const p = /<p[^>]*>([\s\S]*?)<\/p>/.exec(String(html));
+  const text = p
+    ? decodeOembedEntities(p[1].replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''))
+    : '';
+  const date = /<\/p>[\s\S]*?<a[^>]*>([^<]+)<\/a>\s*<\/blockquote>/.exec(String(html));
+  return { text: text.slice(0, 600), date: date ? decodeOembedEntities(date[1]) : null };
+}
+
+async function warmOembed(rawUrl, settings) {
+  if (!warmFeatureOn(settings)) return { ok: false };
+  const target = XL.classify(String(rawUrl || ''));
+  if (!target || target.kind !== 'post') return { ok: false }; // oEmbed does posts only
+  const cached = warmOembedCache.get(target.url);
+  if (cached) return cached;
+
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), WARM_OEMBED_TIMEOUT_MS);
+  let result = null;
+  try {
+    const response = await fetch(
+      WARM_OEMBED_URL + '?omit_script=1&dnt=1&hide_thread=1&url=' + encodeURIComponent(target.url),
+      { signal: controller.signal, redirect: 'follow' }
+    );
+    if (response.status === 404 || response.status === 403) {
+      result = { ok: true, gone: true, url: target.url };
+    } else if (response.ok) {
+      const json = await response.json();
+      const parsed = parseOembedHtml(json.html || '');
+      result = {
+        ok: true, gone: false, url: target.url,
+        authorName: String(json.author_name || '').slice(0, 80),
+        text: parsed.text, date: parsed.date,
+      };
+    }
+  } catch (_) {
+    // Network trouble: report nothing and cache nothing — the next hover may
+    // succeed, and the card simply not appearing costs the user zero.
+  } finally {
+    clearTimeout(abortTimer);
+  }
+  if (!result) return { ok: false };
+  if (warmOembedCache.size >= WARM_OEMBED_CACHE_MAX) {
+    warmOembedCache.delete(warmOembedCache.keys().next().value);
+  }
+  warmOembedCache.set(target.url, result);
+  return result;
+}
+
 async function warmSettingsChanged(settings) {
   if (warmFeatureOn(settings)) {
     // Toggled on with trading tabs already open? Warm up right away.
@@ -965,6 +1044,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'pt_warm_hint':
         warmHint(message.url, settings).catch(() => {});
         sendResponse({ ok: true });
+        break;
+
+      case 'pt_warm_oembed':
+        sendResponse(await warmOembed(message.url, settings));
         break;
 
       case 'pt_warm_prewarm':

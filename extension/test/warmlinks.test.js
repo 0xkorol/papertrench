@@ -50,11 +50,19 @@ test('the classifier routes posts and profiles and refuses everything else', () 
   const profile = plain(X.classify('https://x.com/SomeToken'));
   assert.deepEqual(profile, { kind: 'profile', handle: 'sometoken', postId: null, url: 'https://x.com/SomeToken' });
 
+  // The trench-native forms: communities (GMGN rows) and CA searches (Axiom).
+  const community = plain(X.classify('https://twitter.com/i/communities/2012484577227419741'));
+  assert.deepEqual(community, { kind: 'community', handle: null, postId: null,
+    url: 'https://x.com/i/communities/2012484577227419741' });
+  const search = plain(X.classify('https://x.com/search?q=bonk&src=typed_query'));
+  assert.equal(search.kind, 'search');
+  assert.equal(search.url, 'https://x.com/search?q=bonk&src=typed_query');
+
   // System surfaces, other hosts, other protocols: never warm-routed.
   for (const href of [
-    'https://x.com/home', 'https://x.com/search?q=bonk', 'https://x.com/compose/post',
-    'https://x.com/i/communities/123', 'https://x.com/settings/account',
-    'https://x.com/hashtag/bonk',
+    'https://x.com/home', 'https://x.com/search', 'https://x.com/compose/post',
+    'https://x.com/i/communities/', 'https://x.com/settings/account',
+    'https://x.com/hashtag/bonk', 'https://x.com/intent/tweet?text=hi',
     'https://gmgn.ai/sol/token/abc', 'https://xcom.evil.example/user/status/1',
     'http://x.com/user/status/1', 'not a url', '',
   ]) {
@@ -96,7 +104,7 @@ test('every warm message type sent has a handler on the other side', () => {
   const warmLinks = fs.readFileSync(path.join(ROOT, 'warm-links.js'), 'utf8');
   const relay = fs.readFileSync(path.join(ROOT, 'xwarm-relay.js'), 'utf8');
 
-  for (const type of ['pt_warm_open', 'pt_warm_hint', 'pt_warm_prewarm']) {
+  for (const type of ['pt_warm_open', 'pt_warm_hint', 'pt_warm_oembed', 'pt_warm_prewarm']) {
     assert.match(warmLinks, new RegExp(`type: '${type}'`), `warm-links.js must send ${type}`);
     assert.match(background, new RegExp(`case '${type}'`), `background.js must handle ${type}`);
   }
@@ -120,6 +128,7 @@ function warmWorker(opts = {}) {
   const session = {};
   const tabsById = new Map();
   let nextTabId = 500;
+  const fetchCalls = [];
   const calls = { created: [], updated: [], removed: [], sent: [], windows: [] };
   const listeners = {};
   const timers = [];
@@ -133,7 +142,11 @@ function warmWorker(opts = {}) {
     clearTimeout: (id) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     setInterval: () => 1,
     clearInterval: () => {},
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetch: async (url, init) => {
+      fetchCalls.push(String(url));
+      if (opts.fetchImpl) return opts.fetchImpl(String(url), init);
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
     chrome: {
       storage: {
         local: {
@@ -213,7 +226,7 @@ function warmWorker(opts = {}) {
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8'), context, { filename: 'background.js' });
 
   return {
-    values, session, tabsById, calls, listeners, timers,
+    values, session, tabsById, calls, listeners, timers, fetchCalls,
     get listener() { return messageListener; },
     seedViewer(props = {}) {
       const tab = {
@@ -532,6 +545,109 @@ test('a failed prefetch repairs while still hidden — the fallback IS a prefetc
     'and stays hidden throughout');
 });
 
+/* ---------------- hover preview cards (oEmbed) ---------------- */
+
+const OEMBED_HTML = '<blockquote class="twitter-tweet"><p lang="en" dir="ltr">gm &amp; &lt;3 devs<br>second line</p>&mdash; Degen (@degentoken) <a href="https://twitter.com/degentoken/status/999888777">August 5, 2026</a></blockquote>';
+
+test('the worker fetches oEmbed with dnt, parses honestly, and caches hard', async () => {
+  const worker = warmWorker({
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ author_name: 'Degen', html: OEMBED_HTML }) }),
+  });
+  const first = await send(worker.listener, { type: 'pt_warm_oembed', url: POST });
+  assert.equal(first.ok, true);
+  assert.equal(first.gone, false);
+  assert.equal(first.authorName, 'Degen');
+  assert.equal(first.text, 'gm & <3 devs\nsecond line', 'entities decoded, <br> to newline, tags stripped');
+  assert.equal(first.date, 'August 5, 2026');
+
+  const oembedCalls = worker.fetchCalls.filter((u) => u.includes('publish.twitter.com/oembed'));
+  assert.equal(oembedCalls.length, 1);
+  assert.ok(oembedCalls[0].includes('dnt=1'), 'every request carries do-not-track');
+
+  await send(worker.listener, { type: 'pt_warm_oembed', url: POST });
+  assert.equal(worker.fetchCalls.filter((u) => u.includes('oembed')).length, 1,
+    'second hover of the same post must be served from cache');
+});
+
+test('a deleted post reports gone — the rug signal arrives before the click', async () => {
+  const worker = warmWorker({ fetchImpl: async () => ({ ok: false, status: 404, json: async () => ({}) }) });
+  const result = await send(worker.listener, { type: 'pt_warm_oembed', url: POST });
+  assert.equal(result.ok, true);
+  assert.equal(result.gone, true);
+  await send(worker.listener, { type: 'pt_warm_oembed', url: POST });
+  assert.equal(worker.fetchCalls.filter((u) => u.includes('oembed')).length, 1,
+    'gone is cached too — a deleted post stays deleted');
+});
+
+test('oEmbed is refused for non-posts and when the feature is off — zero traffic', async () => {
+  const workerA = warmWorker();
+  const community = await send(workerA.listener, { type: 'pt_warm_oembed', url: 'https://x.com/i/communities/123456' });
+  assert.equal(community.ok, false);
+  const workerB = warmWorker({ enabled: false });
+  const off = await send(workerB.listener, { type: 'pt_warm_oembed', url: POST });
+  assert.equal(off.ok, false);
+  assert.equal(
+    workerA.fetchCalls.concat(workerB.fetchCalls).filter((u) => u.includes('oembed')).length, 0,
+    'no request may leave the machine for a refused card');
+});
+
+test('hover dwell requests a preview only under the card opt-in', () => {
+  const off = loadWarmLinks(); // cards default OFF
+  off.winListeners.mouseover.fn(clickEvent(POST));
+  off.fireTimers();
+  assert.equal(off.sent.filter((m) => m.type === 'pt_warm_oembed').length, 0,
+    'no oEmbed traffic without the setting');
+  assert.equal(off.sent.filter((m) => m.type === 'pt_warm_hint').length, 1,
+    'prefetch is unaffected by the card setting');
+
+  const on = loadWarmLinks({ settings: { warmHoverCardsEnabled: true } });
+  on.winListeners.mouseover.fn(clickEvent(POST));
+  on.fireTimers();
+  assert.equal(on.sent.filter((m) => m.type === 'pt_warm_oembed').length, 1);
+  assert.equal(on.sent.filter((m) => m.type === 'pt_warm_hint').length, 1);
+});
+
+test('row mode: a hover anywhere on the row previews its best X link', () => {
+  // The user-reported pain: the X icon is 14px and the site cards demand you
+  // hit it. Row mode resolves the hovered element's row (nearest ancestor
+  // with 1-3 X links) and previews the best one — post over community over
+  // profile — from a rest anywhere on the row. Off by default.
+  const page = loadWarmLinks({ settings: { warmHoverRowEnabled: true } });
+  const postAnchor = fakeAnchor(POST);
+  const communityAnchor = fakeAnchor('https://x.com/i/communities/555');
+  const row = {
+    tagName: 'DIV',
+    querySelectorAll: (sel) => (sel === 'a[href]' ? [communityAnchor, postAnchor] : []),
+    parentElement: null,
+    contains: () => true,
+  };
+  const cell = { tagName: 'TD', closest: () => null, querySelectorAll: () => [], parentElement: row, contains: () => false };
+  page.winListeners.mouseover.fn({ target: cell, composedPath: () => [cell, row] });
+  page.fireTimers();
+  const hint = page.sent.find((m) => m.type === 'pt_warm_hint');
+  assert.ok(hint, 'the row hover must prefetch');
+  assert.equal(hint.url, POST, 'the post outranks the community as the preview target');
+  assert.equal(page.sent.filter((m) => m.type === 'pt_warm_oembed').length, 1,
+    'row mode implies the preview');
+
+  // Default-off: the same hover does nothing.
+  const off = loadWarmLinks();
+  off.winListeners.mouseover.fn({ target: cell, composedPath: () => [cell, row] });
+  off.fireTimers();
+  assert.equal(off.sent.filter((m) => m.type !== 'pt_warm_prewarm').length, 0,
+    'row hovering must be inert unless explicitly enabled');
+});
+
+test('the dashboard exposes and persists all three Instant X links settings', () => {
+  const dash = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
+  for (const id of ['set-warm-x', 'set-warm-cards', 'set-warm-row']) {
+    assert.match(dash, new RegExp(`id="${id}"`), `${id} must be in the settings form`);
+  }
+  for (const key of ['warmXLinksEnabled', 'warmHoverCardsEnabled', 'warmHoverRowEnabled']) {
+    assert.match(dash, new RegExp(`${key}: document\\.getElementById`), `${key} must be persisted on save`);
+  }
+});
+
 /* ---------------- trading-site click interception ---------------- */
 
 function loadWarmLinks(opts = {}) {
@@ -541,7 +657,7 @@ function loadWarmLinks(opts = {}) {
   const domListeners = {};
   const winListeners = {};
   const win = {
-    addEventListener: (type, fn) => { winListeners[type] = fn; },
+    addEventListener: (type, fn, capture) => { winListeners[type] = { fn, capture: capture === true }; },
     postMessage: (data) => posted.push(data),
     location: { href: 'https://axiom.trade/meme/PAIR', origin: 'https://axiom.trade' },
   };
@@ -553,7 +669,7 @@ function loadWarmLinks(opts = {}) {
     chrome: {
       runtime: { id: 'papertrench-test', sendMessage: (msg) => { sent.push(msg); return Promise.resolve({}); }, lastError: undefined },
       storage: {
-        local: { get: (keys, cb) => cb({ pt_settings: { warmXLinksEnabled: opts.enabled !== false } }) },
+        local: { get: (keys, cb) => cb({ pt_settings: { warmXLinksEnabled: opts.enabled !== false, ...(opts.settings || {}) } }) },
         onChanged: { addListener: () => {} },
       },
     },
@@ -569,11 +685,19 @@ function loadWarmLinks(opts = {}) {
   return { posted, sent, timers, fireTimers, domListeners, winListeners, win };
 }
 
+function fakeAnchor(href) {
+  return {
+    tagName: 'A', href,
+    getAttribute: (name) => (name === 'href' ? href : null),
+    getBoundingClientRect: () => ({ left: 10, top: 10, right: 24, bottom: 24, width: 14, height: 14 }),
+  };
+}
+
 function clickEvent(href, mods = {}) {
   const event = {
     button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
     defaultPrevented: false,
-    target: { closest: (sel) => (sel === 'a[href]' ? { href } : null) },
+    target: { closest: (sel) => (sel === 'a[href]' ? fakeAnchor(href) : null) },
     prevented: false, stopped: false,
     preventDefault() { this.prevented = true; },
     stopPropagation() { this.stopped = true; },
@@ -584,7 +708,8 @@ function clickEvent(href, mods = {}) {
 
 test('a plain click on an X post link is claimed and routed', () => {
   const page = loadWarmLinks();
-  const click = page.domListeners.click;
+  const click = page.winListeners.click;
+  assert.ok(click, 'the click listener must sit on WINDOW — the first capture node, ahead of any site handler');
   assert.equal(click.capture, true,
     'must be capture phase: it runs before site handlers (no double open) and catches target=_blank anchors');
 
@@ -596,9 +721,43 @@ test('a plain click on an X post link is claimed and routed', () => {
   assert.equal(page.sent.find((m) => m.type === 'pt_warm_open').url, POST);
 });
 
+test('the anchor is found through composedPath when shadow DOM hides it from closest', () => {
+  // Shadow retargeting points event.target at the shadow HOST for listeners
+  // out on window, so target.closest never sees the anchor — the exact way a
+  // web-component-rendered row would silently defeat interception.
+  const page = loadWarmLinks();
+  const event = clickEvent(POST, {
+    target: { closest: () => null },
+    composedPath: () => [{ tagName: 'svg' }, fakeAnchor(POST), { tagName: 'DIV' }],
+  });
+  page.winListeners.click.fn(event);
+  assert.equal(event.prevented, true, 'the composedPath anchor must be honored');
+  assert.equal(page.sent.filter((m) => m.type === 'pt_warm_open').length, 1);
+});
+
+test('GMGN community links and Axiom-style CA searches warm-route too', () => {
+  // The first field report ("works on Padre, not GMGN/Axiom") came down to
+  // link forms: GMGN trench rows link x.com/i/communities/<id>, and Axiom's
+  // X affordance is a search for the CA. Both used to fall through natively.
+  const page = loadWarmLinks();
+  const community = clickEvent('https://x.com/i/communities/2012484577227419741');
+  page.winListeners.click.fn(community);
+  assert.equal(community.prevented, true, 'community links must be claimed');
+
+  const search = clickEvent('https://x.com/search?q=So11111111111111111111111111111111111111112');
+  page.winListeners.click.fn(search);
+  assert.equal(search.prevented, true, 'CA searches must be claimed');
+
+  const sent = page.sent.filter((m) => m.type === 'pt_warm_open').map((m) => m.url);
+  assert.deepEqual(sent, [
+    'https://x.com/i/communities/2012484577227419741',
+    'https://x.com/search?q=So11111111111111111111111111111111111111112',
+  ]);
+});
+
 test('modified clicks and non-X links pass through untouched', () => {
   const page = loadWarmLinks();
-  const click = page.domListeners.click.fn;
+  const click = page.winListeners.click.fn;
 
   for (const event of [
     clickEvent(POST, { ctrlKey: true }),
@@ -606,7 +765,7 @@ test('modified clicks and non-X links pass through untouched', () => {
     clickEvent(POST, { shiftKey: true }),
     clickEvent(POST, { button: 1 }),
     clickEvent('https://gmgn.ai/sol/token/abc'),
-    clickEvent('https://x.com/search?q=bonk'),
+    clickEvent('https://x.com/intent/tweet?text=gm'),
   ]) {
     click(event);
     assert.equal(event.prevented, false, 'native behavior must win');
@@ -616,7 +775,7 @@ test('modified clicks and non-X links pass through untouched', () => {
 
 test('hovering an X link for the dwell sends a prefetch hint; a graze does not', () => {
   const page = loadWarmLinks();
-  const hover = page.domListeners.mouseover;
+  const hover = page.winListeners.mouseover;
   assert.ok(hover && hover.capture, 'the hover listener must exist at capture phase');
 
   hover.fn(clickEvent(POST)); // same event shape works: target.closest is all it reads
@@ -641,7 +800,7 @@ test('hovering an X link for the dwell sends a prefetch hint; a graze does not',
 test('with the feature disabled the click listener touches nothing', () => {
   const page = loadWarmLinks({ enabled: false });
   const event = clickEvent(POST);
-  page.domListeners.click.fn(event);
+  page.winListeners.click.fn(event);
   assert.equal(event.prevented, false);
   assert.equal(page.sent.filter((m) => m.type === 'pt_warm_open').length, 0);
 });
@@ -762,6 +921,23 @@ test('a notification-count title change is NOT proof of navigation', () => {
   assert.equal(result.ok, true, 'a genuine title change is the arrival fallback');
 });
 
+test('a community request drives the router and confirms on title movement', () => {
+  // Communities have no per-target DOM signal we can rely on; the title
+  // moving off the previous page is the arrival check. The relay and driver
+  // must pass the kind through instead of collapsing it to "post".
+  const page = loadSpaDriver({ title: 'Home / X' });
+  page.request({
+    source: 'papertrench-xwarm-request', requestId: 'req-c1',
+    url: 'https://x.com/i/communities/2012484577227419741', kind: 'community',
+    handle: null, postId: null,
+  });
+  assert.deepEqual(page.pushes, ['/i/communities/2012484577227419741']);
+  page.doc.title = 'Lunar Rodeo / X';
+  page.tick();
+  const result = page.posted.find((m) => m.source === 'papertrench-xwarm-result');
+  assert.equal(result.ok, true);
+});
+
 test('already on the target: instant success, no navigation', () => {
   const page = loadSpaDriver({ pathname: '/degentoken/status/999888777' });
   page.request(SPA_REQUEST);
@@ -771,7 +947,12 @@ test('already on the target: instant success, no navigation', () => {
   assert.equal(result.reason, 'already_here');
 });
 
-test('X\'s error surface is an explicit failure, not a shrug', () => {
+test('a deleted tweet shows X\'s error page instantly — never a repair reload', () => {
+  // Field report: deleted launch tweets felt buggy and SLOW. The old code
+  // treated the freshly rendered "this post doesn't exist" as a FAILED
+  // navigation and repaired with a full reload of the same dead URL — which
+  // costs seconds to display the identical error. The error page IS the
+  // answer (a deleted launch tweet is trading signal); confirm and stop.
   let errored = false;
   const page = loadSpaDriver({
     matches: (sel) => (errored && sel.includes('error-detail') ? {} : null),
@@ -780,6 +961,39 @@ test('X\'s error surface is an explicit failure, not a shrug', () => {
   errored = true;
   page.tick();
   const result = page.posted.find((m) => m.source === 'papertrench-xwarm-result');
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true, 'ok:true means the background arms NO repair — no reload');
   assert.equal(result.reason, 'x_error_page');
+});
+
+test('an error already on screen BEFORE the navigation proves nothing', () => {
+  // If "error present" counted as arrival unconditionally, a viewer parked
+  // on a dead post would instantly "confirm" every later navigation while
+  // actually stuck. A pre-existing error must fall through to the timeout,
+  // whose repair full-loads the real target.
+  const page = loadSpaDriver({
+    matches: (sel) => (sel.includes('error-detail') ? {} : null), // error from the start
+  });
+  page.request(SPA_REQUEST);
+  for (let i = 0; i < 25 && !page.posted.length; i++) page.tick();
+  const result = page.posted.find((m) => m.source === 'papertrench-xwarm-result');
+  assert.equal(result.ok, false, 'a stale error page must not be mistaken for arrival');
+  assert.equal(result.reason, 'verify_timeout');
+});
+
+test('classification never rewrites the link: path and query survive byte-for-byte', () => {
+  // The other half of the deleted-tweet report: make sure WE cannot be the
+  // reason a tweet looks dead. The only transform classify may perform is
+  // host canonicalization onto x.com — path and query pass through intact.
+  const X = loadXLinks();
+  for (const [href, expected] of [
+    ['https://x.com/CNBC/status/2085027940358627775?s=20&t=Ab_9x', 'https://x.com/CNBC/status/2085027940358627775?s=20&t=Ab_9x'],
+    ['https://twitter.com/user_name/status/123/photo/1', 'https://x.com/user_name/status/123/photo/1'],
+    ['https://x.com/i/web/status/999', 'https://x.com/i/web/status/999'],
+    ['https://x.com/search?q=%24BONK%20ca&src=typed_query&f=live', 'https://x.com/search?q=%24BONK%20ca&src=typed_query&f=live'],
+    ['https://mobile.twitter.com/i/communities/2012484577227419741?src=row', 'https://x.com/i/communities/2012484577227419741?src=row'],
+  ]) {
+    const got = X.classify(href);
+    assert.ok(got, `${href} must classify`);
+    assert.equal(got.url, expected, `${href} must not be rewritten beyond host canonicalization`);
+  }
 });

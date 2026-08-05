@@ -40,7 +40,11 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
 
 - **No telemetry, no analytics, no phoning home.** There is no server. The
   only network calls are: public price APIs (Dexscreener, Jupiter), public
-  Solana RPC, and endpoints you configured yourself.
+  Solana RPC, endpoints you configured yourself, and — only when you enable
+  the opt-in hover preview cards — X's public oEmbed endpoint
+  (`publish.twitter.com/oembed`), called with `dnt=1` (do-not-track), no
+  cookies and no login, only for post links you hover on a trading site,
+  cached so each post is fetched at most once per session.
 - **No real trading.** It cannot sign, send, or ask for a transaction. It has
   no wallet integration at all — that is the point.
 - **No credentials.** Your AI API key, if you add one, is stored locally and

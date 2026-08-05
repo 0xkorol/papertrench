@@ -3,6 +3,18 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.5.1 — 2026-08-05
+
+Spotted in the maintainer stream footage: the real terminals card an OPEN
+position — the "still holding" flex — and ours only carded closed rounds.
+
+- **Share an open position.** Live open positions on the Overview now carry
+  a Share button. The card states OPEN, the middle column reads POSITION
+  (live value at the last recorded mark), the journey line claims no EXIT
+  that has not happened, and USD figures appear only where fills and marks
+  genuinely recorded them. Same gallery, same Customize/Download/Copy —
+  and the same un-removable PaperTrench branding.
+
 ## v2.5.0 — 2026-08-05
 
 Requested by the maintainer: let people flex their PaperTrench P&L — with
@@ -25,6 +37,33 @@ the one thing that can never come off the card.
   settings — verified by a test that drives every combination of options
   and asserts the branding survives all of them. Flex the result;
   never fake it.
+- **Instant X links now speak GMGN and Axiom.** The first field report —
+  "works on Padre, not the others" — came down to link forms: GMGN trench
+  rows link a token's X *community* (`x.com/i/communities/…`) and Axiom's X
+  affordance is a *search* for the CA, and both used to fall through to a
+  cold tab. Both warm-route now. Interception also moved to the earliest
+  point in the event chain and finds anchors through shadow DOM, and any X
+  link form still unrecognized logs its exact URL to the service-worker
+  console (locally) so the next gap names itself.
+- **Hover preview cards (opt-in).** The terminals' own tweet previews are
+  small and demand you hit a 14px icon. PaperTrench's card is big, readable,
+  and IS the click target — hover an X link and the post renders right on
+  the page (~200ms via X's public oEmbed endpoint, no login, do-not-track,
+  cached); click anywhere on the card to open it instantly in the warm
+  viewer. A deleted post says "unavailable" on the card — the rug signal
+  before you spend a click. Communities and profiles get a slim click-through
+  card. A second opt-in goes further: rest the cursor anywhere on a token
+  ROW for a third of a second and its preview appears — no aiming at all.
+  Both settings live in the dashboard, both off by default.
+- **Deleted tweets are fast now.** A dead link used to trigger a pointless
+  "repair": X rendered "this post doesn't exist", the extension mistook
+  that for a failed hop, and full-reloaded the same dead URL — seconds to
+  say the same thing. The error page now counts as arrival (a deleted
+  launch tweet is signal — see it instantly); only an error that was
+  already on screen before the hop still falls through to the repair.
+  Also pinned by test: classification never rewrites a link — path and
+  query pass through byte-for-byte, so PaperTrench can never be the reason
+  a tweet looks dead.
 
 ## v2.4.0 — 2026-08-05
 

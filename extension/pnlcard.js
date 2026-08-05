@@ -511,7 +511,8 @@
     // Hidden columns reflow the remainder rather than leaving holes.
     const columns = [];
     if (show.invested !== false) columns.push(['INVESTED', model.investedText, model.investedUsdText, COLORS.text]);
-    if (show.returned !== false) columns.push(['RETURNED', model.returnedText, model.returnedUsdText, COLORS.text]);
+    // An open position's middle column is its LIVE value, not proceeds.
+    if (show.returned !== false) columns.push([model.open ? 'POSITION' : 'RETURNED', model.returnedText, model.returnedUsdText, COLORS.text]);
     if (show.percent !== false) columns.push(['P&L %', model.pnlPctText, model.pnlUsdText, model.accent]);
     if (columns.length) {
       const railLeft = 64;
