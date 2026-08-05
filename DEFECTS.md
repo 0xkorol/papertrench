@@ -689,7 +689,7 @@ denominator, 0 to the numerator; the exact bug `weightedUsd` guards against else
 above the tick.
 
 **D-12 · S1 · Replay hero and session list frozen at mount — closed rounds keep showing OPEN**
-`dashboard.js:1149-1219,1112-1115` · confirmed · open
+`dashboard.js:1149-1219,1112-1115` · confirmed · **fixed v1.3.0** (shell key covers status/roundId/session count)
 
 ### S2 — silent death / lost writes
 
