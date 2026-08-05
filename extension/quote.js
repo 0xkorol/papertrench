@@ -234,6 +234,27 @@
   var BOOTSTRAP_SANE_USD_MIN = 1e-7;
   var BOOTSTRAP_SANE_USD_MAX = 1e-4;
 
+  // Every pump.fun coin mints exactly 1e9 tokens (6 decimals) and its vanity
+  // mint ends in "pump" — protocol facts, not scraped page data. They are the
+  // one case where an mcap-scale chart close CAN honestly price a coin no
+  // aggregator has indexed. `pumpCurve` is set when the on-chain feed has
+  // positively identified the token's bonding curve (see prewatch), covering
+  // pair-address pages where the mint is not known yet.
+  var PUMP_FAMILY_SUPPLY = 1e9;
+  // The mcap READINGS get their own band (as unit price at 1e9): a pump
+  // curve launches near a $4K cap and is aggregator-indexed well past
+  // migration, so below ~$3K or above $100K the "it's a market cap" reading
+  // is not credible — without this floor a 0.5 chart close read as "0.5 SOL
+  // of market cap = a $100 coin" would have slipped past the generous
+  // unit-price band that F-25 deliberately keeps.
+  var PUMP_MCAP_UNIT_MIN = 3e-6;
+  var PUMP_MCAP_UNIT_MAX = 1e-4;
+  function isPumpFamily(t) {
+    if (!t) return false;
+    if (t.pumpCurve === true) return true;
+    return typeof t.mint === 'string' && /pump$/.test(t.mint);
+  }
+
   /**
    * Accept the very first price for a coin no aggregator has indexed yet.
    *
@@ -331,6 +352,38 @@
 
       // unit === 'unknown' is the common TradingView chart close case.
       if (unit === 'unknown') {
+        // Pump-family coins have a protocol-constant supply (1e9), so
+        // mcap-scale closes CAN price them — the one thing the general path
+        // below must refuse ("no implied supply"). An Axiom chart parked in
+        // MCap mode was exactly the screen that could never bootstrap a
+        // fresh launch: the armed buy sat on "waiting for first quote"
+        // forever while the site's own chart ticked away (maintainer video,
+        // 39-second-old coin). A SOL-denominated cap is a SMALL number (a
+        // $7K cap is ~47 SOL), so this cannot hide behind a magnitude
+        // floor: all four readings of the unlabelled value — native unit,
+        // USD unit, SOL mcap, USD mcap — are judged against the same sane
+        // band, and the tick is priced only when EXACTLY ONE fits (the
+        // F-25 discipline, extended).
+        if (rate && isPumpFamily(pendingToken)) {
+          var readings = [
+            { basis: 'native', usd: v * rate, native: v, mcap: null,
+              min: BOOTSTRAP_SANE_USD_MIN, max: BOOTSTRAP_SANE_USD_MAX },
+            { basis: 'usd', usd: v, native: v / rate, mcap: null,
+              min: BOOTSTRAP_SANE_USD_MIN, max: BOOTSTRAP_SANE_USD_MAX },
+            { basis: 'native-mcap', usd: (v * rate) / PUMP_FAMILY_SUPPLY, native: v / PUMP_FAMILY_SUPPLY, mcap: v * rate,
+              min: PUMP_MCAP_UNIT_MIN, max: PUMP_MCAP_UNIT_MAX },
+            { basis: 'mcap', usd: v / PUMP_FAMILY_SUPPLY, native: v / PUMP_FAMILY_SUPPLY / rate, mcap: v,
+              min: PUMP_MCAP_UNIT_MIN, max: PUMP_MCAP_UNIT_MAX },
+          ];
+          var sane = readings.filter(function (r) {
+            return r.usd >= r.min && r.usd <= r.max;
+          });
+          if (sane.length > 1) return reject('ambiguous-unit');
+          if (sane.length === 1) {
+            return accept(sane[0].native, sane[0].usd, sane[0].mcap, sane[0].basis);
+          }
+          return reject('implausible-unit');
+        }
         // Market cap values are much larger than token prices and we cannot
         // derive a token price without an implied supply.
         if (v >= BOOTSTRAP_MCAP_FLOOR) return reject('mcap-no-supply');
@@ -368,6 +421,17 @@
       }
     }
 
+    // A market-cap-only tick (GMGN/Axiom pre-index) can price a pump-family
+    // coin through the constant supply — same exactly-one-sane discipline.
+    if (tickMcap > 0 && rate && isPumpFamily(pendingToken)) {
+      var usdMc = tickMcap / PUMP_FAMILY_SUPPLY;
+      var solMc = (tickMcap * rate) / PUMP_FAMILY_SUPPLY;
+      var usdOk = usdMc >= PUMP_MCAP_UNIT_MIN && usdMc <= PUMP_MCAP_UNIT_MAX;
+      var solOk = solMc >= PUMP_MCAP_UNIT_MIN && solMc <= PUMP_MCAP_UNIT_MAX;
+      if (usdOk && solOk) return reject('ambiguous-unit');
+      if (usdOk) return accept(usdMc / rate, usdMc, tickMcap, 'mcap');
+      if (solOk) return accept(tickMcap / PUMP_FAMILY_SUPPLY, solMc, tickMcap * rate, 'native-mcap');
+    }
     // A market-cap-only tick has no token price, so nothing can be filled yet.
     if (tickMcap > 0) return reject('mcap-only-no-supply');
 
@@ -563,6 +627,55 @@
   // instant fake P&L and teaches a wrong lesson, which is worse than losing
   // a few hundred milliseconds of freshness.
   var ONSCREEN_AGREE_RATIO = 1.06;
+
+  /**
+   * Rug-guard verdict: holder concentration from getTokenLargestAccounts
+   * plus the mint's raw supply. Liquidity is not a holder, so positively
+   * identified pool/curve reserve accounts are excluded; with none known,
+   * the single largest account is excluded as the assumed pool — and the
+   * verdict SAYS which of the two it did (assumedPool), because a guard that
+   * hides its own method is not a trustworthy guard.
+   *
+   * Missing data yields { known: false } — a rug check that cannot see the
+   * chain must never block (or bless) a buy on an invented number.
+   */
+  function rugVerdict(input) {
+    var largest = input && Array.isArray(input.largest) ? input.largest : null;
+    var supply = Number(input && input.supply);
+    var none = { known: false, pct: null, holders: 0, assumedPool: false };
+    if (!largest || !largest.length || !(supply > 0)) return none;
+    var reserves = {};
+    var reserveList = (input && input.reserves) || [];
+    for (var i = 0; i < reserveList.length; i++) reserves[reserveList[i]] = true;
+    var rows = [];
+    for (var j = 0; j < largest.length; j++) {
+      var entry = largest[j];
+      var amount = Number(entry && entry.amount);
+      var address = entry && entry.address;
+      if (!(amount > 0) || typeof address !== 'string') continue;
+      if (reserves[address]) continue;
+      rows.push({ address: address, amount: amount });
+    }
+    rows.sort(function (a, b) { return b.amount - a.amount; });
+    var assumedPool = false;
+    if (!reserveList.length && rows.length) {
+      rows.shift();
+      assumedPool = true;
+    }
+    if (!rows.length) return none;
+    var topN = Math.max(1, Math.min(20, Number(input && input.topN) || 10));
+    var top = rows.slice(0, topN);
+    var sum = 0;
+    for (var k = 0; k < top.length; k++) sum += top[k].amount;
+    var pct = (sum / supply) * 100;
+    if (!isFinite(pct)) return none;
+    return {
+      known: true,
+      pct: Math.round(pct * 10) / 10,
+      holders: top.length,
+      assumedPool: assumedPool,
+    };
+  }
 
   /** True when the two prices are close enough to be the same market. */
   function fillSourcesAgree(onchainNative, screenNative) {
@@ -867,6 +980,8 @@
     shouldRequote,
     isPriceStale,
     fillSourcesAgree,
+    isPumpFamily,
+    rugVerdict,
     positionMark,
     tokenFromJupiter,
     solUsdFromJupiter,

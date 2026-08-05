@@ -137,7 +137,21 @@ because checking the remote source took too long.
 
 **F-14 · S2 · All fills serialize behind one promise chain writing a never-truncated hash chain**
 **disposition (v2.0):** accepted, monitored. Chain growth is linear and slow (SubtleCrypto over ~1k links ≈ ms); truncation would break verifiability by construction (see commitFill comment). Revisit with a checkpoint protocol if real journals reach 10k+ fills.
-`content.js:1051-1061,1106-1111,2878-2885` · all sites · confirmed · open
+`content.js:1051-1061,1106-1111,2878-2885` · all sites · confirmed · **fixed post-v2.7.1**
+(the chain left pt_state: content tabs send `pt_attest_append`; the worker is the
+single writer, serializing appends — warmSerial pattern — into append-only
+`pt_attest_seg_<n>` segments + `pt_attest_meta`, so a fill rewrites only the tail
+segment, O(seg size) forever, and multi-tab full-chain races are gone. One-time
+protocol-safe migration strips `state.attestChain` through the seq write counter;
+a pre-update tab writing the chain back is folded, never dropped. Backup bundles
+the chain as `pt_attest_chain` AND as a legacy `state.attestChain` copy inside the
+backup's pt_state, so restoring on a pre-segmentation version keeps the record
+intact (downgrade-safe by construction — old code cannot be taught to refuse, so
+the file is readable by both); the new restore strips the legacy copy and
+re-segments. Reset clears segments atomically with the wallet wipe. NOTHING is
+truncated — every hash is preserved exactly as committed. Locked in
+attestsegments.test.js + attestworker.test.js; F-28's tell-the-user-once toast
+preserved in commitFill.)
 Every fill: reload full state → SubtleCrypto over the whole attest chain → persist full
 state (incl. `attestChain`, never truncated). Fill latency grows linearly with lifetime
 fill count; the only feedback is "Buy already in progress…", which reads as broken.
@@ -337,6 +351,29 @@ the divergence — the fill the trader gets is never double digits away from
 the chart they clicked, whatever breaks upstream next time. Locked by a
 behavioral same-slot vault-pair test, a per-leg rewind-refusal test, and
 source pins on the ladder order.
+
+**F-34 · S2 · A fresh pump.fun launch could not be bought at all on an mcap-mode chart — the armed buy waited for a first quote that could never arrive**
+`quote.js` bootstrapTick ('mcap-no-supply'), no pre-index on-chain path ·
+Axiom, maintainer screenshot (39-second-old coin, B.Curve 62.3%, live chart
+at $7.15K MC, panel "New coin — waiting for first quote…", buy ARMED
+forever) · **fixed v2.8.0**
+Two independent causes, both fixed: (1) with the chart in MCap mode every
+close is mcap-scale, and bootstrapTick rightly refuses to invent a supply —
+but pump supply is a protocol CONSTANT (1e9), so for the pump family the
+close IS a price; all four readings (price/cap × USD/SOL) are judged
+against sane bands and used only when exactly one fits, with a dedicated
+cap band ($3K–$100K) so dust values cannot masquerade as tiny caps.
+(2) Nothing on-chain was watched pre-index because the resolver had no
+pairAddress — yet the page KNOWS the curve (Axiom's /meme/<pair> IS the
+curve account; a pump mint derives its curve via the program-address rules,
+implementation verified against five live mainnet curves before shipping).
+prewatch identifies the curve on chain, discovers the real mint from the
+curve's reserve token account, watches it, and PRIMES the first quote from
+the same read — the armed buy fires seconds after launch and fills from
+chain state. Locked by: five real-vector PDA derivation tests, an
+end-to-end feed prewatch test (bare curve address → watched mint → primed
+quote → reserve account remembered), bootstrap acceptance/ambiguity tests,
+and the existing armed-buy suite.
 
 ## O — Overlay lifecycle & movability (audit: 2026-08-05, verified against source)
 

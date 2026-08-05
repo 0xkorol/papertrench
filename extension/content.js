@@ -28,6 +28,8 @@
     refresh: (token) => sendMessage({ type: 'pt_refresh', token }).then(okOrNull),
     solUsd: () => sendMessage({ type: 'pt_sol_usd' }).then((r) => (typeof r === 'number' && r > 0 ? r : 0)).catch(() => 0),
     onchainWatch: (mint, pool) => sendMessage({ type: 'pt_onchain_watch', mint, pool }).then(okOrNull),
+    onchainPrewatch: (ids) => sendMessage({ type: 'pt_onchain_prewatch', pool: ids.pool || null, mint: ids.mint || null }).then(okOrNull),
+    rugCheck: (mint) => sendMessage({ type: 'pt_rug_check', mint }).then(okOrNull),
     onchainUnwatch: (mint) => sendMessage({ type: 'pt_onchain_unwatch', mint }).catch(() => null),
     onchainQuote: (mint) => sendMessage({ type: 'pt_onchain_quote', mint }).then(okOrNull),
     batchPrices: (mints) => sendMessage({ type: 'pt_batch_prices', mints }).then((r) => (r && typeof r === 'object' && !r.error) ? r : {}),
@@ -213,7 +215,6 @@
       syncAveragePriceLines();
     }
   }
-  const AT = window.PTAttest;       // tamper-evident fill chain
   const profitAlertLevels = new Map(); // mint -> highest threshold already handled
   // Positions bar: prices for tokens whose charts are NOT on screen.
   const BAR_HEIGHT_PX = 38;
@@ -605,7 +606,85 @@
     renderPositionsBar();
   }
 
+  /* -------------------- rug guard -------------------- */
+
+  // mint -> chain-read holder-concentration verdict. Refreshed when a token
+  // is identified (resolve or prewatch); the background caches reads for a
+  // minute, so this stays two RPC calls per coin per minute at most.
+  const rugVerdicts = new Map();
+
+  function refreshRugVerdict(mint) {
+    if (!mint || settings.guardRugEnabled === false) return;
+    R.rugCheck(mint).then((verdict) => {
+      if (!verdict || !verdict.known) return;
+      rugVerdicts.set(mint, verdict);
+      if (rugVerdicts.size > 50) rugVerdicts.delete(rugVerdicts.keys().next().value);
+      renderSiteStatus();
+    }).catch(() => {});
+  }
+
+  /** The refusal line for the CURRENT token, or null when buying is fine.
+   * Sells are deliberately never gated — exiting a rug is the right move. */
+  function rugRefusalMessage() {
+    if (!token || settings.guardRugEnabled === false) return null;
+    const verdict = rugVerdicts.get(token.mint);
+    if (!verdict || !verdict.known) return null;
+    const threshold = Math.max(10, Math.min(90, Number(settings.guardRugTopPct) || 40));
+    if (!(verdict.pct >= threshold)) return null;
+    return `🚩 RUG WARNING — top ${verdict.holders} wallets hold ${verdict.pct}% of supply`
+      + `${verdict.assumedPool ? ' (excl. the largest account, assumed pool)' : ' (excl. the pool)'}`
+      + '. Paper buy refused — Settings → Guardrails → Rug guard to override.';
+  }
+
   /* -------------------- detection -------------------- */
+
+  // One prewatch per pending address; a failed prewatch is not retried — the
+  // resolver's own retry loop stays the fallback path.
+  let prewatchedAddress = null;
+
+  /** Pre-index launch: identify and watch the pump.fun bonding curve behind a
+   * PENDING page right now, instead of waiting for an aggregator to index the
+   * coin. The reply's primed curve price rides the normal tick pipeline, so
+   * the anchor, staleness stamps, renders and the armed-buy flush behave
+   * exactly as for any accepted first quote — this is what makes an armed
+   * buy on a 39-second-old coin actually fire (maintainer report: Axiom
+   * mcap-mode chart, "ARMED — ON FIRST QUOTE" forever). */
+  function prewatchPending(candidate) {
+    if (!candidate || prewatchedAddress === candidate.address) return;
+    prewatchedAddress = candidate.address;
+    // Mint-kind pages: only pump-suffix mints have a derivable curve; skip
+    // the round trip for everything else. Pair-kind pages always probe — the
+    // account's owner program is the proof, whatever the address looks like.
+    if (candidate.kind !== 'pair' && !/pump$/.test(candidate.address)) return;
+    const ids = candidate.kind === 'pair'
+      ? { pool: candidate.address }
+      : { mint: candidate.address };
+    R.onchainPrewatch(ids).then((found) => {
+      if (!found || !found.mint) return;
+      if (!token || !token.pending) return;
+      if (token.srcAddress !== candidate.address && token.mint !== candidate.address) return;
+      // Positive identification: the stand-in address gives way to the real
+      // mint. srcAddress keeps the URL identity, so the pending re-detect
+      // and the eventual resolve both still recognize the token, and the
+      // armed intent survives the rename the same way it survives resolve.
+      if (armedBuy && armedBuy.mint === token.mint) armedBuy.mint = found.mint;
+      token.mint = found.mint;
+      token.pairAddress = found.pool || token.pairAddress || null;
+      token.pumpCurve = true;
+      onchainLive = true;
+      renderSiteStatus();
+      refreshRugVerdict(found.mint);
+      // Re-anchor the bridge with the full identity so chart ticks match.
+      sendPadreMarker('paper-axis', { pairAddress: token.pairAddress, mint: token.mint });
+      if (Number(found.priceNative) > 0) {
+        handlePageTick({
+          mint: found.mint,
+          source: 'onchain-prewatch',
+          candidates: [{ value: Number(found.priceNative), unit: 'native' }],
+        });
+      }
+    }).catch(() => {});
+  }
 
   async function detectLoop() {
     // A pending token still needs resolving, so do not treat "same URL" as
@@ -630,10 +709,13 @@
     // resolve rather than displaying a fabricated number. Rebuilding this on
     // every retry would restart the card animation, so it is only set when the
     // address actually changes.
-    const alreadyPendingSame = token && token.pending && token.mint === candidate.address;
+    // A prewatch may have swapped the stand-in pair address for the real
+    // mint (srcAddress keeps the URL identity), so both count as "same".
+    const alreadyPendingSame = token && token.pending
+      && (token.mint === candidate.address || token.srcAddress === candidate.address);
     if (!alreadyPendingSame) {
       setToken({
-        mint: candidate.address, symbol: null, name: null,
+        mint: candidate.address, srcAddress: candidate.address, symbol: null, name: null,
         priceNative: null, priceUsd: null, pending: true,
       });
       pendingSince = Date.now();
@@ -647,6 +729,11 @@
       // Warm the SOL/USD rate so a USD on-screen price can be filled the moment
       // it appears. resolveViaJupiter will also populate this cache shortly.
       R.solUsd().then((rate) => { if (rate > 0) pendingSolUsd = rate; }).catch(() => {});
+      // The sniping path: a pump.fun coin exists on chain minutes before any
+      // aggregator indexes it. Ask the feed to find and watch its bonding
+      // curve NOW — from the pair address (Axiom) or the mint (Padre) — and
+      // the reply carries the coin's first real price.
+      prewatchPending(candidate);
     }
 
     try {
@@ -670,6 +757,7 @@
       data.srcAddress = candidate.address;
       data.kind = candidate.kind;
       setToken(data);
+      refreshRugVerdict(data.mint);
       // Tell the bridge which address this page is about, so ticks, exports
       // and drawing only come from the chart instance showing THIS token.
       sendPadreMarker('paper-axis', { pairAddress: data.pairAddress, mint: data.mint, symbol: data.symbol });
@@ -1688,6 +1776,10 @@
     // fake so the habit exists before the money is real.
     const guard = E.guardCheck(state, settings, { solAmount: amt });
     if (!guard.ok) return toast(guard.message);
+    // Rug guard (maintainer request): when chain state says the float is in
+    // a handful of wallets, say RUG WARNING and refuse, before arming.
+    const rugRefusal = rugRefusalMessage();
+    if (rugRefusal) return toast(rugRefusal);
     primeAudio();
 
     // A brand-new coin may still be resolving. Rather than refusing the
@@ -1707,6 +1799,10 @@
 
   async function doBuy(solAmount) {
     if (!token) return toast('No token detected on this page');
+    // The armed path skips requestBuy, and the verdict may have landed after
+    // arming — re-check at fire time. Sells are never gated.
+    const rugRefusal = rugRefusalMessage();
+    if (rugRefusal) return toast(rugRefusal);
     const fillQuote = await quoteForTrade();
     if (!fillQuote) return toast('Could not obtain a fresh price — paper buy not filled.');
     try {
@@ -1719,8 +1815,8 @@
           priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
           solAmount,
         });
-        // Commit the fill to the evidence chain before persisting, so the
-        // stored snapshot and its attestation are written atomically.
+        // Commit the fill to the evidence chain before persisting the wallet,
+        // so the committed record never lags the balance a crash would leave.
         await commitFill(trade);
         await persistStateNow();
         const markerTs = Date.now();
@@ -3412,8 +3508,13 @@
     // from pool state at `processed` commitment; anything else is an
     // aggregator running behind, and the user deserves to know which.
     const feed = onchainLive ? ' · CHAIN ⚡' : '';
+    // The rug flag is shown the moment the verdict lands, not only when a
+    // buy is refused — the warning is worth more BEFORE the click.
+    const rug = rugRefusalMessage() && token && rugVerdicts.get(token.mint)
+      ? ` · 🚩 TOP ${rugVerdicts.get(token.mint).pct}%`
+      : '';
     if (!usesNativeChart()) {
-      els.footSite.textContent = `Site: ${site.name}${feed}`;
+      els.footSite.textContent = `Site: ${site.name}${feed}${rug}`;
       if (els.subtitle) els.subtitle.textContent = site.name;
       return;
     }
@@ -3424,7 +3525,7 @@
     const lines = settings.averagePriceLinesEnabled
       ? ` · ${(lastLineStatus && lastLineStatus.ok) || padreHookStatus.linesReady ? 'LINES ✓' : 'lines connecting…'}`
       : '';
-    els.footSite.textContent = `${site.name} · ${live} · ${markersReady}${lines}${feed}`;
+    els.footSite.textContent = `${site.name} · ${live} · ${markersReady}${lines}${feed}${rug}`;
     if (els.subtitle) {
       els.subtitle.textContent = padreHookStatus.barsHooked
         ? `${site.name} · live feed connected`
@@ -3651,28 +3752,23 @@
    *
    * Done at fill time, before the outcome is known, so the chain records what
    * was actually decided rather than what the user later wishes they had done.
+   *
+   * The chain no longer rides inside pt_state (DEFECT F-14): the background
+   * worker is its single writer, appending into segmented storage under one
+   * serial lock. Sending the fill instead of rewriting the chain here is what
+   * removed the multi-tab full-chain race AND the per-fill cost that grew
+   * with lifetime fill count. The chain is still NEVER truncated — dropping
+   * links would break verifyChain (the first kept link no longer chains from
+   * GENESIS) and replayChain (derived P&L would silently drop early fills);
+   * the worker's segmented store bounds the cost of keeping everything.
+   *
    * Failure here must never block a trade — the trade is the product; the
    * chain is evidence for an optional leaderboard.
    */
   async function commitFill(trade) {
-    if (!AT || !trade) return;
-    try {
-      const chain = Array.isArray(state.attestChain) ? state.attestChain : [];
-      const previous = chain.length ? chain[chain.length - 1].hash : AT.GENESIS;
-      const link = await AT.appendFill(previous, trade);
-      link.seq = chain.length;
-      chain.push(link);
-      // The chain is NEVER truncated. Dropping old links would break
-      // verifyChain (the first kept link no longer chains from GENESIS) and
-      // replayChain (derived P&L would silently drop early fills), so a heavy
-      // trader would see "Chain does not match local state" and a wrong
-      // derived number with nothing actually tampered. The manifest already
-      // grants unlimitedStorage; the chain is the product's evidence and must
-      // stay complete to stay honest.
-      state.attestChain = chain;
-      // The caller writes state once, after this returns. Writing here too
-      // would mean two storage round trips per fill for no benefit.
-    } catch (_) {
+    if (!trade) return;
+    const result = await sendMessage({ type: 'pt_attest_append', trade });
+    if (!result || result.ok !== true) {
       /* evidence is best-effort; never interfere with trading — but say so
        * ONCE, or verifyChain later reports a mismatch the user cannot explain
        * (DEFECT F-28). */

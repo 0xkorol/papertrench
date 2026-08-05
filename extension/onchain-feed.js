@@ -91,6 +91,20 @@
     return (result && result.value) || [];
   }
 
+  /** Like getAccounts, but keeps the response's slot — needed when a read is
+   * about to SEED price state (a seeded amount without its slot would defeat
+   * the per-leg ordering guard the moment live frames arrive). */
+  async function getAccountsWithSlot(addresses) {
+    if (!addresses.length) return { slot: 0, accounts: [] };
+    const result = await rpc('getMultipleAccounts', [
+      addresses, { encoding: 'base64', commitment: COMMITMENT },
+    ]);
+    return {
+      slot: Number(result && result.context && result.context.slot) || 0,
+      accounts: (result && result.value) || [],
+    };
+  }
+
   /* ---------------- pool resolution ---------------- */
 
   /**
@@ -394,6 +408,127 @@
     try { handleMessage(data); } catch (_) { /* drop the frame, keep the feed */ }
   }
 
+  /* ---------------- pre-index prewatch (the sniping case) ----------------
+   *
+   * A brand-new pump.fun coin has no aggregator quote for its first minutes,
+   * but its bonding curve is ALREADY on chain — and the page usually knows
+   * either the curve address (Axiom /meme/<pair>) or the mint (Padre /t/).
+   * prewatch turns either into a live watched feed plus an IMMEDIATE first
+   * quote read from the curve account itself, so an armed buy fires seconds
+   * after launch instead of sitting on "waiting for first quote" until
+   * Dexscreener notices the coin exists.
+   *
+   * Refusals are as important as the path itself: a pool that is not a
+   * pump curve, a completed (migrated) curve, or a curve whose reserve
+   * account cannot be positively identified all return null — the caller
+   * falls back to the aggregator path rather than guessing.
+   */
+
+  /** The mint held by a curve's reserve token account (largest balance wins;
+   * the curve's only token account IS the reserve). */
+  async function curveMint(poolAddress) {
+    for (const program of [O.TOKEN_PROGRAM, O.TOKEN_2022_PROGRAM]) {
+      let result = null;
+      try {
+        result = await rpc('getTokenAccountsByOwner', [
+          poolAddress, { programId: program },
+          { encoding: 'jsonParsed', commitment: COMMITMENT },
+        ]);
+      } catch (_) { result = null; }
+      const accounts = (result && result.value) || [];
+      let best = null;
+      for (const entry of accounts) {
+        const info = entry && entry.account && entry.account.data
+          && entry.account.data.parsed && entry.account.data.parsed.info;
+        const mint = info && info.mint;
+        const amount = Number(info && info.tokenAmount && info.tokenAmount.amount) || 0;
+        if (typeof mint === 'string' && (!best || amount > best.amount)) {
+          best = { mint, amount, reserveAccount: entry.pubkey };
+        }
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  /** Seed a freshly-watched pump curve with a price read RIGHT NOW, so the
+   * first quote exists before the first post-watch trade lands. */
+  async function primeCurve(mint) {
+    const entry = watched.get(mint);
+    if (!entry || !entry.desc || entry.desc.kind !== 'pump-curve') return null;
+    const { slot, accounts } = await getAccountsWithSlot([entry.desc.watch]);
+    const account = accounts[0];
+    if (!account || !(slot > 0)) return null;
+    const bytes = O.bytesFromBase64(account.data[0]);
+    if (!O.isNewerObservation(slot, entry.slot)) return currentQuote(mint);
+    entry.raw = bytes;
+    const priceNative = priceFromEntry(entry);
+    if (!(priceNative > 0)) return null; // malformed or already-complete curve
+    entry.slot = slot;
+    entry.priceNative = priceNative;
+    entry.observedAt = Date.now();
+    const quote = {
+      mint, priceNative, slot,
+      source: 'onchain', poolKind: 'pump-curve', observedAt: entry.observedAt,
+    };
+    emit(quote);
+    return quote;
+  }
+
+  /**
+   * Start watching a pre-index pump.fun coin from whichever address the page
+   * has. Returns { mint, pool, priceNative } or null (not a live pump curve).
+   */
+  async function prewatch({ pool, mint }) {
+    if (!O || !POOL) return null;
+    try {
+      let curveAddress = pool || null;
+      if (!curveAddress && typeof mint === 'string' && /pump$/.test(mint)) {
+        curveAddress = await O.derivePumpCurve(mint);
+      }
+      if (!curveAddress) return null;
+
+      const [account] = await getAccounts([curveAddress]);
+      if (!account || O.poolKindForOwner(account.owner) !== 'pump-curve') return null;
+      const curve = O.decodePumpCurve(O.bytesFromBase64(account.data[0]));
+      if (!curve || curve.complete) return null; // migrated: the resolver path owns it
+
+      // The reserve token account is wanted either way (it identifies the
+      // mint when only the pool was known, and the rug guard must exclude it
+      // from holder concentration), so this read is unconditional.
+      const found = await curveMint(curveAddress);
+      const reserveAccount = found ? found.reserveAccount : null;
+      const realMint = (typeof mint === 'string' && mint) || (found && found.mint) || null;
+      if (!realMint) return null;
+
+      const live = await watch(realMint, curveAddress);
+      if (!live) return null;
+      const entry = watched.get(realMint);
+      if (entry && entry.desc && reserveAccount) entry.desc.reserveAccount = reserveAccount;
+      const quote = await primeCurve(realMint);
+      return {
+        mint: realMint,
+        pool: curveAddress,
+        priceNative: quote ? quote.priceNative : null,
+      };
+    } catch (error) {
+      try { console.debug('PaperTrench: prewatch failed:', error && error.message); } catch (_) {}
+      return null;
+    }
+  }
+
+  /** The known pool/curve reserve token accounts for a watched mint — the
+   * holders that are LIQUIDITY, not people (used by the rug guard). */
+  function reserveAccounts(mint) {
+    const entry = watched.get(mint);
+    if (!entry || !entry.desc) return [];
+    const desc = entry.desc;
+    const out = [];
+    if (desc.reserveAccount) out.push(desc.reserveAccount);
+    if (desc.kind === 'cp-vaults' && desc.watch) out.push(desc.watch);
+    return out;
+  }
+
   /* ---------------- public API ---------------- */
 
   /** Begin streaming live on-chain prices for `mint` via `poolAddress`. */
@@ -455,6 +590,7 @@
 
   const api = {
     configure, watch, unwatch, currentQuote, isLive, onQuote, activeEndpoint,
+    prewatch, reserveAccounts,
     QUOTE_STALE_MS, COMMITMENT,
     // Exposed for tests.
     _describePool: describePool,

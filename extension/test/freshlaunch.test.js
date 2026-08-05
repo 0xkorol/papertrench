@@ -353,6 +353,9 @@ function runFreshLaunch(opts) {
         id: 'papertrench-test',
         getURL: (p) => 'x/' + p,
         sendMessage: (msg) => {
+          // F-14: the worker owns the attest chain; the harness acks appends
+          // so a fill does not trip the F-28 failure toast mid-test.
+          if (msg.type === 'pt_attest_append') return Promise.resolve({ ok: true, seq: 0, head: 'pt-test-head' });
           const R = win.PaperTrenchResolver;
           if (!R) return Promise.resolve({});
           if (msg.type === 'pt_resolve') return R.resolve(msg.address);
@@ -548,4 +551,145 @@ test('an armed buy expires visibly when no quote ever arrives', async () => {
   const st = ov.storage().pt_state;
   assert.ok(!st || !st.positions || Object.keys(st.positions).length === 0,
     'an expired armed buy must never fill');
+});
+
+/* ---------------- F-34: fresh pump.fun launches must be priceable ----------
+ *
+ * Maintainer video: a 39-second-old coin on Axiom, chart in MCap mode,
+ * "ARMED — 0.5 SOL ON FIRST QUOTE" forever. Every chart close was mcap-scale
+ * and bootstrapTick refused it ("no implied supply") — but pump.fun supply
+ * is a protocol constant (1e9), so those closes CAN price the coin. All four
+ * readings of an unlabelled value are judged against the sane band and the
+ * tick is priced only when exactly one fits.
+ */
+
+test('F-34: an mcap-mode chart close bootstraps a pump-family coin', () => {
+  const pending = { mint: 'GAcMLQLWHRM9XmQjvkkpDjinXBuvn7uYhLQ5cerQpump', pending: true };
+  const rate = 150; // USD per SOL
+  // The screenshot case: $7.15K USD market cap on the chart.
+  const verdict = Q.bootstrapTick(pending, {
+    mint: pending.mint, source: 'chart-export',
+    candidates: [{ value: 7150, unit: 'unknown' }],
+  }, rate);
+  assert.equal(verdict.accepted, true, 'a USD-mcap close must price a pump coin');
+  assert.equal(verdict.basis, 'mcap');
+  assert.ok(Math.abs(verdict.priceUsd - 7150 / 1e9) < 1e-15, 'unit price = mcap / constant supply');
+  assert.ok(Math.abs(verdict.priceNative - 7150 / 1e9 / rate) < 1e-15);
+  assert.equal(verdict.mcap, 7150);
+});
+
+test('F-34: a SOL-denominated mcap close (small number!) bootstraps too', () => {
+  const pending = { mint: 'GAcMLQLWHRM9XmQjvkkpDjinXBuvn7uYhLQ5cerQpump', pending: true };
+  const rate = 150;
+  // The same $7.15K cap with the chart's USD/SOL toggle on SOL: ~47.7 SOL.
+  // Below the old magnitude floor, so it used to fall through to unit-price
+  // logic and be refused as implausible.
+  const verdict = Q.bootstrapTick(pending, {
+    mint: pending.mint, source: 'chart-export',
+    candidates: [{ value: 47.7, unit: 'unknown' }],
+  }, rate);
+  assert.equal(verdict.accepted, true, 'a SOL-mcap close must price a pump coin');
+  assert.equal(verdict.basis, 'native-mcap');
+  assert.ok(Math.abs(verdict.priceNative - 47.7 / 1e9) < 1e-15, 'native unit price = SOL mcap / supply');
+});
+
+test('F-34: non-pump coins keep the old refusal — supply must never be guessed', () => {
+  const pending = { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', pending: true };
+  const verdict = Q.bootstrapTick(pending, {
+    mint: pending.mint, source: 'chart-export',
+    candidates: [{ value: 7150, unit: 'unknown' }],
+  }, 150);
+  assert.equal(verdict.accepted, false);
+  assert.equal(verdict.reason, 'mcap-no-supply',
+    'an arbitrary SPL token has no implied supply; only the pump constant is a fact');
+});
+
+test('F-34: the pumpCurve flag stands in when only the pair address is known', () => {
+  // Axiom /meme/<pair> pages: the pending token's mint is the CURVE address
+  // (no pump suffix); prewatch sets pumpCurve after identifying it on-chain.
+  const pending = { mint: '5oyPYDcR48bfFD3v8XTkorTksSQWkUva4ELS4CxkqVLH', pending: true, pumpCurve: true };
+  const verdict = Q.bootstrapTick(pending, {
+    mint: pending.mint, source: 'chart-export',
+    candidates: [{ value: 7150, unit: 'unknown' }],
+  }, 150);
+  assert.equal(verdict.accepted, true);
+  assert.equal(Q.isPumpFamily({ mint: '5oyPY...' }), false, 'a bare pair address proves nothing');
+  assert.equal(Q.isPumpFamily(pending), true, 'the on-chain identification does');
+});
+
+test('F-34: an mcap-only tick (no candidates) prices a pump coin the same way', () => {
+  const pending = { mint: 'J5mUdr6WTmXRXH1N5k7houLDLEZbEeeEuavEWFofpump', pending: true };
+  const verdict = Q.bootstrapTick(pending, {
+    mint: pending.mint, source: 'gmgn-mcap-candle', mcap: 12000, candidates: [],
+  }, 150);
+  assert.equal(verdict.accepted, true);
+  assert.equal(verdict.basis, 'mcap');
+  assert.ok(Math.abs(verdict.priceUsd - 12000 / 1e9) < 1e-15);
+});
+
+test('F-34: ambiguity still refuses — a cap that reads sane both ways is not guessed', () => {
+  const pending = { mint: 'J5mUdr6WTmXRXH1N5k7houLDLEZbEeeEuavEWFofpump', pending: true };
+  // At a $25 SOL price, 3500 reads sane as BOTH a $3.5K USD cap and a
+  // 3500-SOL ($87.5K) cap. Guessing between them is a ~25x error; refuse.
+  const verdict = Q.bootstrapTick(pending, {
+    mint: pending.mint, source: 'chart-export',
+    candidates: [{ value: 3500, unit: 'unknown' }],
+  }, 25);
+  assert.equal(verdict.accepted, false);
+  assert.equal(verdict.reason, 'ambiguous-unit');
+
+  // And a value below the pump launch floor under EVERY reading is refused:
+  // 0.5 as "0.5 SOL of market cap = a $100 coin" was the trap the dedicated
+  // mcap floor exists for.
+  const dust = Q.bootstrapTick(pending, {
+    mint: pending.mint, source: 'chart-export',
+    candidates: [{ value: 0.5, unit: 'unknown' }],
+  }, 200);
+  assert.equal(dust.accepted, false);
+  assert.equal(dust.reason, 'implausible-unit');
+});
+
+const Onchain = require('../onchain.js');
+
+/* ---------------- F-34: bonding-curve derivation (the sniping path) --------
+ *
+ * findProgramAddress(["bonding-curve", mint], pumpProgram), reimplemented
+ * dependency-free (sha256 via crypto.subtle + an ed25519 on-curve check in
+ * BigInt). The five vectors below are REAL mainnet pairs captured live from
+ * Dexscreener on 2026-08-05 — mint on the right, its actual bonding-curve
+ * account on the left. If the derivation drifts from Solana's PDA rules in
+ * any way, these stop matching.
+ */
+
+const PDA_VECTORS = [
+  ['5oyPYDcR48bfFD3v8XTkorTksSQWkUva4ELS4CxkqVLH', 'B88dwNrMyZ3ZZvq8ZXHnbisWzG5WQ5EaJ3dud1REpump'],
+  ['Qi7huaHpf9BtXtnWcDkfPDDuh5q47szrRMujM2hffCQ', 'gEpuehYi7jfT6tDNa2BWKJqmytBR2B8SHfXXMi7pump'],
+  ['81cnbWuwj6HDQ52T4m3FRVWF8Ms6oxEaDgfpxMPMQNhr', 'J5mUdr6WTmXRXH1N5k7houLDLEZbEeeEuavEWFofpump'],
+  ['G4ULaaknSX4p8ZCttUFQagXU2WL3g6To1AeWp87zMmyV', 'GAcMLQLWHRM9XmQjvkkpDjinXBuvn7uYhLQ5cerQpump'],
+  ['F2DpuAtYcCJLSMhtdgntEiC1hjoDNp96ehCVavZYkU2o', '8kwNiiRZHTGud5tcKcDkPsV7hwtGHQiCB4p7wZ2ppump'],
+];
+
+test('F-34: derivePumpCurve reproduces five real mainnet curve addresses', async () => {
+  for (const [curve, mint] of PDA_VECTORS) {
+    const derived = await Onchain.derivePumpCurve(mint);
+    assert.equal(derived, curve, `curve PDA for ${mint}`);
+  }
+});
+
+test('F-34: derivation refuses garbage without throwing', async () => {
+  assert.equal(await Onchain.derivePumpCurve('not-base58-0OIl'), null);
+  assert.equal(await Onchain.derivePumpCurve(''), null);
+  assert.equal(await Onchain.derivePumpCurve(null), null);
+});
+
+test('F-34: the on-curve check agrees with reality on known points', () => {
+  // The system program id (32 zero bytes) decompresses to a valid curve
+  // point (y=0 → x²=−1, solvable mod 2²⁵⁵−19); every PDA, by construction,
+  // must NOT.
+  assert.equal(Onchain.isOnCurve(new Uint8Array(32)), true,
+    'the system program id is an on-curve point');
+  for (const [curve] of PDA_VECTORS) {
+    assert.equal(Onchain.isOnCurve(Onchain.b58decode(curve)), false,
+      curve + ' is a PDA and must be off-curve');
+  }
 });

@@ -113,6 +113,13 @@
     guardTiltMinutes: 10,
     guardMaxPositionPct: null,   // % of current equity per buy; null = off
     guardDailyLossSol: null,     // paper SOL lost today stops the day; null = off
+    // Rug guard — the one guardrail that is ON by default (maintainer call:
+    // "when it's an obvious rug I'd rather it not let you buy"). Chain-read
+    // holder concentration; refuses BUYS only, never sells, and only when
+    // the chain was actually readable. Off-switch lives with the rest of
+    // the Guardrails card.
+    guardRugEnabled: true,
+    guardRugTopPct: 40,          // top-10 holders (excl. pool) % threshold
   };
 
   function defaultSettings() {

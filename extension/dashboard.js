@@ -150,6 +150,12 @@ let sessionReview = null; // { text, error }
 // ~once a second — and an in-flight verify could land in a detached node.
 let lbVerifyCache = null;      // { key, valid, problems, ok, diff, derivedPnlSol }
 let lbVerifyInFlightKey = null;
+// F-14: the attestation chain lives in its own segmented storage keys
+// (pt_attest_seg_<n> + pt_attest_meta), not inside pt_state. loadAll reads it
+// here; renderLeaderboard/bindLeaderboard consume this array in exactly the
+// format buildSubmission has always taken.
+let attestChain = [];
+let attestMigrateNudged = false;
 /**
  * Storage access that fails soft — same contract as content.js's store helper:
  * get() resolves null when the read FAILED (chrome.runtime.lastError or a
@@ -418,7 +424,7 @@ function watchDashboardStorage() {
   if (!chrome.storage || !chrome.storage.onChanged) return;
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    const relevant = ['pt_state', 'pt_settings', 'pt_frames', 'pt_turbo_stats', RP.STORAGE_KEY]
+    const relevant = ['pt_state', 'pt_settings', 'pt_frames', 'pt_turbo_stats', RP.STORAGE_KEY, AT.CHAIN_META_KEY]
       .some((key) => key in changes);
     if (!relevant) return;
     // D-28: heartbeat writes carry fresh live marks; paint them in place.
@@ -444,6 +450,26 @@ async function loadAll() {
   frames = s.pt_frames || [];
   turboStats = s.pt_turbo_stats || {};
   replays = RP.normalizeReplayList(s[RP.STORAGE_KEY]);
+
+  // F-14: the chain lives in segmented storage. A failed read keeps the
+  // previous in-memory chain — same D-15 discipline as the wallet: an
+  // unreadable record must never repaint as "no trades committed yet". A
+  // state that still carries a legacy in-state chain (the worker has not
+  // migrated yet) is readable as-is; the nudge asks the worker to move it.
+  try {
+    const { meta, chain } = await AT.readChainStore(async (keys) => {
+      const value = await store.get(keys);
+      if (value === null) throw new Error('attest store unreadable');
+      return value;
+    });
+    attestChain = !meta.length && Array.isArray(state.attestChain) && state.attestChain.length
+      ? state.attestChain
+      : chain;
+  } catch (_) { /* keep the previous chain */ }
+  if (!attestMigrateNudged && Array.isArray(state.attestChain) && state.attestChain.length) {
+    attestMigrateNudged = true;
+    chrome.runtime.sendMessage({ type: 'pt_attest_migrate' }).catch(() => {});
+  }
   // D-40: everything the replay view is derived from was just replaced.
   invalidateReplayView();
   if (!selectedReplayId && replays[0]) selectedReplayId = replays[0].sessionId;
@@ -2681,7 +2707,7 @@ function lbVerifyView(chain, stats) {
 }
 
 function renderLeaderboard(el) {
-  const chain = Array.isArray(state.attestChain) ? state.attestChain : [];
+  const chain = attestChain; // F-14: loaded from the segmented store
   const stats = E.sessionStats(state, settings);
   const identity = settings.leaderboardIdentity || null;
   // Absolute P&L flatters big bankrolls, so every figure is shown alongside
@@ -2803,7 +2829,7 @@ async function bindLeaderboard(el) {
     });
   }
 
-  const chain = Array.isArray(state.attestChain) ? state.attestChain : [];
+  const chain = attestChain; // F-14: loaded from the segmented store
   if (!chain.length) return;
   const stats = E.sessionStats(state, settings);
   const key = lbVerifyKey(chain, stats);
@@ -3289,6 +3315,8 @@ function renderSettings(el) {
         <div class="field"><label for="set-guard-tilt-minutes">Tilt: cooldown minutes</label><input id="set-guard-tilt-minutes" type="number" min="1" max="120" step="1" value="${Number(settings.guardTiltMinutes) || 10}"></div>
         <div class="field"><label for="set-guard-max-pct">Max position size (% of book)</label><input id="set-guard-max-pct" type="number" min="1" max="100" step="1" value="${Number(settings.guardMaxPositionPct) > 0 ? settings.guardMaxPositionPct : ''}" placeholder="blank = off"><small>A single buy larger than this share of your equity is refused.</small></div>
         <div class="field"><label for="set-guard-daily-loss">Daily loss limit (SOL)</label><input id="set-guard-daily-loss" type="number" min="0.01" step="0.01" value="${Number(settings.guardDailyLossSol) > 0 ? settings.guardDailyLossSol : ''}" placeholder="blank = off"><small>Once today's realized paper losses reach this, buying stops until tomorrow.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-guard-rug" ${settings.guardRugEnabled !== false ? 'checked' : ''}> Rug guard (on by default)</label><small>Reads holder concentration from chain state; when the top wallets (excluding the pool) control more than the % below, a paper BUY is refused with a 🚩 RUG WARNING naming the number. Sells are never blocked, and a chain read that fails blocks nothing.</small></div>
+        <div class="field"><label for="set-guard-rug-pct">Rug guard: top-10 holder % threshold</label><input id="set-guard-rug-pct" type="number" min="10" max="90" step="1" value="${Number(settings.guardRugTopPct) || 40}"></div>
         <div class="field field-check"><label><input type="checkbox" id="set-post-exit-watch" ${settings.postExitWatchEnabled !== false ? 'checked' : ''}> The After — track the hour after each exit</label><small>Records what the coin actually did after you sold (observed extremes, on the round). Measured truth instead of FOMO guesswork.</small></div>
       </div>
       <div class="card">
@@ -3374,7 +3402,22 @@ function bindSettings() {
     // past the inherited base; the engine owns that bump, and doubling it
     // here made the write counter lie about how many writes happened.
     state.updatedAt = Date.now();
-    const write = { pt_state: state, pt_frames: [], [RP.STORAGE_KEY]: [] };
+    // F-14: an empty meta lands in the SAME write as the wallet wipe, so the
+    // chain can never survive a reset the wallet did not. Orphaned segment
+    // keys are unreachable once the meta says zero; they are swept after.
+    let staleSegKeys = [];
+    try {
+      const meta = await AT.readChainMeta(async (keys) => {
+        const value = await store.get(keys);
+        if (value === null) throw new Error('attest store unreadable');
+        return value;
+      });
+      staleSegKeys = AT.chainStorageKeys(meta).filter((key) => key !== AT.CHAIN_META_KEY);
+    } catch (_) { /* segments unknown: the meta overwrite below still orphans them */ }
+    const write = {
+      pt_state: state, pt_frames: [], [RP.STORAGE_KEY]: [],
+      [AT.CHAIN_META_KEY]: AT.normalizeChainMeta(null),
+    };
     if (balanceChanged) write.pt_settings = settings;
     // The confirm text promises recordings go too — and orphaned videos used
     // to survive every reset, tens of MB forever (DEFECT D-36).
@@ -3387,6 +3430,13 @@ function bindSettings() {
       if (status) status.textContent = 'Reset failed: ' + ((err && err.message) ? err.message : String(err));
       return;
     }
+    // Sweep the orphaned segment bodies; harmless if this fails — the empty
+    // meta already committed with the wallet wipe.
+    if (staleSegKeys.length) {
+      try { await new Promise((resolve) => chrome.storage.local.remove(staleSegKeys, () => resolve())); } catch (_) {}
+    }
+    attestChain = [];
+    lbVerifyCache = null;
     chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
     renderSidebar();
     renderSection('overview');
@@ -3521,6 +3571,8 @@ function gatherSettingsFromForm(notes = [], base = settings) {
       const v = Number(document.getElementById('set-guard-daily-loss').value);
       return Number.isFinite(v) && v > 0 ? v : null;
     })(),
+    guardRugEnabled: document.getElementById('set-guard-rug').checked,
+    guardRugTopPct: clampInt('set-guard-rug-pct', 10, 90, 40, 'rug guard threshold'),
     postExitWatchEnabled: document.getElementById('set-post-exit-watch').checked,
     aiModel: document.getElementById('set-model').value.trim(),
     aiApiKey: document.getElementById('set-key').value.trim(),

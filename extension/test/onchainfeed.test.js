@@ -211,3 +211,129 @@ test('F-33: single-account pools keep the strict newer-slot guard', () => {
   assert.match(block, /legKey/,
     'cp-vaults frames must be guarded per vault leg, not per entry');
 });
+
+/* ---------------- F-34: prewatch — a curve address becomes a live feed -----
+ *
+ * The sniping case end to end at the feed layer: a bare pool address (all an
+ * Axiom /meme/ page knows pre-index) is identified as a live pump curve, its
+ * mint is discovered from the reserve token account, the mint is watched,
+ * and a first quote is PRIMED from the curve account read itself — no trade
+ * needs to land before the first price exists.
+ */
+
+const vm2 = require('node:vm');
+
+function feedWithRpc(handler) {
+  const sandbox = {
+    console, Date, JSON, Math, Number, String, Array, Object, Boolean,
+    Promise, Map, Set, URL, TextEncoder, Uint8Array, BigInt, isFinite,
+    atob: (b) => Buffer.from(b, 'base64').toString('binary'),
+    btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+    crypto: require('node:crypto').webcrypto,
+    setTimeout, clearTimeout, setInterval: () => 1, clearInterval: () => {},
+    WebSocket: function () { this.readyState = 3; },
+  };
+  sandbox.self = sandbox;
+  sandbox.globalThis = sandbox;
+  const ctx = vm2.createContext(sandbox);
+  vm2.runInContext(fs.readFileSync(path.join(ROOT, 'onchain.js'), 'utf8'), ctx, { filename: 'onchain.js' });
+  sandbox.PTRpcPool = {
+    call: handler,
+    websocketUrls: () => [],
+    setUserEndpoint() {}, reportSuccess() {}, reportFailure() {},
+  };
+  vm2.runInContext(fs.readFileSync(path.join(ROOT, 'onchain-feed.js'), 'utf8'), ctx, { filename: 'onchain-feed.js' });
+  return sandbox.PTOnchainFeed;
+}
+
+function curveAccountB64({ virtualToken, virtualSol, complete }) {
+  const bytes = Buffer.alloc(64);
+  bytes.writeBigUInt64LE(BigInt(virtualToken), 8);
+  bytes.writeBigUInt64LE(BigInt(virtualSol), 16);
+  bytes[48] = complete ? 1 : 0;
+  return bytes.toString('base64');
+}
+
+function mintAccountB64({ supply, decimals }) {
+  const bytes = Buffer.alloc(82);
+  bytes.writeBigUInt64LE(BigInt(supply), 36);
+  bytes[44] = decimals;
+  return bytes.toString('base64');
+}
+
+const PUMP_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+const CURVE_ADDR = 'CurveAddr1111111111111111111111111111111111';
+const RESERVE_ADDR = 'ReserveAddr111111111111111111111111111111111';
+const FRESH_MINT = 'FreshMint111111111111111111111111111111pump';
+
+test('F-34: prewatch turns a bare curve address into a watched mint with a primed quote', async () => {
+  // 30 virtual SOL over 1e9 virtual tokens (6dp) -> price 3e-8 SOL.
+  const curveB64 = curveAccountB64({
+    virtualToken: 1_000_000_000_000_000, virtualSol: 30_000_000_000, complete: false,
+  });
+  const rpcLog = [];
+  const feed = feedWithRpc(async (method, params) => {
+    rpcLog.push(method);
+    if (method === 'getMultipleAccounts') {
+      const addresses = params[0];
+      return {
+        context: { slot: 4321 },
+        value: addresses.map((address) => {
+          if (address === CURVE_ADDR) return { owner: PUMP_PROGRAM_ID, data: [curveB64] };
+          if (address === FRESH_MINT) return { owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] };
+          return null;
+        }),
+      };
+    }
+    if (method === 'getTokenAccountsByOwner') {
+      return {
+        value: [{
+          pubkey: RESERVE_ADDR,
+          account: { data: { parsed: { info: { mint: FRESH_MINT, tokenAmount: { amount: '793000000000000' } } } } },
+        }],
+      };
+    }
+    throw new Error('unexpected rpc ' + method);
+  });
+
+  const quotes = [];
+  feed.onQuote((q) => quotes.push(q));
+  const found = await feed.prewatch({ pool: CURVE_ADDR });
+
+  assert.ok(found, 'a live pump curve must prewatch');
+  assert.equal(found.mint, FRESH_MINT, 'the mint is discovered from the reserve account');
+  assert.equal(found.pool, CURVE_ADDR);
+  assert.ok(Math.abs(found.priceNative - 3e-8) < 1e-18, 'the primed price is the curve price');
+
+  const live = feed.currentQuote(FRESH_MINT);
+  assert.ok(live, 'the primed quote is immediately servable to a fill');
+  assert.equal(live.poolKind, 'pump-curve');
+  assert.equal(live.slot, 4321, 'the primed quote carries its read slot for the ordering guard');
+  assert.ok(quotes.some((q) => q.mint === FRESH_MINT), 'the primed quote is emitted like any live one');
+  // vm-realm arrays carry a foreign prototype; compare structurally.
+  assert.deepEqual(JSON.parse(JSON.stringify(feed.reserveAccounts(FRESH_MINT))), [RESERVE_ADDR],
+    'the reserve account is remembered — the rug guard must not count liquidity as a holder');
+});
+
+test('F-34: a completed (migrated) curve refuses prewatch — the resolver path owns it', async () => {
+  const curveB64 = curveAccountB64({
+    virtualToken: 1_000_000_000_000_000, virtualSol: 115_000_000_000, complete: true,
+  });
+  const feed = feedWithRpc(async (method, params) => {
+    if (method === 'getMultipleAccounts') {
+      return { context: { slot: 1 }, value: [{ owner: PUMP_PROGRAM_ID, data: [curveB64] }] };
+    }
+    throw new Error('unexpected rpc ' + method);
+  });
+  assert.equal(await feed.prewatch({ pool: CURVE_ADDR }), null);
+});
+
+test('F-34: a non-pump pool refuses prewatch rather than guessing', async () => {
+  const feed = feedWithRpc(async (method) => {
+    if (method === 'getMultipleAccounts') {
+      return { context: { slot: 1 }, value: [{ owner: 'SomeOtherProgram1111111111111111111111111111', data: [curveAccountB64({ virtualToken: 1, virtualSol: 1, complete: false })] }] };
+    }
+    throw new Error('unexpected rpc ' + method);
+  });
+  assert.equal(await feed.prewatch({ pool: CURVE_ADDR }), null);
+});

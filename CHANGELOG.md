@@ -3,6 +3,39 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.8.0 — 2026-08-05
+
+Two from the maintainer's own trench session, same screenshot.
+
+- **Fresh launches are snipeable — "ARMED … ON FIRST QUOTE" actually fires
+  now (F-34).** A 39-second-old pump.fun coin used to strand the armed buy
+  forever: no aggregator had indexed it, and with the chart in MCap mode
+  every close was refused as "no implied supply". Two fixes, layered:
+  - **The bonding curve is read directly.** The moment a pending coin looks
+    like pump.fun — the pair address on an Axiom page, or a mint ending in
+    "pump" anywhere — PaperTrench finds its bonding curve on chain (derived
+    from the mint via the program-address rules, verified against five live
+    mainnet curves), identifies the real mint from the curve's reserve
+    account, and streams the curve as a live CHAIN ⚡ feed with an immediate
+    first quote. The armed buy fires seconds after launch, and the fill is
+    chain state, not a guess.
+  - **MCap-mode charts can price pump coins.** Pump supply is a protocol
+    constant (1e9), so an mcap-scale close IS a price. All four readings of
+    an unlabelled chart value (price vs cap, USD vs SOL) are judged against
+    sane bands and the tick is used only when exactly one fits — ambiguity
+    still refuses, per the F-25 discipline.
+- **Rug guard (on by default).** Requested with a LOL, built with a straight
+  face: when chain state says the float is in a handful of wallets, a paper
+  BUY is refused with a toast that names the number — "🚩 RUG WARNING — top
+  10 wallets hold 47% of supply". The check reads the 20 largest token
+  accounts plus the mint supply, excludes the pool/curve reserve (and SAYS
+  when it had to assume which account that was), flags the panel footer the
+  moment the verdict lands, and never blocks a SELL — exiting a rug is the
+  right move. A failed chain read blocks nothing: a guard that cannot see
+  is not allowed to invent. Threshold and off-switch live in Settings →
+  Guardrails; this is the one guardrail that ships ON, because the
+  maintainer asked for exactly that.
+
 ## v2.7.1 — 2026-08-05
 
 Housekeeping with a straight face: v2.7.0 was tagged and published

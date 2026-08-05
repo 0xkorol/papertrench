@@ -9,13 +9,42 @@
 
 
 if (typeof importScripts === 'function') {
-  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'xlinks.js', 'warmdest.js', 'xray-core.js', 'pnlcard.js');
+  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'attest.js', 'xlinks.js', 'warmdest.js', 'xray-core.js', 'pnlcard.js');
 }
 const RP = self.PTReplay;
+const AT = self.PTAttest;
 const R = self.PaperTrenchResolver;
 const FEED = self.PTOnchainFeed;
 const XL = self.PTXLinks;
 const XR = self.PTXRay;
+
+/* -------------------- rug guard (holder concentration) --------------------
+ * Two chain reads per coin per minute at most: the 20 largest token accounts
+ * and the mint's supply. The verdict math itself is pure (PaperQuote.
+ * rugVerdict) and excludes accounts the on-chain feed has positively
+ * identified as pool/curve reserves — liquidity is not a holder. */
+const RUG_CACHE_MS = 60_000;
+const rugCache = new Map(); // mint -> { at, verdict }
+
+async function rugScan(mint) {
+  const POOLRPC = self.PTRpcPool;
+  const O = self.PTOnchain;
+  const Q = self.PaperQuote;
+  if (!POOLRPC || !O || !Q) return null;
+  const largestRes = await POOLRPC.call('getTokenLargestAccounts', [mint, { commitment: 'confirmed' }]);
+  const largest = ((largestRes && largestRes.value) || []).map((a) => ({
+    address: a && a.address,
+    amount: Number(a && a.amount),
+  }));
+  const mintRes = await POOLRPC.call('getMultipleAccounts', [[mint], { encoding: 'base64', commitment: 'confirmed' }]);
+  const mintAccount = mintRes && mintRes.value && mintRes.value[0];
+  const info = mintAccount ? O.decodeMint(O.bytesFromBase64(mintAccount.data[0])) : null;
+  return Q.rugVerdict({
+    largest,
+    supply: info && info.supply,
+    reserves: FEED && FEED.reserveAccounts ? FEED.reserveAccounts(mint) : [],
+  });
+}
 
 const DEFAULTS = {
   appEnabled: true,
@@ -1759,6 +1788,157 @@ async function xrayPlan(message, settings) {
   });
 }
 
+/* -------------------- attestation chain (DEFECT F-14) --------------------
+ *
+ * The chain used to live inside pt_state, so every tab appended to its own
+ * copy and full-state writes raced each other across tabs — last write wins,
+ * links lost, and every fill serialized the whole lifetime chain. The worker
+ * is now the ONLY writer: content tabs send pt_attest_append, and all
+ * read-modify-write of the segmented store is serialized through one promise
+ * chain, exactly like warmSerial. The chain is still never truncated —
+ * segmentation (attest.js) bounds the per-fill cost instead.
+ */
+
+// Same shape as warmSerial: the declared-but-unused lock is the bug class
+// this pattern exists to prevent.
+let attestChainMutex = Promise.resolve();
+function attestSerial(fn) {
+  const next = attestChainMutex.catch(() => {}).then(fn);
+  attestChainMutex = next.catch(() => {});
+  return next;
+}
+
+// Chain storage must REFUSE to fake success: a failed read resolving {}
+// would make the next append re-anchor at GENESIS and fork the record —
+// the evidence-store cousin of D-15's fabricated empty wallet.
+function attestGet(keys) {
+  return new Promise((resolve, reject) => chrome.storage.local.get(keys, (value) => {
+    if (chrome.runtime && chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+    resolve(value || {});
+  }));
+}
+function attestSet(obj) {
+  return new Promise((resolve, reject) => chrome.storage.local.set(obj, () => {
+    if (chrome.runtime && chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+    resolve();
+  }));
+}
+
+/**
+ * One-time move of state.attestChain into the segmented store. Protocol-safe:
+ * the state write goes through setState, which advances the seq write counter
+ * so open tabs adopt the slimmer state instead of clobbering it on their next
+ * heartbeat.
+ *
+ * Idempotent and fork-safe, because a not-yet-reloaded tab from the previous
+ * extension version can still write a state that carries attestChain:
+ *  - links already in the store (same hash, or same fill id) are skipped;
+ *  - legacy links that extend the current head are moved with their hashes
+ *    intact — verifiability is PRESERVED, never recomputed when a pure move
+ *    is possible;
+ *  - legacy links that fork (their prev no longer matches the head) are
+ *    re-committed from their fill facts onto the current head. The facts —
+ *    id, mint, side, qty, price, amounts, ts — survive; only the envelope
+ *    hash is new, and the fold is logged.
+ * Callers must hold attestSerial.
+ */
+async function migrateAttestChainLocked() {
+  // A tab can append to state.attestChain between our read and our strip;
+  // re-read and fold again rather than deleting evidence we never saw.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const state = await getState();
+    if (!state || !Object.hasOwn(state, 'attestChain')) return;
+    const legacy = Array.isArray(state.attestChain) ? state.attestChain : [];
+
+    if (legacy.length) {
+      const { meta, chain } = await AT.readChainStore(attestGet);
+      if (!meta.length) {
+        // Fresh store: a pure move, every hash exactly as committed.
+        await attestSet(AT.chainSegments(legacy));
+      } else {
+        const knownHashes = new Set(chain.map((l) => l && l.hash));
+        const knownIds = new Set(chain.map((l) => l && l.id));
+        const merged = chain.slice();
+        let folded = 0;
+        for (const link of legacy) {
+          if (!link || knownHashes.has(link.hash) || knownIds.has(link.id)) continue;
+          const head = merged.length ? merged[merged.length - 1].hash : AT.GENESIS;
+          let next = link;
+          if (link.prev !== head) {
+            // Forked by a mixed-version race — re-commit the facts.
+            next = await AT.appendFill(head, link);
+            folded++;
+          }
+          next.seq = merged.length;
+          merged.push(next);
+          knownHashes.add(next.hash);
+          knownIds.add(next.id);
+        }
+        if (merged.length > chain.length) await attestSet(AT.chainSegments(merged));
+        if (folded) console.warn(`PaperTrench: re-committed ${folded} attest link(s) from a pre-update tab onto the current head`);
+      }
+    }
+
+    // Strip the legacy copy — but only if it still matches what was folded;
+    // otherwise loop and fold the newcomers first.
+    const fresh = await getState();
+    if (!fresh || !Object.hasOwn(fresh, 'attestChain')) return;
+    const freshLegacy = Array.isArray(fresh.attestChain) ? fresh.attestChain : [];
+    const sameTail = freshLegacy.length === legacy.length
+      && (freshLegacy.length === 0 || freshLegacy[freshLegacy.length - 1].hash === legacy[legacy.length - 1].hash);
+    if (sameTail) {
+      delete fresh.attestChain;
+      await setState(fresh);
+      return;
+    }
+  }
+  // Convergence is handed to the storage watcher below rather than looping
+  // forever against a hyperactive pre-update tab.
+}
+
+// Once per worker life is enough: after migration, no NEW state carries a
+// chain. The storage watcher re-arms the check if a pre-update tab writes
+// one back.
+let attestMigrated = false;
+async function ensureAttestMigratedLocked() {
+  if (attestMigrated) return;
+  attestMigrated = true; // before the await; a failure re-arms below
+  try {
+    await migrateAttestChainLocked();
+  } catch (error) {
+    attestMigrated = false;
+    throw error;
+  }
+}
+
+function attestAppend(trade) {
+  if (!trade || typeof trade !== 'object') return Promise.resolve({ ok: false, error: 'invalid trade' });
+  return attestSerial(async () => {
+    await ensureAttestMigratedLocked();
+    const link = await AT.appendToChainStore(attestGet, attestSet, trade);
+    return { ok: true, seq: link.seq, head: link.hash };
+  }).catch((error) => ({ ok: false, error: (error && error.message) || String(error) }));
+}
+
+function attestMigrate() {
+  return attestSerial(() => {
+    attestMigrated = false;
+    return ensureAttestMigratedLocked();
+  }).then(() => ({ ok: true }), (error) => ({ ok: false, error: (error && error.message) || String(error) }));
+}
+
+// A pre-update tab writing attestChain back into pt_state re-arms migration.
+if (chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.pt_state) return;
+    const next = changes.pt_state.newValue;
+    if (next && Array.isArray(next.attestChain) && next.attestChain.length) {
+      attestMigrated = false;
+      attestSerial(ensureAttestMigratedLocked).catch(() => {});
+    }
+  });
+}
+
 /* -------------------- message routing -------------------- */
 
 const BASE58_RE = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
@@ -1998,11 +2178,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
 
+      // Rug guard: holder concentration read from chain state, cached a
+      // minute per mint so arming, buying and re-buying do not multiply RPC
+      // reads. Null means "could not see the chain" — the guard then stands
+      // aside instead of blocking on an invented number.
+      case 'pt_rug_check': {
+        if (!isSolanaAddress(message.mint)) { sendResponse(null); break; }
+        const cached = rugCache.get(message.mint);
+        if (cached && Date.now() - cached.at < RUG_CACHE_MS) { sendResponse(cached.verdict); break; }
+        try {
+          const verdict = await rugScan(message.mint);
+          if (verdict) {
+            rugCache.set(message.mint, { at: Date.now(), verdict });
+            if (rugCache.size > 200) rugCache.delete(rugCache.keys().next().value);
+          }
+          sendResponse(verdict);
+        } catch (e) { sendResponse(null); }
+        break;
+      }
+
+      // Pre-index launch: turn a curve address (Axiom pair pages) or a pump
+      // mint (Padre /t/ pages) into a live watched feed + immediate first
+      // quote, before any aggregator has heard of the coin. Null means "not
+      // a live pump curve" and the caller keeps waiting on the resolver.
+      case 'pt_onchain_prewatch': {
+        const pool = isSolanaAddress(message.pool) ? message.pool : null;
+        const mint = isSolanaAddress(message.mint) ? message.mint : null;
+        if (!FEED || (!pool && !mint)) { sendResponse(null); break; }
+        try {
+          const settings = await getSettings();
+          FEED.configure({ rpcUrl: settings.rpcUrl || null });
+          sendResponse(await FEED.prewatch({ pool, mint }));
+        } catch (e) { sendResponse(null); }
+        break;
+      }
+
       // The authoritative price at click time. Null means no fresh on-chain
       // observation exists, and the caller must not invent one.
       case 'pt_onchain_quote':
         if (!FEED || !isSolanaAddress(message.mint)) { sendResponse(null); break; }
         sendResponse(FEED.currentQuote(message.mint));
+        break;
+
+      // F-14: the single writer for the attestation chain. Content tabs send
+      // the fill here instead of rewriting the whole chain inside pt_state;
+      // appends are serialized so multi-tab fills can never fork the record.
+      // {ok:false} — never a throw — so commitFill can honour F-28's
+      // tell-the-user-once contract.
+      case 'pt_attest_append':
+        sendResponse(await attestAppend(message.trade));
+        break;
+
+      // The dashboard nudges this when it still sees a legacy in-state chain,
+      // so the move happens even if the user never fills again.
+      case 'pt_attest_migrate':
+        sendResponse(await attestMigrate());
         break;
 
       default:
@@ -2018,5 +2248,8 @@ chrome.runtime.onStartup.addListener(() => {
 });
 chrome.runtime.onInstalled.addListener(() => {
   refreshFrameInterval().catch(() => {});
+  // F-14: move a legacy in-state chain out at update time, not lazily on the
+  // next fill — deterministic for the install, free for every later wake.
+  attestSerial(ensureAttestMigratedLocked).catch(() => {});
 });
 refreshFrameInterval().catch(() => {});
