@@ -118,6 +118,10 @@
       font-size: 11px; line-height: 1.5; color: var(--faint);
     }
     #status { padding: 8px 16px 14px; font-size: 11px; color: var(--faint); min-height: 14px; }
+    .badge.badge-off {
+      background: rgba(255, 95, 86, 0.13); border-color: rgba(255, 95, 86, 0.35);
+      color: #FFB3AE;
+    }
     .green { color: var(--green); } .red { color: var(--red); } .dim { color: var(--dim); }
     .mono { font-family: var(--mono); }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -127,7 +131,7 @@
   <header>
     <div class="mark">P</div>
     <h1>PaperTrench</h1>
-    <span class="badge">PAPER</span>
+    <span class="badge" id="badge">PAPER</span>
   </header>
 
   <div class="hero">
@@ -147,6 +151,9 @@
   <div id="recent"></div>
 
   <div class="btns">
+    <button id="power" class="btn-backup">⏻ Turn PaperTrench off</button>
+  </div>
+  <div class="btns">
     <button id="dash" class="btn-pri">Dashboard</button>
     <button id="toggle">Toggle overlay</button>
   </div>
@@ -156,6 +163,9 @@
   </div>
   <div class="btns">
     <button id="overlay-window" class="btn-backup">🎥 Stream overlay</button>
+  </div>
+  <div class="btns">
+    <button id="warmx" class="btn-backup">⚡ Instant X links: Off</button>
   </div>
   <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
   <button id="reset" class="btn-sec">Reset wallet</button>

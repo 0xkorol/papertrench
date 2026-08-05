@@ -49,7 +49,9 @@ function bootExtension(pageUrl, fetchImpl) {
   // Load the isolated-world library scripts in their manifest order.
   const entry = manifest.content_scripts.find((cs) => (cs.js || []).includes('content.js'));
   for (const file of entry.js) {
-    if (file === 'content.js') continue; // needs a live DOM; covered by load.test.js
+    // Consumers, not libraries: they need a live DOM/extension context and
+    // install no globals. Covered by load.test.js and warmlinks.test.js.
+    if (file === 'content.js' || file === 'warm-links.js') continue;
     vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), ctx, { filename: file });
   }
   return win;

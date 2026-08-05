@@ -1,18 +1,23 @@
 /* PaperTrench — shareable P&L card.
  *
  * Renders a closed (or open) position as a single image the trader can post.
- * The layout is deliberately close to the flex cards traders already know from
- * Padre and friends: big multiple, big percent, entry/exit rail, and room for a
- * custom background picture or GIF behind it all.
+ * The layout follows the flex cards traders already know from Padre and
+ * friends: the token symbol big up top, a huge ◎ SOL P&L, stat columns with
+ * USD sub-lines, and room for a custom background picture behind it all.
  *
  * Two responsibilities are kept apart so the interesting part is testable
  * without a canvas:
- *   - cardModel()  — pure: turns a round/position into the exact strings and
- *                    colors the card shows. No DOM, no canvas.
+ *   - cardModel()  — pure: turns a round/position into the exact strings,
+ *                    colors and visibility flags the card shows. No DOM,
+ *                    no canvas.
  *   - drawCard()   — paints that model onto a canvas (browser only).
  *
- * The card always carries the PAPER watermark and a small PaperTrench mark, so
- * a screenshot of a paper trade can never be passed off as a real one.
+ * Everything about the layout is customizable EXCEPT one thing, and that
+ * exception is the point of the product: the PAPER watermark and the
+ * PaperTrench brand bar are drawn LAST, unconditionally, by drawBranding() —
+ * a function that receives only the context and reads only module constants.
+ * No model field, no preference, no argument combination can skip it. A
+ * screenshot of a paper trade must never be passable as a real one.
  */
 (() => {
   'use strict';
@@ -21,6 +26,9 @@
   const HEIGHT = 675;           // 16:9 — posts cleanly on X without cropping
   const WATERMARK_TEXT = 'PAPER';
   const BRAND_TEXT = 'PaperTrench';
+  const BRAND_TAGLINE = '· paper trading — not financial advice';
+  const SITE_URL = 'onlyterp.github.io/papertrench';
+  const BRAND_BAR_HEIGHT = 64;
 
   const COLORS = {
     bg: '#0A0D13',
@@ -33,6 +41,20 @@
     red: '#FF5F56',
     line: 'rgba(255, 255, 255, 0.10)',
   };
+
+  /* Trim accents the trader can pick. The accent colors the TRIM only (left
+   * rail); the P&L itself stays semantic — green for a win, red for a loss —
+   * because a card that paints a loss green is a lie with a color picker. */
+  const ACCENTS = {
+    amber: COLORS.amber,
+    blue: '#6AA9FF',
+    violet: '#B786FF',
+    teal: '#3ED8C3',
+  };
+
+  /* Background gallery limits, mirrored by the dashboard's IndexedDB store. */
+  const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;   // 2 MB per image
+  const MAX_UPLOADS = 10;                     // stored uploads, hard cap
 
   function num(value) {
     const parsed = Number(value);
@@ -84,11 +106,30 @@
     });
   }
 
+  /** "$1,234.56" (or "-$…"). Only ever fed RECORDED USD, never a guess. */
+  function formatUsd(value) {
+    const n = num(value);
+    if (n === null) return '—';
+    const abs = Math.abs(n);
+    const text = abs >= 1000
+      ? abs.toLocaleString(undefined, { maximumFractionDigits: 0 })
+      : abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${n < 0 ? '-' : ''}$${text}`;
+  }
+
   function formatHeld(ms) {
     const total = Math.max(0, Math.floor((num(ms) || 0) / 1000));
     if (total < 60) return `${total}s`;
     if (total < 3600) return `${Math.floor(total / 60)}m ${total % 60}s`;
     return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
+  }
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  /** "Aug 5, 2026" — fixed format so a shared card reads the same everywhere. */
+  function formatStamp(ms) {
+    const d = new Date(ms);
+    return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
   }
 
   function shortMint(mint) {
@@ -97,15 +138,153 @@
   }
 
   /**
+   * Honest USD total for one side of a round.
+   *
+   * Every fill on the side must have recorded BOTH a native and a USD price
+   * at fill time — that pair is the real SOL/USD rate of that exact moment.
+   * If even one fill predates the USD tick, the answer is null (the card
+   * renders an em-dash), never a partial sum and never a conversion at some
+   * assumed later rate. Mirrors the engine's weightedUsd discipline.
+   */
+  function usdTotal(fills, side, solField) {
+    const list = (Array.isArray(fills) ? fills : []).filter((f) => f && f.side === side);
+    if (!list.length) return null;
+    let total = 0;
+    for (const fill of list) {
+      const usd = num(fill.priceUsd);
+      const native = num(fill.priceNative);
+      const sol = num(fill[solField]);
+      if (!(usd > 0) || !(native > 0) || sol === null) return null;
+      total += sol * (usd / native);
+    }
+    return total;
+  }
+
+  /**
+   * Gallery admission for user-uploaded backgrounds.
+   *
+   * Pure and side-effect free so the refusals can be tested directly. A full
+   * gallery REFUSES the new image with a visible reason — nothing is ever
+   * silently evicted; the user decides what goes.
+   */
+  function admitUpload(file, storedCount) {
+    const size = file ? Number(file.size) : NaN;
+    const type = file ? String(file.type || '') : '';
+    const count = Number(storedCount) || 0;
+    if (!file || !Number.isFinite(size) || size <= 0) {
+      return { ok: false, reason: 'That file could not be read.' };
+    }
+    if (type && !/^image\//.test(type)) {
+      return { ok: false, reason: 'Card backgrounds must be images.' };
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      const mb = (size / (1024 * 1024)).toFixed(1);
+      return { ok: false, reason: `That image is ${mb} MB — the limit is 2 MB.` };
+    }
+    if (count >= MAX_UPLOADS) {
+      return {
+        ok: false,
+        reason: `The gallery is full (${MAX_UPLOADS}/${MAX_UPLOADS}) — delete a background to add another. Nothing is evicted for you.`,
+      };
+    }
+    return { ok: true, reason: '' };
+  }
+
+  /* Built-in card backgrounds — drawn procedurally in the brand palette, so
+   * they cost zero assets and work identically on the 1200×675 card and the
+   * little gallery thumbnails. All of them are dark by construction; the
+   * numbers stay legible without a scrim. */
+  const BACKGROUNDS = [
+    { id: 'void', name: 'Void', paint(ctx, w, h) {
+      ctx.fillStyle = COLORS.bg;
+      ctx.fillRect(0, 0, w, h);
+    } },
+    { id: 'ember', name: 'Ember', paint(ctx, w, h) {
+      ctx.fillStyle = '#0D0A07';
+      ctx.fillRect(0, 0, w, h);
+      const glow = ctx.createRadialGradient(w * 0.2, h * 1.05, 0, w * 0.2, h * 1.05, Math.max(w, h) * 0.9);
+      glow.addColorStop(0, 'rgba(255, 127, 39, 0.36)');
+      glow.addColorStop(0.45, 'rgba(255, 157, 69, 0.12)');
+      glow.addColorStop(1, 'rgba(255, 157, 69, 0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, w, h);
+      const top = ctx.createRadialGradient(w * 0.9, -h * 0.1, 0, w * 0.9, -h * 0.1, Math.max(w, h) * 0.6);
+      top.addColorStop(0, 'rgba(255, 94, 30, 0.10)');
+      top.addColorStop(1, 'rgba(255, 94, 30, 0)');
+      ctx.fillStyle = top;
+      ctx.fillRect(0, 0, w, h);
+    } },
+    { id: 'deep', name: 'Deep', paint(ctx, w, h) {
+      const sea = ctx.createLinearGradient(0, 0, w, h);
+      sea.addColorStop(0, '#08111F');
+      sea.addColorStop(0.55, '#0B1A33');
+      sea.addColorStop(1, '#050A14');
+      ctx.fillStyle = sea;
+      ctx.fillRect(0, 0, w, h);
+      const beam = ctx.createRadialGradient(w * 0.75, h * 0.2, 0, w * 0.75, h * 0.2, Math.max(w, h) * 0.7);
+      beam.addColorStop(0, 'rgba(106, 169, 255, 0.14)');
+      beam.addColorStop(1, 'rgba(106, 169, 255, 0)');
+      ctx.fillStyle = beam;
+      ctx.fillRect(0, 0, w, h);
+    } },
+    { id: 'dusk', name: 'Dusk', paint(ctx, w, h) {
+      const sky = ctx.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0, '#170D2B');
+      sky.addColorStop(0.6, '#221040');
+      sky.addColorStop(1, '#0B0714');
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, w, h);
+      const halo = ctx.createRadialGradient(w * 0.5, h * 0.85, 0, w * 0.5, h * 0.85, Math.max(w, h) * 0.55);
+      halo.addColorStop(0, 'rgba(183, 134, 255, 0.20)');
+      halo.addColorStop(1, 'rgba(183, 134, 255, 0)');
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, w, h);
+    } },
+    { id: 'grid', name: 'Grid', paint(ctx, w, h) {
+      ctx.fillStyle = '#090C12';
+      ctx.fillRect(0, 0, w, h);
+      const step = Math.max(24, Math.round(w / 20));
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = step; x < w; x += step) { ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h); }
+      for (let y = step; y < h; y += step) { ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); }
+      ctx.stroke();
+      const fade = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.75);
+      fade.addColorStop(0, 'rgba(9, 12, 18, 0)');
+      fade.addColorStop(1, 'rgba(9, 12, 18, 0.9)');
+      ctx.fillStyle = fade;
+      ctx.fillRect(0, 0, w, h);
+    } },
+  ];
+
+  /** Paint one built-in background by id. False when the id is unknown. */
+  function paintBackground(ctx, id, w, h) {
+    const bg = BACKGROUNDS.find((b) => b.id === id);
+    if (!ctx || !bg) return false;
+    ctx.save();
+    bg.paint(ctx, w, h);
+    ctx.restore();
+    return true;
+  }
+
+  /**
    * Turn a round trip (or an open position) into everything the card renders.
    *
    * Pure and canvas-free, so the numbers on a shared card can be asserted
    * directly. Returns null when there is nothing meaningful to show, rather
    * than rendering a card full of dashes.
+   *
+   * `opts.prefs` carries the customization flags (showSymbol, showInvested,
+   * showReturned, showPercent, showUsd, showDate, showAfter, accent,
+   * background). An ABSENT flag means shown — old settings blobs keep meaning
+   * "everything on". There is deliberately no flag for the watermark or the
+   * brand bar; drawCard ignores the model entirely for those.
    */
   function cardModel(source, opts) {
     if (!source || typeof source !== 'object') return null;
     const options = opts || {};
+    const prefs = options.prefs || {};
 
     const invested = num(source.investedSol);
     const returned = num(source.returnedSol);
@@ -121,6 +300,40 @@
     // Traders read multiples, not percentages, on a flex card.
     const multiple = (basis + pnlSol) / basis;
 
+    // USD figures are only ever RECORDED, never derived here from an assumed
+    // rate: the caller passes totals built from fills that all carried a USD
+    // price at fill time (usdTotal), or nothing at all. Missing renders as an
+    // em-dash — an honest gap, not a fabricated conversion. Number.isFinite
+    // (no coercion) matters: Number(null) is 0, and an absent total must not
+    // become a fabricated "$0.00".
+    const investedUsd = Number.isFinite(source.investedUsd) && source.investedUsd > 0
+      ? Number(source.investedUsd)
+      : null;
+    const returnedUsd = Number.isFinite(source.returnedUsd) && source.returnedUsd >= 0
+      ? Number(source.returnedUsd)
+      : null;
+    const pnlUsd = investedUsd !== null && returnedUsd !== null ? returnedUsd - investedUsd : null;
+
+    // The After: observed post-exit extremes only — a watch that saw nothing
+    // wrote nothing, and this line simply repeats what was recorded.
+    const after = source.afterExit && typeof source.afterExit === 'object' ? source.afterExit : null;
+    let afterText = '';
+    let afterColor = COLORS.dim;
+    if (after && num(after.samples) > 0) {
+      const up = num(after.maxPct);
+      const down = num(after.minPct);
+      const dominant = up === null ? down : (down === null ? up : (Math.abs(up) >= Math.abs(down) ? up : down));
+      if (dominant !== null) {
+        const missed = dominant >= 0;
+        afterColor = missed ? COLORS.amber : COLORS.green;
+        afterText = `${missed ? '+' : ''}${dominant.toFixed(0)}% after exit — ${missed ? 'left on the table' : 'dodged'}`;
+      }
+    }
+
+    const stampAt = num(source.closedAt) > 0 ? num(source.closedAt) : num(source.openedAt);
+    const on = (flag) => flag !== false;
+    const requestedBg = options.background || prefs.background || null;
+
     return {
       symbol: String(source.symbol || shortMint(source.mint) || '—'),
       mint: String(source.mint || ''),
@@ -132,8 +345,12 @@
       multipleText: `${multiple.toFixed(multiple >= 10 ? 1 : 2)}x`,
       pnlPctText: `${win ? '+' : ''}${pnlPct.toFixed(1)}%`,
       pnlSolText: `${win ? '+' : ''}${formatSol(pnlSol)} SOL`,
+      pnlSolHeroText: `${win ? '+' : ''}${formatSol(pnlSol, Math.abs(pnlSol) >= 100 ? 1 : 2)}`,
       investedText: `${formatSol(invested)} SOL`,
       returnedText: returned === null ? '—' : `${formatSol(returned)} SOL`,
+      investedUsdText: investedUsd !== null ? `(${formatUsd(investedUsd)})` : '—',
+      returnedUsdText: returnedUsd !== null ? `(${formatUsd(returnedUsd)})` : '—',
+      pnlUsdText: pnlUsd !== null ? `(${pnlUsd >= 0 ? '+' : ''}${formatUsd(pnlUsd)})` : '—',
       // Entry and exit read as market caps when they are known, because that
       // is how a trade gets described: "in at 240K, out at 900K".
       entryText: num(source.entryMcap) > 0
@@ -143,13 +360,29 @@
         ? formatMarketCap(source.exitMcap)
         : formatPrice(source.exitPrice ?? source.lastPriceNative),
       heldText: formatHeld(source.heldMs),
+      dateText: stampAt > 0 ? formatStamp(stampAt) : '',
+      afterText,
+      afterColor,
+      // Semantic verdict color — never overridden by the accent pick.
       accent: win ? COLORS.green : COLORS.red,
+      // Cosmetic trim only.
+      trim: ACCENTS[prefs.accent] || COLORS.amber,
       statusText: open ? 'OPEN POSITION' : 'CLOSED',
-      // Never optional: a shared paper trade must be labelled as one.
+      show: {
+        symbol: on(prefs.showSymbol),
+        invested: on(prefs.showInvested),
+        returned: on(prefs.showReturned),
+        percent: on(prefs.showPercent),
+        usd: on(prefs.showUsd),
+        date: on(prefs.showDate),
+        after: on(prefs.showAfter),
+      },
+      // Never optional: a shared paper trade must be labelled as one. These
+      // fields exist for callers to read; drawBranding does not consult them.
       watermark: WATERMARK_TEXT,
       brand: BRAND_TEXT,
       handle: options.handle ? `@${String(options.handle).replace(/^@+/, '')}` : '',
-      background: options.background || null,
+      background: BACKGROUNDS.some((b) => b.id === requestedBg) ? requestedBg : null,
     };
   }
 
@@ -172,12 +405,20 @@
    * Paint the card.
    *
    * `media` is an optional already-loaded HTMLImageElement / HTMLVideoElement /
-   * ImageBitmap used as the background. A GIF passed as an <img> paints its
-   * currently-displayed frame, which is what makes "use a GIF" work for a
-   * still export; the animated export path re-draws per frame.
+   * ImageBitmap used as the background (a user upload). A GIF passed as an
+   * <img> paints its currently-displayed frame. When no media is given, the
+   * model's built-in background id (if any) is painted instead.
+   *
+   * Draw order matters: every customizable element paints first, and
+   * drawBranding() paints LAST so the PAPER watermark and brand bar sit on
+   * top of whatever the trader chose to show or hide.
    */
   function drawCard(ctx, model, media) {
     if (!ctx || !model) return false;
+    // Absent flags mean "shown" — hand-built models without `show` keep the
+    // full layout.
+    const show = model.show || {};
+    const trim = model.trim || COLORS.amber;
 
     ctx.save();
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
@@ -186,7 +427,8 @@
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-    // 2. Custom background, cover-fit and darkened so text stays legible.
+    // 2. Background: the user's picture, cover-fit and scrimmed so text stays
+    // legible — or one of the built-in procedural backdrops.
     if (media) {
       const sw = media.naturalWidth || media.videoWidth || media.width;
       const sh = media.naturalHeight || media.videoHeight || media.height;
@@ -202,9 +444,135 @@
       scrim.addColorStop(1, 'rgba(10, 13, 19, 0.94)');
       ctx.fillStyle = scrim;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    } else if (model.background) {
+      paintBackground(ctx, model.background, WIDTH, HEIGHT);
     }
 
-    // 3. PAPER watermark — huge, rotated, low-alpha, behind the numbers.
+    // 3. Trim rail down the left edge — the accent pick, never the verdict.
+    ctx.fillStyle = trim;
+    ctx.fillRect(0, 0, 8, HEIGHT);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    // 4. Header: the token, big, Padre-style — plus the multiple chip.
+    let headerX = 64;
+    if (show.symbol !== false) {
+      ctx.fillStyle = COLORS.text;
+      ctx.font = '800 54px Inter, ui-sans-serif, system-ui, sans-serif';
+      ctx.fillText(model.symbol, headerX, 104);
+      headerX += ctx.measureText(model.symbol).width + 22;
+
+      ctx.fillStyle = COLORS.faint;
+      ctx.font = '500 19px ui-monospace, "JetBrains Mono", Menlo, monospace';
+      ctx.fillText(model.mintShort, 64, 136);
+    }
+    if (show.percent !== false) {
+      ctx.fillStyle = model.accent;
+      ctx.font = '800 30px ui-monospace, "JetBrains Mono", Menlo, monospace';
+      ctx.fillText(model.multipleText, headerX, 104);
+    }
+
+    // 5. Top-right: status, then date, then the trader's handle.
+    ctx.textAlign = 'right';
+    ctx.fillStyle = model.accent;
+    ctx.font = '800 16px ui-monospace, "JetBrains Mono", Menlo, monospace';
+    ctx.fillText(model.statusText, WIDTH - 64, 92);
+    let rightY = 120;
+    if (show.date !== false && model.dateText) {
+      ctx.fillStyle = COLORS.faint;
+      ctx.font = '500 16px ui-monospace, "JetBrains Mono", Menlo, monospace';
+      ctx.fillText(model.dateText, WIDTH - 64, rightY);
+      rightY += 28;
+    }
+    if (model.handle) {
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = '700 18px Inter, ui-sans-serif, system-ui, sans-serif';
+      ctx.fillText(model.handle, WIDTH - 64, rightY);
+    }
+    ctx.textAlign = 'left';
+
+    // 6. The hero: ◎ and the SOL P&L, huge, in the semantic verdict color.
+    ctx.fillStyle = model.accent;
+    ctx.font = '700 88px Inter, ui-sans-serif, system-ui, sans-serif';
+    ctx.fillText('◎', 64, 316);
+    const glyphWidth = ctx.measureText('◎').width;
+    ctx.font = '900 148px Inter, ui-sans-serif, system-ui, sans-serif';
+    ctx.fillText(model.pnlSolHeroText, 64 + glyphWidth + 24, 326);
+
+    // 7. The After — observed post-exit truth, straight off the round record.
+    if (show.after !== false && model.afterText) {
+      ctx.fillStyle = model.afterColor || COLORS.dim;
+      ctx.font = '700 24px ui-monospace, "JetBrains Mono", Menlo, monospace';
+      ctx.fillText(model.afterText, 64, 386);
+    }
+
+    // 8. Stat columns: Invested / Returned / P&L %, USD sub-lines beneath.
+    // Hidden columns reflow the remainder rather than leaving holes.
+    const columns = [];
+    if (show.invested !== false) columns.push(['INVESTED', model.investedText, model.investedUsdText, COLORS.text]);
+    if (show.returned !== false) columns.push(['RETURNED', model.returnedText, model.returnedUsdText, COLORS.text]);
+    if (show.percent !== false) columns.push(['P&L %', model.pnlPctText, model.pnlUsdText, model.accent]);
+    if (columns.length) {
+      const railLeft = 64;
+      const railRight = WIDTH - 64;
+      const columnWidth = (railRight - railLeft) / columns.length;
+      ctx.strokeStyle = COLORS.line;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(railLeft, 436);
+      ctx.lineTo(railRight, 436);
+      ctx.stroke();
+      columns.forEach(([label, value, usdSub, color], index) => {
+        const x = railLeft + columnWidth * index;
+        ctx.fillStyle = COLORS.faint;
+        ctx.font = '700 15px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        ctx.fillText(label, x, 470);
+        ctx.fillStyle = color;
+        ctx.font = '700 34px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        ctx.fillText(value, x, 510);
+        if (show.usd !== false) {
+          // Parenthesised USD when the round recorded it; a plain em-dash
+          // when it did not. Never a conversion at today's rate.
+          ctx.fillStyle = COLORS.dim;
+          ctx.font = '500 19px ui-monospace, "JetBrains Mono", Menlo, monospace';
+          ctx.fillText(usdSub, x, 542);
+        }
+      });
+    }
+
+    // 9. The journey line: entry → exit → hold, when known.
+    const journey = [];
+    if (model.entryText && model.entryText !== '—') journey.push('ENTRY ' + model.entryText);
+    if (!model.open && model.exitText && model.exitText !== '—') journey.push('EXIT ' + model.exitText);
+    if (model.heldText && model.heldText !== '0s') journey.push('HELD ' + model.heldText);
+    if (journey.length) {
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = '500 19px ui-monospace, "JetBrains Mono", Menlo, monospace';
+      ctx.fillText(journey.join('   ·   '), 64, 584);
+    }
+
+    // 10. NON-NEGOTIABLE, LAST, UNCONDITIONAL. drawBranding takes only the
+    // context — there is no flag, pref, or model field it could read, so no
+    // input combination produces a card without the PAPER watermark and the
+    // PaperTrench brand bar.
+    drawBranding(ctx);
+
+    ctx.restore();
+    return true;
+  }
+
+  /**
+   * The watermark doctrine, enforced by construction.
+   *
+   * Called unconditionally as drawCard's final step, and it receives ONLY
+   * the context: no model, no prefs, no flags — everything it paints comes
+   * from module constants. If you are editing this file to make the PAPER
+   * watermark or the PaperTrench mark removable: that is the one change this
+   * project will not take. Honest numbers are a safety property.
+   */
+  function drawBranding(ctx) {
+    // Diagonal PAPER watermark, over everything drawn before it.
     ctx.save();
     ctx.translate(WIDTH / 2, HEIGHT / 2);
     ctx.rotate(-20 * Math.PI / 180);
@@ -212,106 +580,47 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(255, 157, 69, 0.16)';
-    ctx.fillStyle = 'rgba(255, 157, 69, 0.06)';
-    ctx.fillText(model.watermark, 0, 0);
-    ctx.strokeText(model.watermark, 0, 0);
+    ctx.strokeStyle = 'rgba(255, 157, 69, 0.18)';
+    ctx.fillStyle = 'rgba(255, 157, 69, 0.07)';
+    ctx.fillText(WATERMARK_TEXT, 0, 0);
+    ctx.strokeText(WATERMARK_TEXT, 0, 0);
     ctx.restore();
 
-    // 4. Accent rail down the left edge.
-    ctx.fillStyle = model.accent;
-    ctx.fillRect(0, 0, 8, HEIGHT);
-
-    // 5. Header: token + status.
-    ctx.textAlign = 'left';
+    // Brand bar across the bottom: mark, name, disclaimer, site.
+    ctx.save();
     ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = COLORS.text;
-    ctx.font = '800 46px Inter, ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(model.symbol, 64, 96);
-
-    ctx.fillStyle = COLORS.faint;
-    ctx.font = '500 20px ui-monospace, "JetBrains Mono", Menlo, monospace';
-    ctx.fillText(model.mintShort, 64, 128);
-
-    ctx.fillStyle = model.accent;
-    ctx.font = '800 16px ui-monospace, "JetBrains Mono", Menlo, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(model.statusText, WIDTH - 64, 96);
-
-    // 6. The hero: multiple, then percent and SOL on their own rail beneath.
-    // Measuring and flowing rather than fixed offsets keeps a wide multiple
-    // (e.g. "128.4x") from colliding with the figures next to it.
-    ctx.textAlign = 'left';
-    ctx.fillStyle = model.accent;
-    ctx.font = '900 168px Inter, ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(model.multipleText, 60, 310);
-
-    ctx.font = '800 58px Inter, ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(model.pnlPctText, 64, 384);
-
-    const pctWidth = ctx.measureText(model.pnlPctText).width;
-    ctx.fillStyle = COLORS.text;
-    ctx.font = '700 32px ui-monospace, "JetBrains Mono", Menlo, monospace';
-    ctx.fillText(model.pnlSolText, 64 + pctWidth + 26, 384);
-
-    // 7. Stat rail.
-    const rail = [
-      ['IN', model.investedText],
-      ['OUT', model.returnedText],
-      ['ENTRY', model.entryText],
-      ['EXIT', model.exitText],
-      ['HELD', model.heldText],
-    ];
-    const railY = 512;
-    const railLeft = 64;
-    const railRight = WIDTH - 64;
-    const columnWidth = (railRight - railLeft) / rail.length;
-
-    ctx.strokeStyle = COLORS.line;
+    ctx.fillStyle = 'rgba(6, 8, 12, 0.92)';
+    ctx.fillRect(0, HEIGHT - BRAND_BAR_HEIGHT, WIDTH, BRAND_BAR_HEIGHT);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(64, railY - 44);
-    ctx.lineTo(WIDTH - 64, railY - 44);
+    ctx.moveTo(0, HEIGHT - BRAND_BAR_HEIGHT + 0.5);
+    ctx.lineTo(WIDTH, HEIGHT - BRAND_BAR_HEIGHT + 0.5);
     ctx.stroke();
 
-    rail.forEach(([label, value], index) => {
-      const x = railLeft + columnWidth * index;
-      ctx.fillStyle = COLORS.faint;
-      ctx.font = '700 15px ui-monospace, "JetBrains Mono", Menlo, monospace';
-      ctx.fillText(label, x, railY - 10);
-      ctx.fillStyle = COLORS.text;
-      ctx.font = '700 24px ui-monospace, "JetBrains Mono", Menlo, monospace';
-      ctx.fillText(value, x, railY + 24);
-    });
-
-    // 8. Footer: the small, clean PaperTrench mark.
-    const markY = HEIGHT - 44;
+    const baseline = HEIGHT - 25;
     ctx.fillStyle = COLORS.amber;
-    roundRect(ctx, 64, markY - 22, 26, 26, 7);
+    roundRect(ctx, 64, HEIGHT - 45, 26, 26, 7);
     ctx.fill();
     ctx.fillStyle = '#2A1400';
     ctx.font = '900 16px Inter, ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('P', 77, markY - 3);
+    ctx.fillText('P', 77, baseline);
 
     ctx.textAlign = 'left';
+    ctx.fillStyle = COLORS.text;
+    ctx.font = '800 19px Inter, ui-sans-serif, system-ui, sans-serif';
+    ctx.fillText(BRAND_TEXT, 102, baseline);
+    const brandWidth = ctx.measureText(BRAND_TEXT).width;
     ctx.fillStyle = COLORS.dim;
-    ctx.font = '700 17px Inter, ui-sans-serif, system-ui, sans-serif';
-    ctx.fillText(model.brand, 100, markY - 3);
+    ctx.font = '500 15px Inter, ui-sans-serif, system-ui, sans-serif';
+    ctx.fillText(BRAND_TAGLINE, 102 + brandWidth + 9, baseline);
 
-    ctx.fillStyle = COLORS.faint;
-    ctx.font = '500 14px ui-monospace, "JetBrains Mono", Menlo, monospace';
-    ctx.fillText('paper trading · not financial advice', 100, markY + 16);
-
-    if (model.handle) {
-      ctx.textAlign = 'right';
-      ctx.fillStyle = COLORS.dim;
-      ctx.font = '700 17px Inter, ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText(model.handle, WIDTH - 64, markY - 3);
-    }
-
+    ctx.textAlign = 'right';
+    ctx.fillStyle = COLORS.amber;
+    ctx.font = '600 15px ui-monospace, "JetBrains Mono", Menlo, monospace';
+    ctx.fillText(SITE_URL, WIDTH - 64, baseline);
     ctx.restore();
-    return true;
   }
 
   function roundRect(ctx, x, y, width, height, radius) {
@@ -326,9 +635,10 @@
   }
 
   const api = {
-    WIDTH, HEIGHT, COLORS, WATERMARK_TEXT, BRAND_TEXT,
-    cardModel, drawCard, coverRect,
-    formatPrice, formatMarketCap, formatSol, formatHeld, shortMint,
+    WIDTH, HEIGHT, COLORS, ACCENTS, WATERMARK_TEXT, BRAND_TEXT, BRAND_TAGLINE, SITE_URL,
+    BACKGROUNDS, MAX_UPLOAD_BYTES, MAX_UPLOADS,
+    cardModel, drawCard, coverRect, paintBackground, admitUpload, usdTotal,
+    formatPrice, formatMarketCap, formatSol, formatUsd, formatHeld, shortMint,
   };
 
   if (typeof window !== 'undefined') window.PTPnlCard = api;

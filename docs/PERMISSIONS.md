@@ -14,11 +14,20 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
 
 ## Host permissions vs. content scripts
 
-- **Content scripts are narrow.** They are injected ONLY into the supported
-  trading sites (axiom.trade, padre.gg, tinyastro.io, gmgn.ai, bullx.io,
-  dexscreener.com, birdeye.so, jup.ag, pump.fun). PaperTrench does not run on
-  any other page. (Earlier alphas injected everywhere; fixed as DEFECTS.md
-  O-09 and enforced by `scripts/preflight.sh` and a manifest test.)
+- **Content scripts are narrow.** The trading overlay is injected ONLY into
+  the supported trading sites (axiom.trade, padre.gg, tinyastro.io, gmgn.ai,
+  bullx.io, dexscreener.com, birdeye.so, jup.ag, pump.fun). (Earlier alphas
+  injected everywhere; fixed as DEFECTS.md O-09 and enforced by
+  `scripts/preflight.sh` and a manifest test.)
+- **x.com / twitter.com (v2.4.0, warm links).** Two small bridge scripts load
+  on X for the opt-in "Instant X links" feature. They are passive: they do
+  nothing until the background routes a click from a trading site into the
+  warm viewer tab, they read nothing from your X session, and they send
+  nothing anywhere (the only messages are the extension's own
+  navigation-request/result pair). The feature is off by default; while
+  enabled it keeps one muted background x.com tab as the viewer. A manifest
+  test pins that these entries carry ONLY the two bridge scripts — the
+  trading engine and overlay can never run on X.
 - **`host_permissions` stays broad** because the background service worker
   must `fetch()` endpoints the *user* configures: an OpenAI-compatible AI
   endpoint (any host they choose) and an optional private Solana RPC. Those

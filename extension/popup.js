@@ -7,7 +7,7 @@
 
 'use strict';
 
-const DEFAULTS = { balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true };
+const DEFAULTS = { appEnabled: true, balanceStartSol: 10, overlayEnabled: true, overlayHideWhenNoToken: true, warmXLinksEnabled: false };
 
 function $(id) { return document.getElementById(id); }
 
@@ -18,6 +18,8 @@ $('backup').addEventListener('click', backupWallet);
 $('restore').addEventListener('click', () => $('restoreFile').click());
 $('restoreFile').addEventListener('change', restoreWallet);
 $('overlay-window').addEventListener('click', openStreamOverlay);
+$('warmx').addEventListener('click', toggleWarmXLinks);
+$('power').addEventListener('click', togglePower);
 
 function fmt(n, dp = 4) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
@@ -85,6 +87,19 @@ async function load() {
       ? 'Disable overlay'
       : 'Enable overlay';
 
+    $('warmx').textContent = settings.warmXLinksEnabled
+      ? '⚡ Instant X links: On'
+      : '⚡ Instant X links: Off';
+
+    // The master switch outranks everything; the popup must show it loudly.
+    const appOn = settings.appEnabled !== false;
+    const power = $('power');
+    power.textContent = appOn ? '⏻ Turn PaperTrench off' : '⏻ Turn PaperTrench on';
+    power.className = appOn ? 'btn-backup' : 'btn-pri';
+    const badge = $('badge');
+    badge.textContent = appOn ? 'PAPER' : 'OFF';
+    badge.classList.toggle('badge-off', !appOn);
+
     $('cash').textContent = fmt(state.cashSol, 2);
     $('open').textContent = stats.openPositions;
     $('rounds').textContent = stats.rounds;
@@ -130,6 +145,39 @@ async function toggleOverlay() {
   $('status').textContent = tab
     ? 'Updated — the overlay will respond once you reload this page.'
     : 'Updated.';
+}
+
+/** THE off switch. One click and PaperTrench goes fully dormant everywhere —
+ * no overlay, no positions bar, no chart drawings, no title feed, no instant
+ * X links (the hidden viewer is released too) — live, in every open tab,
+ * until it is turned back on. Sub-settings are preserved, so switching back
+ * on restores exactly the configuration the user had. */
+async function togglePower() {
+  const stored = await chrome.storage.local.get(['pt_settings']);
+  const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+  const next = { ...settings, appEnabled: settings.appEnabled === false };
+  await chrome.storage.local.set({ pt_settings: next });
+  chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  await load();
+  $('status').textContent = next.appEnabled
+    ? 'PaperTrench is back on — your panels return per your settings.'
+    : 'PaperTrench is off everywhere. Nothing shows up on any site until you turn it back on. Your wallet, journal, and settings are untouched.';
+}
+
+/** Opt-in warm viewer for X links clicked on trading sites. The status line
+ * spells out the cost (one muted background x.com tab) — a hidden tab a user
+ * discovers by surprise is the kind of thing that erodes trust in an
+ * extension, so it is disclosed at the exact moment of opt-in. */
+async function toggleWarmXLinks() {
+  const stored = await chrome.storage.local.get(['pt_settings']);
+  const settings = { ...DEFAULTS, ...(stored.pt_settings || {}) };
+  const next = { ...settings, warmXLinksEnabled: !settings.warmXLinksEnabled };
+  await chrome.storage.local.set({ pt_settings: next });
+  chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
+  await load();
+  $('status').textContent = next.warmXLinksEnabled
+    ? 'On — X links on trading sites now open in a kept-warm viewer tab (~0.5s instead of ~3.5s). PaperTrench keeps one muted background x.com tab for this; Ctrl/Cmd/middle-click still opens normal tabs.'
+    : 'Off — the background X tab is released and links open normally.';
 }
 
 /** Chromeless window sized for the card layout — OBS window-captures it. */

@@ -125,7 +125,12 @@ function serviceWorker(opts = {}) {
           if (!tab) throw new Error('no tab ' + id);
           return tab;
         },
+        // The warm-links viewer registers these at import time.
+        onRemoved: { addListener: () => {} },
+        onUpdated: { addListener: () => {} },
+        onActivated: { addListener: () => {} },
       },
+      windows: { update: async () => ({}) },
       offscreen: {
         hasDocument: async () => false,
         createDocument: async () => {},

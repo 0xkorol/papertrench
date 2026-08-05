@@ -3,6 +3,59 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.5.0 — 2026-08-05
+
+Requested by the maintainer: let people flex their PaperTrench P&L — with
+the one thing that can never come off the card.
+
+- **The share card grew up.** Terminal-grade composer: token symbol and
+  multiple chip, a huge ◎ SOL P&L, Invested / Returned / P&L% columns with
+  honest USD sub-lines (em-dash when a fill never had a USD price — never a
+  fabricated conversion), the entry→exit→held journey line, and an
+  observed-only After line ("−62% after exit — dodged") no other terminal
+  can print, because no other terminal measures it.
+- **Backgrounds, yours.** Five built-in looks plus your own uploads — max
+  2 MB each, ten stored, saved between sessions, deletable. The drop zone
+  still works and now remembers what you dropped.
+- **Customize / Download / Copy.** Toggle which stats show, pick a trim
+  accent, download a PNG, or copy straight to the clipboard for
+  paste-and-go posting.
+- **The non-negotiable, by construction:** the PAPER watermark and the
+  PaperTrench brand bar are drawn last by a code path that reads no
+  settings — verified by a test that drives every combination of options
+  and asserts the branding survives all of them. Flex the result;
+  never fake it.
+
+## v2.4.0 — 2026-08-05
+
+- **A real off switch.** The popup now has a ⏻ button (and the dashboard an
+  "Enable PaperTrench" checkbox) that turns the whole extension dormant:
+  no overlay, no positions bar, no chart drawings, no title feed, no instant
+  X links — on every open tab, immediately, until you turn it back on.
+  "Disable overlay" only ever hid the panel; this is the switch for
+  "I don't want PaperTrench showing up anywhere right now." Your wallet,
+  journal, and every sub-setting are kept, so switching back on restores
+  exactly the setup you had.
+- **Instant X links (opt-in).** Traders vet a coin by clicking its X link —
+  and then wait ~3.5 seconds for a cold tab to load. With the new toggle in
+  the popup, X posts and profiles clicked on any supported trading site open
+  in a kept-warm viewer tab via an in-page navigation: about half a second,
+  and every follow-up click lands in the same already-hydrated tab. If the
+  fast route ever fails, it silently falls back to a normal load of the same
+  URL — worst case is exactly what you have today.
+- **Hover prefetch.** Rest the cursor on an X link for a tenth of a second
+  and the hidden viewer starts navigating there before you click — so the
+  click itself often just reveals an already-loaded post. Hovers never
+  create tabs, never move a tab you are reading, and a hover that never
+  becomes a click costs nothing.
+- Honest costs, stated up front: while enabled, PaperTrench keeps ONE muted
+  background x.com tab as the viewer (closed again if you turn the toggle
+  off before using it). Two passive bridge scripts now load on x.com —
+  they act only on PaperTrench's own messages and are pinned by a manifest
+  test to never include the trading engine or overlay. Zero new extension
+  permissions, no telemetry, no remote switches. Ctrl/Cmd/middle-click
+  always bypasses the feature and opens a real background tab.
+
 ## v2.3.0 — 2026-08-05
 
 Community feedback batch (thanks lev) — all four items, same day.

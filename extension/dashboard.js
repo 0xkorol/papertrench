@@ -2061,6 +2061,107 @@ function eventLabel(event) {
 let cardMedia = null;      // the user's chosen background image/GIF
 let cardMediaUrl = null;   // its object URL, revoked when replaced (D-44)
 let cardModelCurrent = null;
+let cardSourceCurrent = null;  // engine-derived numbers the model is rebuilt from
+let cardPrefs = null;          // working copy of settings.cardPrefs while the modal is open
+let cardUploads = [];          // gallery records ({id, name, blob, addedAt}) from IndexedDB
+
+/* Customize checkboxes ↔ cardPrefs keys. An absent key means SHOWN. The
+ * branding (PAPER watermark + brand bar) deliberately has no entry here and
+ * no pref anywhere — pnlcard.js draws it unconditionally, last. */
+const CARD_FLAG_INPUTS = [
+  ['card-flag-symbol', 'showSymbol'],
+  ['card-flag-invested', 'showInvested'],
+  ['card-flag-returned', 'showReturned'],
+  ['card-flag-percent', 'showPercent'],
+  ['card-flag-usd', 'showUsd'],
+  ['card-flag-date', 'showDate'],
+  ['card-flag-after', 'showAfter'],
+];
+
+/* ---- background gallery store (IndexedDB) ----
+ *
+ * User-uploaded card backgrounds persist in 'pt-cardmedia' / 'backgrounds' as
+ * {id, name, blob, addedAt}. chrome.storage cannot hold image blobs;
+ * IndexedDB stores them natively (same reasoning as recordings.js).
+ * Admission is PC.admitUpload — pure, tested: 2 MB per image, 10 stored, and
+ * a FULL gallery REFUSES the new image with a visible reason. Nothing is
+ * silently evicted; the user decides what goes. */
+const CARD_DB_NAME = 'pt-cardmedia';
+const CARD_DB_STORE = 'backgrounds';
+
+function cardDbOpen() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB unavailable')); return; }
+    let settled = false;
+    const finish = (fn, value) => { if (!settled) { settled = true; clearTimeout(timer); fn(value); } };
+    // Bounded open, like recordings.js: a stalled IndexedDB must degrade to
+    // "no gallery", never hang the composer.
+    const timer = setTimeout(() => finish(reject, new Error('IndexedDB open timed out')), 5000);
+    let request;
+    try {
+      request = indexedDB.open(CARD_DB_NAME, 1);
+    } catch (err) {
+      finish(reject, err instanceof Error ? err : new Error('IndexedDB open failed'));
+      return;
+    }
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CARD_DB_STORE)) {
+        db.createObjectStore(CARD_DB_STORE, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => finish(resolve, request.result);
+    request.onerror = () => finish(reject, request.error || new Error('IndexedDB open failed'));
+    request.onblocked = () => finish(reject, new Error('IndexedDB open blocked by another tab'));
+  });
+}
+
+function cardDbRequest(db, mode, run) {
+  return new Promise((resolve, reject) => {
+    const request = run(db.transaction(CARD_DB_STORE, mode).objectStore(CARD_DB_STORE));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
+  });
+}
+
+async function cardBgList() {
+  const db = await cardDbOpen();
+  try {
+    const entries = await cardDbRequest(db, 'readonly', (store) => store.getAll());
+    return (entries || []).sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+  } finally {
+    try { db.close(); } catch (_) {}
+  }
+}
+
+async function cardBgAdd(file) {
+  // Admission is re-checked here, not only at the drop site, so no future
+  // call path can slip past the 2 MB / 10-image doctrine.
+  const verdict = PC.admitUpload(file, cardUploads.length);
+  if (!verdict.ok) return { ok: false, reason: verdict.reason, record: null };
+  const record = {
+    id: 'bg' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    name: String(file.name || 'background'),
+    blob: file,
+    addedAt: Date.now(),
+  };
+  const db = await cardDbOpen();
+  try {
+    await cardDbRequest(db, 'readwrite', (store) => store.put(record));
+    return { ok: true, reason: '', record };
+  } finally {
+    try { db.close(); } catch (_) {}
+  }
+}
+
+async function cardBgRemove(id) {
+  const db = await cardDbOpen();
+  try {
+    await cardDbRequest(db, 'readwrite', (store) => store.delete(String(id)));
+  } finally {
+    try { db.close(); } catch (_) {}
+  }
+}
 
 /**
  * Open the share composer for one closed round.
@@ -2085,7 +2186,7 @@ function openShareCard(roundId) {
     return total > 0 ? total / qty : null;
   };
 
-  cardModelCurrent = PC.cardModel({
+  cardSourceCurrent = {
     ...round,
     entryPrice: weighted(buys, 'priceNative'),
     exitPrice: weighted(sells, 'priceNative'),
@@ -2093,21 +2194,296 @@ function openShareCard(roundId) {
     // actually gets described by when the card is shared.
     entryMcap: weighted(buys, 'mcap'),
     exitMcap: weighted(sells, 'mcap'),
-  }, { handle: (settings.leaderboardIdentity || {}).handle || '' });
+    // USD, honestly: a total exists only when EVERY fill on that side
+    // recorded a USD price at fill time (PC.usdTotal). A missing total
+    // renders as an em-dash sub-line — never a conversion at today's rate.
+    investedUsd: PC.usdTotal(trades, 'buy', 'solGross'),
+    returnedUsd: PC.usdTotal(trades, 'sell', 'solNet'),
+  };
+  // Absent key = everything shown; the working copy is adopted per-modal so
+  // half-toggled prefs never leak into settings without a persist.
+  cardPrefs = { ...(settings.cardPrefs || {}) };
 
-  if (!cardModelCurrent) return;
+  cardMedia = null;
+  if (cardMediaUrl) { try { URL.revokeObjectURL(cardMediaUrl); } catch (_) {} cardMediaUrl = null; }
+
+  if (!paintShareCard()) return;
   document.getElementById('card-modal').classList.add('open');
-  paintShareCard();
+  showCardMessage('');
+  syncCardCustomize();
+  refreshCardGallery();
 }
 
+/**
+ * Rebuild the model and repaint. The model is re-derived on every paint so a
+ * flag/accent/background change re-computes the exact strings — the numbers
+ * themselves still come only from the round record.
+ */
 function paintShareCard() {
   const canvas = document.getElementById('card-canvas');
-  if (!canvas || !cardModelCurrent) return;
+  if (!canvas || !cardSourceCurrent) return false;
+  cardModelCurrent = PC.cardModel(cardSourceCurrent, {
+    handle: (settings.leaderboardIdentity || {}).handle || '',
+    prefs: cardPrefs || settings.cardPrefs || {},
+  });
+  if (!cardModelCurrent) return false;
   PC.drawCard(canvas.getContext('2d'), cardModelCurrent, cardMedia);
+  return true;
 }
 
 function closeShareCard() {
   document.getElementById('card-modal').classList.remove('open');
+}
+
+/** The composer's one honest message line (refusals, copy failures). */
+function showCardMessage(text) {
+  const line = document.getElementById('card-msg');
+  if (!line) return;
+  line.textContent = text || '';
+  line.style.display = text ? '' : 'none';
+}
+
+/**
+ * Persist the composer prefs as pt_settings.cardPrefs — ONE key laid over a
+ * FRESH read (D-19 discipline), refused while storage is unreadable (D-15).
+ * engine.js never learns the key: unknown keys ride through mergeSettings,
+ * exactly like onboardingDismissed.
+ */
+async function persistCardPrefs() {
+  if (!cardPrefs || storageReadFailed) return;
+  const stored = await store.get(['pt_settings']);
+  if (stored === null) return;
+  const fresh = E.mergeSettings(stored.pt_settings);
+  fresh.cardPrefs = { ...cardPrefs };
+  try {
+    await store.set({ pt_settings: fresh });
+    settings = fresh;
+  } catch (_) {
+    // Card prefs are cosmetic — a failed save keeps the session copy and
+    // costs nothing real.
+  }
+}
+
+/** Reflect cardPrefs into the customize panel (absent key = checked). */
+function syncCardCustomize() {
+  const prefs = cardPrefs || {};
+  for (const [id, key] of CARD_FLAG_INPUTS) {
+    const input = document.getElementById(id);
+    if (input) input.checked = prefs[key] !== false;
+  }
+  const active = PC.ACCENTS[prefs.accent] ? prefs.accent : 'amber';
+  document.querySelectorAll('#card-accents .accent-swatch').forEach((swatch) => {
+    swatch.classList.toggle('selected', swatch.dataset.accent === active);
+  });
+}
+
+/** Load a stored blob into an <img> the painter can cover-fit. */
+function showUploadOnCard(record) {
+  return new Promise((resolve) => {
+    let url;
+    try {
+      url = URL.createObjectURL(record.blob);
+    } catch (_) {
+      resolve(false);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      // Replacing the media orphaned the previous object URL (DEFECT D-44).
+      if (cardMediaUrl) { try { URL.revokeObjectURL(cardMediaUrl); } catch (_) {} }
+      cardMediaUrl = url;
+      cardMedia = img;
+      resolve(true);
+    };
+    // A broken/unsupported file must not wipe the card.
+    img.onerror = () => { try { URL.revokeObjectURL(url); } catch (_) {} resolve(false); };
+    img.src = url;
+  });
+}
+
+/** Adopt a gallery selection: a built-in id or 'upload:<id>'. */
+async function selectCardBackground(choice) {
+  if (!cardPrefs) return;
+  if (String(choice).startsWith('upload:')) {
+    const record = cardUploads.find((r) => 'upload:' + r.id === choice);
+    if (!record || !(await showUploadOnCard(record))) return;
+  } else {
+    cardMedia = null;
+    if (cardMediaUrl) { try { URL.revokeObjectURL(cardMediaUrl); } catch (_) {} cardMediaUrl = null; }
+  }
+  cardPrefs.background = choice;
+  paintShareCard();
+  renderCardGallery();
+  persistCardPrefs().catch(() => {});
+}
+
+/** Load stored uploads, restore a persisted upload selection, render the strip. */
+async function refreshCardGallery() {
+  try {
+    cardUploads = await cardBgList();
+  } catch (_) {
+    cardUploads = [];
+    showCardMessage('The background gallery is unavailable (IndexedDB failed) — drops still work for this card only.');
+  }
+  const chosen = cardPrefs && cardPrefs.background;
+  if (typeof chosen === 'string' && chosen.startsWith('upload:')) {
+    const record = cardUploads.find((r) => 'upload:' + r.id === chosen);
+    if (record) {
+      if (await showUploadOnCard(record)) paintShareCard();
+    } else {
+      // The stored pick was deleted elsewhere; fall back to the plain card.
+      cardPrefs.background = null;
+    }
+  }
+  renderCardGallery();
+}
+
+function renderCardGallery() {
+  const host = document.getElementById('card-gallery');
+  if (!host) return;
+  const selected = (cardPrefs && cardPrefs.background) || 'void';
+  host.textContent = '';
+  for (const bg of PC.BACKGROUNDS) {
+    host.appendChild(cardThumb(bg.id, bg.name, null, selected));
+  }
+  for (const record of cardUploads) {
+    host.appendChild(cardThumb('upload:' + record.id, record.name, record, selected));
+  }
+  host.appendChild(cardUploadTile());
+}
+
+/** One gallery tile: a built-in (painted procedurally) or a stored upload. */
+function cardThumb(choice, name, record, selected) {
+  const tile = document.createElement('button');
+  tile.type = 'button';
+  tile.className = 'card-thumb' + (choice === selected ? ' selected' : '');
+  tile.title = name;
+  const canvas = document.createElement('canvas');
+  canvas.width = 120;
+  canvas.height = 68;
+  tile.appendChild(canvas);
+  const tctx = canvas.getContext('2d');
+  if (record) {
+    try {
+      // The thumbnail URL lives only until the blob is drawn.
+      const url = URL.createObjectURL(record.blob);
+      const img = new Image();
+      img.onload = () => {
+        const box = PC.coverRect(img.naturalWidth, img.naturalHeight, 120, 68);
+        tctx.drawImage(img, box.x, box.y, box.width, box.height);
+        try { URL.revokeObjectURL(url); } catch (_) {}
+      };
+      img.onerror = () => { try { URL.revokeObjectURL(url); } catch (_) {} };
+      img.src = url;
+    } catch (_) { /* an unreadable blob shows an empty tile */ }
+    const del = document.createElement('span');
+    del.className = 'del';
+    del.textContent = '×';
+    del.title = 'Delete this background';
+    del.addEventListener('click', (event) => {
+      event.stopPropagation();
+      deleteCardUpload(choice);
+    });
+    tile.appendChild(del);
+  } else if (tctx) {
+    PC.paintBackground(tctx, choice, 120, 68);
+  }
+  tile.addEventListener('click', () => { selectCardBackground(choice); });
+  return tile;
+}
+
+/** The "Upload image — Max 2 MB · N/10" tile at the end of the strip. */
+function cardUploadTile() {
+  const tile = document.createElement('button');
+  tile.type = 'button';
+  tile.className = 'card-thumb card-upload-tile';
+  const label = document.createElement('span');
+  label.textContent = 'Upload image';
+  const sub = document.createElement('small');
+  sub.textContent = `Max 2 MB · ${cardUploads.length}/${PC.MAX_UPLOADS}`;
+  tile.append(label, sub);
+  tile.addEventListener('click', () => {
+    const file = document.getElementById('card-file');
+    if (file) file.click();
+  });
+  return tile;
+}
+
+async function deleteCardUpload(choice) {
+  const id = String(choice).replace(/^upload:/, '');
+  try {
+    await cardBgRemove(id);
+  } catch (_) {
+    // The re-render below reflects whatever actually remains stored.
+  }
+  cardUploads = cardUploads.filter((r) => r.id !== id);
+  if (cardPrefs && cardPrefs.background === choice) {
+    // The selected background is gone; drop to the plain card, honestly.
+    await selectCardBackground('void');
+  } else {
+    renderCardGallery();
+  }
+}
+
+/**
+ * A dropped/picked file goes THROUGH the gallery: admitted (2 MB / 10 max —
+ * refusals get a visible reason, never a silent eviction), persisted to
+ * IndexedDB, then selected as the background. If IndexedDB itself fails the
+ * image is still used for this one card, so the drop keeps working — it just
+ * cannot persist.
+ */
+async function adoptCardUpload(chosen) {
+  if (!chosen) return;
+  const verdict = PC.admitUpload(chosen, cardUploads.length);
+  if (!verdict.ok) { showCardMessage(verdict.reason); return; }
+  showCardMessage('');
+  let added = null;
+  try {
+    added = await cardBgAdd(chosen);
+  } catch (_) {
+    added = null;
+  }
+  if (added && added.ok && added.record) {
+    cardUploads.push(added.record);
+    await selectCardBackground('upload:' + added.record.id);
+    return;
+  }
+  if (added && !added.ok) { showCardMessage(added.reason); return; }
+  showCardMessage('Could not save to the gallery — using the image for this card only.');
+  if (await showUploadOnCard({ blob: chosen })) paintShareCard();
+}
+
+/**
+ * Copy the card PNG to the clipboard. The ClipboardItem is created inside
+ * the click gesture with a Promise<Blob> payload — awaiting toBlob first
+ * would leave the gesture and Chrome would refuse the write. Failures get an
+ * honest message pointing at Download, which always works.
+ */
+function copyCard() {
+  const canvas = document.getElementById('card-canvas');
+  const button = document.getElementById('card-copy');
+  if (!canvas || !cardModelCurrent) return;
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard || !navigator.clipboard.write) {
+    showCardMessage('Copying images is not supported in this browser — use Download PNG instead.');
+    return;
+  }
+  const png = new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('PNG encode failed'));
+    }, 'image/png');
+  });
+  navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    .then(() => {
+      showCardMessage('');
+      if (button) {
+        button.textContent = 'Copied ✓';
+        setTimeout(() => { button.textContent = 'Copy'; }, 2000);
+      }
+    })
+    .catch(() => {
+      showCardMessage('Copy failed — the browser refused clipboard access. Use Download PNG instead.');
+    });
 }
 
 /** Wire the composer once, at startup — the modal lives outside the sections. */
@@ -2117,38 +2493,49 @@ function bindShareCard() {
   const drop = document.getElementById('card-drop');
   const file = document.getElementById('card-file');
 
-  const loadFile = (chosen) => {
-    if (!chosen) return;
-    const url = URL.createObjectURL(chosen);
-    const img = new Image();
-    img.onload = () => {
-      // Replacing the media orphaned the previous object URL (DEFECT D-44).
-      if (cardMediaUrl) { try { URL.revokeObjectURL(cardMediaUrl); } catch (_) {} }
-      cardMediaUrl = url;
-      cardMedia = img;
-      paintShareCard();
-    };
-    // A broken/unsupported file must not wipe the card.
-    img.onerror = () => URL.revokeObjectURL(url);
-    img.src = url;
-  };
-
-  file.addEventListener('change', () => loadFile(file.files && file.files[0]));
+  file.addEventListener('change', () => {
+    adoptCardUpload(file.files && file.files[0]);
+    // Re-picking the same file must fire change again.
+    file.value = '';
+  });
   drop.addEventListener('dragover', (event) => { event.preventDefault(); drop.classList.add('hot'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('hot'));
   drop.addEventListener('drop', (event) => {
     event.preventDefault();
     drop.classList.remove('hot');
-    loadFile(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]);
+    adoptCardUpload(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]);
   });
 
-  document.getElementById('card-clear').addEventListener('click', () => {
-    cardMedia = null;
-    paintShareCard();
-  });
   document.getElementById('card-close').addEventListener('click', closeShareCard);
   modal.addEventListener('click', (event) => { if (event.target === modal) closeShareCard(); });
 
+  document.getElementById('card-customize').addEventListener('click', () => {
+    document.getElementById('card-custom').classList.toggle('hidden');
+  });
+  for (const [id, key] of CARD_FLAG_INPUTS) {
+    const input = document.getElementById(id);
+    if (!input) continue;
+    input.addEventListener('change', () => {
+      if (!cardPrefs) return;
+      // Stored as `false` only when hidden — an absent key stays "shown", so
+      // settings blobs from before this feature keep meaning "everything on".
+      if (input.checked) delete cardPrefs[key];
+      else cardPrefs[key] = false;
+      paintShareCard();
+      persistCardPrefs().catch(() => {});
+    });
+  }
+  document.querySelectorAll('#card-accents .accent-swatch').forEach((swatch) => {
+    swatch.addEventListener('click', () => {
+      if (!cardPrefs) return;
+      cardPrefs.accent = swatch.dataset.accent;
+      syncCardCustomize();
+      paintShareCard();
+      persistCardPrefs().catch(() => {});
+    });
+  });
+
+  document.getElementById('card-copy').addEventListener('click', copyCard);
   document.getElementById('card-download').addEventListener('click', () => {
     const canvas = document.getElementById('card-canvas');
     if (!canvas || !cardModelCurrent) return;
@@ -2736,7 +3123,8 @@ function renderSettings(el) {
       </div>
       <div class="card">
         <h3>Overlay</h3>
-        <div class="field field-check"><label><input type="checkbox" id="set-overlay" ${settings.overlayEnabled !== false ? 'checked' : ''}> Enable overlay</label><small>Master switch for the PaperTrench panel. Off hides it on all pages.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-app-enabled" ${settings.appEnabled !== false ? 'checked' : ''}> Enable PaperTrench</label><small>The app-wide master switch. Off means PaperTrench shows up nowhere at all — no overlay, no positions bar, no chart drawings, no instant X links — until you turn it back on. Your wallet, journal, and every other setting are kept.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-overlay" ${settings.overlayEnabled !== false ? 'checked' : ''}> Enable overlay</label><small>The trade panel itself. Off hides the panel on all pages (the switch above outranks this one).</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-overlay-auto-hide" ${settings.overlayHideWhenNoToken !== false ? 'checked' : ''}> Hide overlay when no token is detected</label><small>The panel disappears on home pages and screeners, then pops back when you open a coin.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-focus-mode" ${settings.panelFocusMode === true ? 'checked' : ''}> Focus mode (Axiom-style)</label><small>Strips the banner, watermark, sparkline, thesis and last-close card from the trade tab — only token, price, balance and buy/sell controls remain. For distraction-free execution.</small></div>
       </div>
@@ -2962,6 +3350,7 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     profitAlertPct: Math.max(1, Number(document.getElementById('set-profit-alert-pct').value) || 10),
     averagePriceLinesEnabled: document.getElementById('set-avg-lines').checked,
     positionsBarEnabled: document.getElementById('set-positions-bar').checked,
+    appEnabled: document.getElementById('set-app-enabled').checked,
     overlayEnabled: document.getElementById('set-overlay').checked,
     overlayHideWhenNoToken: document.getElementById('set-overlay-auto-hide').checked,
     panelFocusMode: document.getElementById('set-focus-mode').checked,

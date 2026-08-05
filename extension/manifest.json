@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PaperTrench",
-  "version": "2.3.0",
+  "version": "2.5.0",
   "description": "Paper-trade Solana memecoins with live P&L, native chart fills, session replay, AI coaching, and a verifiable track record.",
   "permissions": [
     "storage",
@@ -37,7 +37,9 @@
         "https://*.pump.fun/*"
       ],
       "js": [
-        "price-bridge.js"
+        "xlinks.js",
+        "price-bridge.js",
+        "warm-open-hook.js"
       ],
       "run_at": "document_start",
       "world": "MAIN",
@@ -62,6 +64,7 @@
         "https://*.pump.fun/*"
       ],
       "js": [
+        "xlinks.js",
         "engine.js",
         "attest.js",
         "quote.js",
@@ -69,10 +72,39 @@
         "resolver.js",
         "chart-markers.js",
         "title-feed.js",
-        "content.js"
+        "content.js",
+        "warm-links.js"
       ],
       "css": [
         "content.css"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://*.x.com/*",
+        "https://twitter.com/*",
+        "https://*.twitter.com/*"
+      ],
+      "js": [
+        "xwarm-main.js"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://*.x.com/*",
+        "https://twitter.com/*",
+        "https://*.twitter.com/*"
+      ],
+      "js": [
+        "xwarm-relay.js"
       ],
       "run_at": "document_idle",
       "world": "ISOLATED",

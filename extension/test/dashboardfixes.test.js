@@ -180,7 +180,12 @@ function serviceWorker() {
         sendMessage: async () => ({}),
         captureVisibleTab: async () => 'data:image/jpeg;base64,',
         get: async () => { throw new Error('no tab'); },
+        // The warm-links viewer registers these at import time.
+        onRemoved: { addListener: () => {} },
+        onUpdated: { addListener: () => {} },
+        onActivated: { addListener: () => {} },
       },
+      windows: { update: async () => ({}) },
       offscreen: { hasDocument: async () => false, createDocument: async () => {} },
       alarms: { clear: async () => true, create: () => {}, onAlarm: { addListener: () => {} } },
     },

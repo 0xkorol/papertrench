@@ -9,13 +9,15 @@
 
 
 if (typeof importScripts === 'function') {
-  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js');
+  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'xlinks.js');
 }
 const RP = self.PTReplay;
 const R = self.PaperTrenchResolver;
 const FEED = self.PTOnchainFeed;
+const XL = self.PTXLinks;
 
 const DEFAULTS = {
+  appEnabled: true,
   balanceStartSol: 10,
   presetsBuy: [0.1, 0.5, 1, 2],
   sellPcts: [25, 50, 75, 100],
@@ -37,6 +39,7 @@ const DEFAULTS = {
   averagePriceLinesEnabled: true,
   positionsBarEnabled: true,
   positionsBarHidden: false,
+  warmXLinksEnabled: false,
   settingsRevision: 6,
   aiEndpoint: '',
   aiModel: '',
@@ -516,6 +519,355 @@ function buildRoundReviewPrompt(round, trades) {
   ];
 }
 
+/* -------------------- warm X links (instant post opens) --------------------
+ *
+ * Opt-in (warmXLinksEnabled, default off). One muted background tab is kept
+ * hydrated on x.com; clicking an X post/profile link on a trading site routes
+ * into it via an in-page SPA navigation (~0.5s) instead of a cold tab (~3.5s).
+ *
+ * Single-viewer model: after a click the SAME tab stays registered as the
+ * viewer, so every subsequent click is a warm SPA hop in an already-hydrated
+ * page — no per-click tab churn, no idle-tab TTL bookkeeping, and nothing to
+ * recycle out from under the user. Modified clicks bypass the feature in the
+ * content script, so multi-tab comparison workflows still work natively.
+ *
+ * Reveal-first: the viewer is brought to front the moment the SPA request is
+ * acked, BEFORE verification. Perceived latency is one message round-trip;
+ * verification runs behind the user's eyes and repairs with a full load of the
+ * same URL only if the in-page route did not actually arrive.
+ *
+ * The viewer tab id lives in chrome.storage.session: gone with the browser
+ * session (matching the tab itself), survives service-worker restarts.
+ * No alarms, no telemetry, no remote flags — the only gate is the user's own
+ * toggle, and the only logging is console.debug on this machine.
+ */
+
+/** The warm feature runs only under BOTH switches: its own toggle and the
+ * app-wide master switch (appEnabled). "PaperTrench off" must mean off —
+ * including the hidden viewer tab and all link interception. */
+function warmFeatureOn(settings) {
+  return settings.appEnabled !== false && settings.warmXLinksEnabled === true;
+}
+
+const WARM_IDLE_URL = 'https://x.com/home';
+const WARM_SPA_TIMEOUT_MS = 6000;
+const WARM_STORAGE_KEY = 'pt_warm_tab';
+// Mirrors the manifest's trading-site matches; used only to decide whether
+// enabling the toggle should pre-warm immediately.
+const WARM_PLATFORM_URLS = [
+  'https://axiom.trade/*', 'https://*.axiom.trade/*', 'https://*.padre.gg/*',
+  'https://*.tinyastro.io/*', 'https://gmgn.ai/*', 'https://*.gmgn.ai/*',
+  'https://*.bullx.io/*', 'https://dexscreener.com/*', 'https://*.dexscreener.com/*',
+  'https://birdeye.so/*', 'https://*.birdeye.so/*', 'https://jup.ag/*',
+  'https://*.jup.ag/*', 'https://pump.fun/*', 'https://*.pump.fun/*',
+];
+
+// One in-flight SPA request per viewer tab; a newer click supersedes the
+// older one so a late failure can never "repair" the tab back to a stale
+// target the user already clicked past.
+const warmPending = new Map(); // tabId -> { requestId, url, timer }
+
+// All read-modify-write of the viewer registration is serialized through this
+// chain — the reference design declared a lock and then never used it, which
+// let two rapid clicks race createTab and leak a hidden tab.
+let warmChain = Promise.resolve();
+function warmSerial(fn) {
+  const next = warmChain.catch(() => {}).then(fn);
+  warmChain = next.catch(() => {});
+  return next;
+}
+
+function readWarmTab() {
+  return new Promise((resolve) => chrome.storage.session.get([WARM_STORAGE_KEY], (value) => {
+    if (chrome.runtime && chrome.runtime.lastError) { resolve(null); return; }
+    resolve(value[WARM_STORAGE_KEY] || null);
+  }));
+}
+function writeWarmTab(state) {
+  return new Promise((resolve) => chrome.storage.session.set({ [WARM_STORAGE_KEY]: state }, () => resolve()));
+}
+function clearWarmTabState() {
+  return new Promise((resolve) => chrome.storage.session.remove(WARM_STORAGE_KEY, () => resolve()));
+}
+
+/** The registered viewer tab, revalidated against reality: it must still exist
+ * and still be on X. Anything else clears the registration — a tab the user
+ * closed or navigated elsewhere is their tab, not our viewer. */
+async function validWarmTab() {
+  const state = await readWarmTab();
+  if (!state || !Number.isFinite(state.tabId)) return null;
+  let tab = null;
+  try { tab = await chrome.tabs.get(state.tabId); } catch (_) { tab = null; }
+  let host = '';
+  try { host = new URL((tab && (tab.pendingUrl || tab.url)) || '').hostname; } catch (_) { host = ''; }
+  if (!tab || !XL.isXHost(host)) {
+    await clearWarmTabState();
+    return null;
+  }
+  return { tab, state };
+}
+
+async function warmReveal(tab, url) {
+  // Muted only while hidden; a viewer the user is looking at must play media
+  // normally. Passing url makes this the full-load route in one call.
+  const props = url ? { url, active: true, muted: false } : { active: true, muted: false };
+  try { await chrome.tabs.update(tab.id, props); } catch (_) {}
+  // active:true selects the tab within its window; if the viewer lives in
+  // another window that window must also be focused or nothing visibly happens
+  // on a multi-window setup.
+  try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (_) {}
+}
+
+/** Pre-create the hidden viewer so the session's FIRST click is already warm.
+ * Idempotent under warmSerial: n trading tabs announcing themselves create
+ * one viewer, not n. */
+function warmPrewarm() {
+  return warmSerial(async () => {
+    const settings = await getSettings();
+    if (!warmFeatureOn(settings)) return;
+    if (await validWarmTab()) return;
+    const tab = await chrome.tabs.create({ url: WARM_IDLE_URL, active: false });
+    try { await chrome.tabs.update(tab.id, { muted: true }); } catch (_) {}
+    await writeWarmTab({ tabId: tab.id, used: false, createdAt: Date.now() });
+  });
+}
+
+function warmSupersede(tabId) {
+  const pending = warmPending.get(tabId);
+  if (pending) {
+    clearTimeout(pending.timer);
+    warmPending.delete(tabId);
+  }
+}
+
+function warmRepair(tabId, requestId, reason) {
+  const pending = warmPending.get(tabId);
+  if (!pending || pending.requestId !== requestId) return; // superseded
+  warmSupersede(tabId);
+  console.debug('PaperTrench warm links: SPA route failed (' + reason + '), falling back to a full load');
+  chrome.tabs.update(tabId, { url: pending.url }).catch(() => {});
+}
+
+function warmSpaResult(message, sender) {
+  const tabId = sender && sender.tab ? sender.tab.id : null;
+  if (!Number.isFinite(tabId)) return;
+  const pending = warmPending.get(tabId);
+  // Results are hints from a page-adjacent world: only the tab we actually
+  // messaged may report, and only for the request that is still live.
+  if (!pending || pending.requestId !== message.requestId) return;
+  if (message.ok === true) {
+    warmSupersede(tabId);
+    return;
+  }
+  warmRepair(tabId, message.requestId, message.reason || 'spa_failed');
+}
+
+/** Same X page, regardless of x.com/twitter.com host or trailing slash.
+ * Re-clicking a token's X link is the most common flow there is — the viewer
+ * already showing that exact post must simply be revealed, never re-loaded
+ * (and never even messaged: a mid-load viewer has no relay yet, and the old
+ * fallback answered that with a redundant full reload of the same URL). */
+function sameXTarget(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    if (!XL.isXHost(ua.hostname) || !XL.isXHost(ub.hostname)) return false;
+    return ua.pathname.replace(/\/+$/, '') === ub.pathname.replace(/\/+$/, '')
+      && ua.search === ub.search;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Open a brand-new viewer next to the tab that was clicked, when possible. */
+async function warmCreateViewer(url, sender) {
+  const opener = sender && sender.tab;
+  if (opener && Number.isFinite(opener.id)) {
+    try {
+      return await chrome.tabs.create({
+        url, active: true,
+        windowId: opener.windowId, index: opener.index + 1, openerTabId: opener.id,
+      });
+    } catch (_) { /* opener window vanished mid-click */ }
+  }
+  return chrome.tabs.create({ url, active: true });
+}
+
+/** Hover prefetch: drive the HIDDEN viewer to the hovered target so the
+ * eventual click is only a reveal. Strictly weaker than a click — it never
+ * creates a tab, never reveals, never touches a viewer the user is looking
+ * at, and never claims the tab as used. If the in-page route fails, the
+ * normal repair full-loads the target while still hidden — which is itself a
+ * prefetch: even with X's router refusing the SPA trick, the click lands on
+ * a fully loaded page. A hint with no live relay does nothing at all: a
+ * hover is not intent enough to spend a reload on. */
+function warmHint(rawUrl, settings) {
+  if (!warmFeatureOn(settings)) return Promise.resolve();
+  const target = XL.classify(String(rawUrl || ''));
+  if (!target) return Promise.resolve();
+  return warmSerial(async () => {
+    const valid = await validWarmTab();
+    if (!valid) return;
+    const { tab } = valid;
+    if (tab.active) return;
+    if (tab.discarded === true || tab.status === 'unloaded') return;
+    if (sameXTarget(tab.pendingUrl || tab.url || '', target.url)) return;
+    warmSupersede(tab.id);
+    const requestId = 'pth-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e9).toString(36);
+    const pending = { requestId, url: target.url, timer: null };
+    warmPending.set(tab.id, pending);
+    pending.timer = setTimeout(() => warmRepair(tab.id, requestId, 'hint_timeout'), WARM_SPA_TIMEOUT_MS);
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'pt_warm_spa',
+        requestId,
+        url: target.url,
+        kind: target.kind,
+        handle: target.handle,
+        postId: target.postId,
+      });
+      console.debug('PaperTrench warm links: prefetch dispatched for hover target');
+    } catch (_) {
+      warmSupersede(tab.id);
+    }
+  });
+}
+
+async function warmOpen(rawUrl, sender, settings) {
+  // Re-classify at this trust boundary; content-script input is not trusted.
+  const target = XL.classify(String(rawUrl || ''));
+  if (!target) return { ok: false, error: 'not an X post or profile URL' };
+
+  if (!warmFeatureOn(settings)) {
+    // Toggle raced off between click and message: behave like a native open.
+    await warmCreateViewer(target.url, sender);
+    console.debug('PaperTrench warm links: route=new_tab (feature disabled)');
+    return { ok: true, route: 'new_tab' };
+  }
+
+  return warmSerial(async () => {
+    const startedAt = Date.now();
+    const valid = await validWarmTab();
+
+    if (!valid) {
+      // Cold path — and the new tab immediately becomes the viewer, so only
+      // the first click of a session (or after the user closes the viewer)
+      // ever pays the cold price.
+      const tab = await warmCreateViewer(target.url, sender);
+      await writeWarmTab({ tabId: tab.id, used: true, createdAt: Date.now() });
+      console.debug('PaperTrench warm links: route=cold_tab (no viewer yet; this tab is now the viewer)');
+      return { ok: true, route: 'cold_tab' };
+    }
+
+    const { tab, state } = valid;
+    warmSupersede(tab.id);
+
+    // Already showing (or already loading) this exact target: reveal, done.
+    if (sameXTarget(tab.pendingUrl || tab.url || '', target.url)) {
+      await warmReveal(tab);
+      await writeWarmTab({ ...state, used: true });
+      console.debug('PaperTrench warm links: route=already_open');
+      return { ok: true, route: 'already_open' };
+    }
+
+    // A tab Chrome discarded under memory pressure has no live content scripts
+    // to SPA through — but a full load in it still beats a cold tab (process,
+    // connections, and X's service-worker cache are warm).
+    if (tab.discarded === true || tab.status === 'unloaded') {
+      await warmReveal(tab, target.url);
+      await writeWarmTab({ ...state, used: true });
+      console.debug('PaperTrench warm links: route=warm_reload (viewer was discarded)');
+      return { ok: true, route: 'warm_reload' };
+    }
+
+    const requestId = 'ptw-' + startedAt.toString(36) + '-' + Math.floor(Math.random() * 1e9).toString(36);
+    const pending = { requestId, url: target.url, timer: null };
+    warmPending.set(tab.id, pending);
+    pending.timer = setTimeout(() => warmRepair(tab.id, requestId, 'timeout'), WARM_SPA_TIMEOUT_MS);
+
+    // SPA request and reveal fire CONCURRENTLY — the ack round-trip is off
+    // the critical path; verification and any repair happen behind the
+    // user's eyes.
+    const acked = chrome.tabs.sendMessage(tab.id, {
+      type: 'pt_warm_spa',
+      requestId,
+      url: target.url,
+      kind: target.kind,
+      handle: target.handle,
+      postId: target.postId,
+    }).then(() => true, () => false);
+    await warmReveal(tab);
+    await writeWarmTab({ ...state, used: true });
+
+    if (!(await acked)) {
+      // No relay in the tab (still loading, or scripts not injected yet).
+      // Already revealed; just drive the full load.
+      warmSupersede(tab.id);
+      try { await chrome.tabs.update(tab.id, { url: target.url }); } catch (_) {}
+      console.debug('PaperTrench warm links: route=warm_reload (no relay in viewer)');
+      return { ok: true, route: 'warm_reload' };
+    }
+
+    console.debug('PaperTrench warm links: SPA route dispatched in ' + (Date.now() - startedAt) + 'ms');
+    return { ok: true, route: 'spa' };
+  });
+}
+
+async function warmSettingsChanged(settings) {
+  if (warmFeatureOn(settings)) {
+    // Toggled on with trading tabs already open? Warm up right away.
+    const tabs = await new Promise((resolve) => chrome.tabs.query({ url: WARM_PLATFORM_URLS }, (result) => resolve(result || [])));
+    if (tabs.length) warmPrewarm().catch(() => {});
+    return;
+  }
+  const state = await readWarmTab();
+  if (!state) return;
+  await clearWarmTabState();
+  // Only an idle, never-used, still-hidden viewer is ours to close. Once used
+  // (or found and focused by the user) the tab belongs to the user.
+  if (state.used) return;
+  try {
+    const tab = await chrome.tabs.get(state.tabId);
+    if (tab && !tab.active) await chrome.tabs.remove(state.tabId);
+  } catch (_) { /* already gone */ }
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  warmSupersede(tabId);
+  warmSerial(async () => {
+    const state = await readWarmTab();
+    if (state && state.tabId === tabId) await clearWarmTabState();
+  });
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'loading') return;
+  warmSerial(async () => {
+    const state = await readWarmTab();
+    if (!state || state.tabId !== tabId) return;
+    const url = changeInfo.url || (tab && (tab.pendingUrl || tab.url)) || '';
+    if (!url) return;
+    let host = '';
+    try { host = new URL(url).hostname; } catch (_) { host = ''; }
+    if (!XL.isXHost(host)) {
+      // The user steered the viewer off X — release it, it is theirs.
+      warmSupersede(tabId);
+      await clearWarmTabState();
+    }
+  });
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  warmSerial(async () => {
+    const state = await readWarmTab();
+    if (!state || state.tabId !== activeInfo.tabId || state.used) return;
+    // The user found the hidden idle tab on their own: unmute it and mark it
+    // used so a later toggle-off will not close a tab they are reading.
+    await writeWarmTab({ ...state, used: true });
+    try { await chrome.tabs.update(activeInfo.tabId, { muted: false }); } catch (_) {}
+  });
+});
+
 /* -------------------- message routing -------------------- */
 
 const BASE58_RE = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
@@ -602,6 +954,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       case 'pt_settings_changed':
         await refreshFrameInterval();
+        await warmSettingsChanged(settings);
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_warm_open':
+        sendResponse(await warmOpen(message.url, sender, settings));
+        break;
+
+      case 'pt_warm_hint':
+        warmHint(message.url, settings).catch(() => {});
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_warm_prewarm':
+        warmPrewarm().catch(() => {});
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_warm_spa_result':
+        warmSpaResult(message, sender);
         sendResponse({ ok: true });
         break;
 

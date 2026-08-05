@@ -40,6 +40,7 @@ function makeBrowserSandbox() {
     getComputedStyle: () => ({ right: '18px', top: '84px', position: 'static', display: 'block', visibility: 'visible', opacity: '1' }),
     confirm: () => false,
     navigator: { clipboard: { writeText: () => {} } },
+    open: () => null,
   };
   win.window = win;
   win.self = win;
@@ -121,7 +122,10 @@ function makeBrowserSandbox() {
         onMessage: { addListener: () => {} },
         openOptionsPage: () => {},
       },
-      storage: { local: { get: (k, cb) => { if (typeof cb === 'function') cb({}); return Promise.resolve({}); }, set: (o, cb) => { if (typeof cb === 'function') cb(); return Promise.resolve(); } } },
+      storage: {
+        local: { get: (k, cb) => { if (typeof cb === 'function') cb({}); return Promise.resolve({}); }, set: (o, cb) => { if (typeof cb === 'function') cb(); return Promise.resolve(); } },
+        onChanged: { addListener: () => {} },
+      },
       tabs: { query: () => Promise.resolve([{ id: 1 }]), sendMessage: () => Promise.resolve() },
     },
   };
@@ -140,7 +144,12 @@ const BROWSER_SCRIPTS = [
   { file: 'sites.js', global: 'PaperTrenchSites' },
   { file: 'resolver.js', global: 'PaperTrenchResolver' },
   { file: 'chart-markers.js', global: 'PTChartMarkers' },
+  { file: 'xlinks.js', global: 'PTXLinks' },
   { file: 'price-bridge.js', global: null },
+  { file: 'warm-open-hook.js', global: null },
+  { file: 'warm-links.js', global: null },
+  { file: 'xwarm-relay.js', global: null },
+  { file: 'xwarm-main.js', global: null },
   { file: 'content.js', global: null },
   { file: 'popup.js', global: null },
   { file: 'dashboard.js', global: null },

@@ -1391,7 +1391,11 @@
       if (settingsChange && settingsChange.newValue) {
         settings = E.mergeSettings(settingsChange.newValue);
         positionsBarHidden = settings.positionsBarHidden === true;
-        if (settings.overlayEnabled) enableOverlay().catch(() => {});
+        // appEnabled is the app-wide master switch: when it is off, nothing
+        // PaperTrench owns may exist on the page, whatever the sub-settings
+        // say. disableOverlay() is the full teardown (panel, positions bar,
+        // chart drawings, title signal, timers, pool subscriptions).
+        if (settings.appEnabled !== false && settings.overlayEnabled) enableOverlay().catch(() => {});
         else disableOverlay();
         if (els.buyPresets) renderPresets();
         syncAveragePriceLines();
@@ -4333,7 +4337,9 @@
     // Storage must be watched even when the overlay is disabled, so toggling
     // settings from the dashboard or popup reaches this tab immediately.
     watchStorage();
-    if (!settings.overlayEnabled) return;
+    // The app-wide master switch outranks every sub-setting: off means
+    // PaperTrench mounts nothing at all until the user turns it back on.
+    if (settings.appEnabled === false || !settings.overlayEnabled) return;
     await enableOverlay();
   }
 

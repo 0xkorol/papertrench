@@ -107,15 +107,41 @@ test('the manifest no longer injects into every page on the internet', () => {
   // intervals and a body-wide MutationObserver on every website the user
   // visited, and the generic adapter mounted the panel wherever a URL
   // contained an address-shaped string. The manifest is the structural fix.
+  //
+  // v2.4.0 adds a second injection surface: two passive viewer bridges on
+  // x.com/twitter.com for the opt-in warm-links feature. The rule stays the
+  // same shape — every entry is either the trading surface or the X viewer,
+  // each pinned to its own host list, and nothing runs anywhere else.
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  const X_VIEWER_FILES = new Set(['xwarm-main.js', 'xwarm-relay.js']);
+  const isXEntry = (cs) => (cs.js || []).some((f) => X_VIEWER_FILES.has(f));
+
   for (const script of manifest.content_scripts) {
     assert.ok(!script.matches.includes('<all_urls>'),
-      'content scripts must be limited to supported trading sites');
+      'content scripts must be limited to supported sites');
+  }
+
+  const trading = manifest.content_scripts.filter((cs) => !isXEntry(cs));
+  const xViewer = manifest.content_scripts.filter(isXEntry);
+  assert.ok(trading.length >= 2 && xViewer.length === 2,
+    'expected the two trading-surface entries plus the two X viewer entries');
+
+  for (const script of trading) {
     assert.ok(script.matches.includes('https://pump.fun/*'),
       'pump.fun is a first-class supported site');
+    assert.ok(!script.matches.some((m) => m.includes('x.com') || m.includes('twitter.com')),
+      'the trading overlay must never run on X itself');
+  }
+  for (const script of xViewer) {
+    assert.ok(script.matches.every((m) => /https:\/\/(\*\.)?(x|twitter)\.com\/\*/.test(m)),
+      'X viewer entries must match only x.com/twitter.com');
+    assert.ok(script.js.every((f) => X_VIEWER_FILES.has(f)),
+      'X entries may carry ONLY the passive viewer bridges — never the trading engine or overlay');
   }
   for (const resource of manifest.web_accessible_resources) {
     assert.ok(!resource.matches.includes('<all_urls>'),
       'web-accessible resources must be limited to supported sites');
+    assert.ok(!resource.matches.some((m) => m.includes('x.com') || m.includes('twitter.com')),
+      'nothing is web-accessible to X pages');
   }
 });

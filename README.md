@@ -6,7 +6,7 @@
 Real prices. Fake money. A record you can actually learn from.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-FF9D45.svg?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-611%20passing-34D399?style=flat-square)](#tests)
+[![Tests](https://img.shields.io/badge/tests-682%20passing-34D399?style=flat-square)](#tests)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-6AA9FF?style=flat-square)](#install)
 [![No tracking](https://img.shields.io/badge/telemetry-none-8D97A9?style=flat-square)](#privacy)
 
@@ -52,6 +52,7 @@ It exists because the usual way people learn this market is to lose money findin
 | **Positions bar** | Every open position pinned to the top of the page with live P&L. Click one to jump to its chart. |
 | **Native chart fills** | On Padre, your paper buys and sells render as real TradingView markers with average fill/exit lines. |
 | **Armed buys** | Click buy before a brand-new coin has a quote and the order arms, then fills the instant the first trusted price lands. |
+| **Instant X links** | Opt-in: clicking an X post or profile on a trading site opens it in a kept-warm viewer tab in ~0.5s instead of a ~3.5s cold tab — and hovering a link first prefetches it, making the click near-instant. Costs one muted background x.com tab while enabled; Ctrl/Cmd/middle-click still opens normal tabs. |
 
 ### Learning
 
@@ -114,13 +115,20 @@ readable over a busy image — then download a 1200×675 PNG ready to post.
 The numbers on the card are read straight from the engine's own round record, so a
 shared card cannot show a result your journal doesn't contain.
 
-Two things are always drawn and cannot be turned off: the **PAPER** watermark across
-the middle, and the small PaperTrench mark with *"paper trading · not financial advice"*
-in the corner. A screenshot of a simulated trade should never be passable as a real one.
+The composer now works like the terminals people know: a background gallery
+(built-in looks plus your own uploads, saved for next time), a Customize panel
+for which stats show, and Download / **Copy to clipboard** for paste-and-go
+posting. Two things are always drawn and cannot be customized away: the
+**PAPER** watermark across the middle, and the full-width PaperTrench brand
+bar with *"paper trading — not financial advice"* and the project URL. The
+branding is drawn by a code path that reads no settings at all — there is no
+combination of options that removes it. A simulated trade should never be
+passable as a real one.
 
 ## Privacy
 
 - **No account. No signup. No telemetry.** Nothing is sent anywhere about you.
+- **A real off switch.** The ⏻ button in the popup turns PaperTrench fully dormant — nothing injected or rendered on any site, live in every open tab — until you turn it back on. Wallet and settings are kept.
 - **Everything is local.** Trades, settings, replays, and recordings live in your browser's own storage.
 - **Network calls are only:** the public Dexscreener and Jupiter price APIs, and — only if *you* configure it — your own AI endpoint.
 - **Recordings never leave your machine.** They're stored in IndexedDB and saved to your downloads folder.
@@ -136,7 +144,7 @@ cd extension
 node --test
 ```
 
-611 tests covering price resolution, tick validation, portfolio arithmetic, the Padre chart bridge, fresh-launch handling, the positions bar, session replay, the attestation chain, and browser-context loading.
+682 tests covering price resolution, tick validation, portfolio arithmetic, the Padre chart bridge, fresh-launch handling, the positions bar, session replay, the attestation chain, and browser-context loading.
 
 The suite is mutation-tested: fixes were verified by reverting them and confirming the tests fail. The one test that hits a live API skips — rather than fails — when offline.
 
