@@ -13,7 +13,13 @@ echo "manifest: $MANIFEST_V  package: $PACKAGE_V"
 [ "$MANIFEST_V" = "$PACKAGE_V" ] || fail "manifest.json ($MANIFEST_V) != package.json ($PACKAGE_V)"
 
 grep -q "## v$MANIFEST_V" CHANGELOG.md || fail "CHANGELOG.md has no entry for v$MANIFEST_V"
-grep -q "papertrench-$MANIFEST_V.zip" site/index.html || fail "site/index.html download links not bumped to $MANIFEST_V"
+# Download CTAs must point at /releases/latest and never pin a versioned zip,
+# which 404s until the release asset exists (policy since f23df6c).
+grep -q 'github.com/OnlyTerp/papertrench/releases/latest' site/index.html \
+  || fail "site/index.html has no /releases/latest download link"
+if grep -Eq 'papertrench-[0-9]+\.[0-9]+\.[0-9]+\.zip' site/index.html; then
+  fail "site/index.html contains a version-pinned papertrench-X.Y.Z.zip URL (must use /releases/latest)"
+fi
 
 # The manifest must never regress to <all_urls> content scripts (DEFECT O-09).
 if grep -q '"<all_urls>"' extension/manifest.json; then
