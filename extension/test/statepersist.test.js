@@ -604,6 +604,25 @@ test('restoreWallet lands the restored wallet ahead of every live writer', () =>
     'the restored seq must land strictly greater than both the live and backup counters');
 });
 
+/* ---------------- DEFECT D-41: the backup says what it does NOT carry ------
+ *
+ * IndexedDB screen recordings (tens of MB) are deliberately excluded from
+ * the backup file. The UI must state that plainly after a successful backup
+ * instead of silently overpromising — the user otherwise learns the truth
+ * only after the original machine is gone.
+ */
+test('D-41: a successful backup states that recordings are not in the file', () => {
+  const popup = fs.readFileSync(path.join(ROOT, 'popup.js'), 'utf8');
+  const fnStart = popup.indexOf('async function backupWallet');
+  assert.ok(fnStart !== -1, 'backupWallet must exist');
+  const block = popup.slice(fnStart, popup.indexOf('\n}', fnStart) + 2);
+
+  assert.match(block, /recordings stay on this machine and are not in the file/,
+    'the status line must state the honest scope of the backup');
+  assert.doesNotMatch(block, /indexedDB\.open|pt_recordings/i,
+    'the backup itself still deliberately excludes the recording store');
+});
+
 /* ==================== ONE drag system (Phase 3) ====================
  *
  * DEFECTS O-16..O-21, O-25, O-26, O-19. Panel, minimized pill, positions
@@ -974,4 +993,12 @@ test("F-28: a failed attestation link tells the user once instead of silently di
   const block = content.slice(fnStart, content.indexOf("\n  let attestFailureToasted", fnStart));
   assert.match(block, /attestFailureToasted = true;[\s\S]{0,120}toast\(/,
     "the first attestation failure must surface a toast — verifyChain otherwise reports a mismatch the user cannot explain");
+});
+
+test("F-31: the mcap-headline sub-line says what its number IS", () => {
+  const content = fs.readFileSync(path.join(ROOT, "content.js"), "utf8");
+  assert.doesNotMatch(content, /`MC · \$\{f\.priceUsdText/,
+    "the old label read as: the MC IS this tiny price");
+  assert.match(content, /`Price \$\{f\.priceUsdText/,
+    "the sub-line labels the unit price as a price");
 });

@@ -1591,3 +1591,133 @@ test("F-30: the paper average lines never impersonate the real-position lines", 
   assert.match(bridge, /PAPER Avg\. Fill/);
   assert.match(bridge, /PAPER Avg\. Exit/);
 });
+
+/* ------------------------------------------------------------------ *
+ * F-29: bridge code runs inside HOST chart callbacks — a PaperTrench
+ * throw there must never break the site's own chart. The preamble work
+ * (noteResolution / barSymbolMatches / emitPadreBar / marksInRange) is
+ * contained so the host callback ALWAYS runs.
+ * ------------------------------------------------------------------ */
+
+test('F-29: a throwing bridge preamble never breaks the host bar callback', () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+  let delivered = null;
+  env.axiomDatafeed.subscribeBars({}, '1S', (bar) => { delivered = bar; }, 'sub', () => {});
+
+  // A bar whose close getter throws poisons emitPadreBar mid-preamble —
+  // the shape of any future bug in our half of the wrapper.
+  const poisoned = { time: Date.now(), get close() { throw new Error('paper-trench boom'); } };
+  env.axiomRealtime()(poisoned);
+
+  assert.equal(delivered, poisoned,
+    'the HOST site must receive its own realtime bar even when our preamble throws');
+});
+
+test('F-29: a throwing preamble in getMarks still hands the site its marks', () => {
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+
+  let marks = null;
+  // The resolution argument reaches noteResolution -> String(res), so a
+  // poisoned toString throws inside our preamble, before the host callback.
+  const poison = { toString() { throw new Error('paper-trench boom'); } };
+  env.axiomDatafeed.getMarks({}, 0, Math.floor(Date.now() / 1000) + 60, (r) => { marks = r; }, poison);
+
+  assert.ok(Array.isArray(marks),
+    'the HOST data callback must run whatever our preamble does');
+});
+
+test('F-29: source contract — host-callback preambles are contained', () => {
+  const bridge = fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8');
+  const sub = bridge.slice(bridge.indexOf('function subscribeBars('), bridge.indexOf('function patchPadreMarks'));
+  assert.match(sub, /try\s*\{[^}]*noteResolution\(resolution\);\s*\n?\s*\} catch/,
+    'the subscribe-time resolution note must be contained');
+  assert.match(sub, /try\s*\{[^}]*emitPadreBar\(bar, resolution\);\s*\n?\s*\} catch/,
+    'the per-bar preamble must be contained so onRealtimeCallback always runs');
+  const marksFn = bridge.slice(bridge.indexOf('function getMarks('), bridge.indexOf('function frameVisible'));
+  assert.match(marksFn, /try \{ ours = marksInRange\(from, to\); \} catch/,
+    'the merged callback must never lose the site marks to our merge');
+});
+
+/* ------------------------------------------------------------------ *
+ * C-26: GMGN execution-shape marker times snap to the bar grid, like
+ * the Padre/Axiom mark path. The grid is noted from GMGN's own candle
+ * request URL (?resolution=...).
+ * ------------------------------------------------------------------ */
+
+test('C-26: GMGN fill markers snap a mid-bar timestamp to the bar boundary', async () => {
+  const env = runBridge({ gmgnMounted: true });
+  // GMGN's chart feed names its bar grid in the candle request itself.
+  injectActivityFrame(env, JSON.stringify({ code: 0, data: { list: [{ close: 250_000_000 }] } }),
+    'https://www.gmgn.ai/api/v1/token_mcap_candles/sol/Mint1?resolution=1m&limit=500');
+
+  const ts = 1_700_000_000_000 + 37_000; // 37 s into a minute bar
+  env.send('gmgn-marker', { ts, mcap: 250_000_000, side: 'buy', text: 'PT Buy' });
+  await microtasks();
+
+  const shape = env.execShapes.find((s) => s.values.setDirection === 'buy');
+  assert.ok(shape, 'the fill must draw');
+  assert.equal(shape.values.setTime, Math.floor(ts / 60_000) * 60,
+    'a mid-bar fill must land on the minute-bar boundary');
+  assert.notEqual(shape.values.setTime, Math.floor(ts / 1000),
+    'the raw floor-to-second time sat off the bar grid');
+});
+
+test('C-26: a timeframe change re-snaps requeued GMGN fills onto the new grid', async () => {
+  const env = runBridge({ gmgnMounted: true });
+  injectActivityFrame(env, JSON.stringify({ code: 0, data: { list: [{ close: 250_000_000 }] } }),
+    'https://www.gmgn.ai/api/v1/token_mcap_candles/sol/Mint1?resolution=1m');
+  const ts = 1_700_000_000_000 + 37_000;
+  env.send('gmgn-marker', { ts, mcap: 250_000_000, side: 'buy', text: 'PT Buy' });
+  await microtasks();
+  assert.equal(env.execShapes[0].values.setTime, Math.floor(ts / 60_000) * 60);
+
+  // The user flips to 1-second candles: GMGN refetches candles AND remounts
+  // its chart (C-12); the requeued fill must re-snap onto the new grid.
+  injectActivityFrame(env, JSON.stringify({ code: 0, data: { list: [{ close: 251_000_000 }] } }),
+    'https://www.gmgn.ai/api/v1/token_mcap_candles/sol/Mint1?resolution=1s');
+  env.remountGmgn();
+  env.runTimers();
+  await microtasks();
+
+  const redrawn = env.execShapes[env.execShapes.length - 1];
+  assert.equal(redrawn.removed, false);
+  assert.equal(redrawn.values.setTime, Math.floor(ts / 1000),
+    'after the switch the same fill must land on the 1 s grid');
+});
+
+/* ------------------------------------------------------------------ *
+ * F-31 (community screenshot, Padre mcap chart): fill bubbles floated
+ * above the candles and right of the last bar while the avg line sat
+ * exactly right — shapes used the RAW resolver-implied fill mcap while
+ * lines used the live-close correction, and no time clamp existed.
+ * ------------------------------------------------------------------ */
+
+test("F-31: fill shapes use the same close-corrected level math as the avg lines", () => {
+  const bridge = fs.readFileSync(path.join(ROOT, "price-bridge.js"), "utf8");
+  const fnStart = bridge.indexOf("function shapeLevelFor(");
+  assert.ok(fnStart !== -1, "a shared shape-level function must exist");
+  const block = bridge.slice(fnStart, bridge.indexOf("\n  }", fnStart) + 4);
+  assert.match(block, /lastBarClose \* \(levels\.native \/ currentNative\)/,
+    "the universal formula: close x price ratio — supply cancels, the chart own cap definition wins");
+  const drawStart = bridge.indexOf("function drawShapeFallback(");
+  const drawBlock = bridge.slice(drawStart, bridge.indexOf("\n  }", drawStart) + 4);
+  assert.match(drawBlock, /shapeLevelFor\(levels\)/,
+    "the fallback must route through the shared level function");
+  assert.doesNotMatch(drawBlock, /const level = pickAxisLevel\(/,
+    "the raw uncorrected pick must be gone from the draw path");
+});
+
+test("F-31: paper shapes and marks can never render ahead of the newest bar", () => {
+  const bridge = fs.readFileSync(path.join(ROOT, "price-bridge.js"), "utf8");
+  assert.match(bridge, /Math\.min\(mark\.time, lastBarTimeSec\)/,
+    "shape time must clamp to the last bar");
+  const marksStart = bridge.indexOf("function marksInRange(");
+  const marksBlock = bridge.slice(marksStart, bridge.indexOf("\n  }", marksStart) + 4);
+  assert.match(marksBlock, /clamp/, "marks must clamp before the range filter");
+  assert.match(bridge, /lastBarTimeSec = barTimeMs > 1e12/,
+    "emitPadreBar must record the newest bar chart time");
+  assert.match(bridge, /lastBarTimeSec = 0;/,
+    "the bar time must reset on token change");
+});

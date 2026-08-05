@@ -218,8 +218,13 @@ frames. (Overlaps overlay-gating cluster — cross-reference with O findings.)
 ### S4/S5 — friction & latent hazards
 
 **F-25 · S4 · bootstrapTick unit heuristics hardcode today's SOL/USD scale**
-**backlog (v2.1):** heuristic thresholds are rate-relative already at the call sites that matter; remaining hardcoded bands only affect the pre-anchor bootstrap window. Needs a rate-aware disambiguation pass.
-`quote.js:220-222,296` · confirmed · open
+`quote.js:220-222,296` · confirmed · **fixed v2.1.0** (rate-aware disambiguation: with a live
+rate, a value is plausibly-native when value × rate lands in the sane pre-index USD band
+and plausibly-USD when the value itself does; BOTH plausible → refused `ambiguous-unit`
+rather than guessed — the fast-retry loop anchors the coin within seconds. Neither
+plausible → `implausible-unit`. The explicit-native branch gains a rate-aware sanity
+floor (`native-implausible`). No rate → original magnitude heuristic kept. Locked in
+quote.test.js F-25 block; prior accepted cases pinned unchanged.)
 Any unknown-unit close in [1e-7, 1000) assumed USD → a 5e-7 SOL close gets divided by
 the rate twice (~200× wrong). `native` branch accepts anything < 1 SOL, no floor.
 
@@ -237,8 +242,11 @@ down after N failures.
 user cannot explain.
 
 **F-29 · S5 · Latent: bridge code runs inside host-site chart callbacks with no try/catch**
-**backlog (v2.1):** latent pattern, no live bug — wrap host-chart callback preambles in try/catch during the next bridge touch.
-`price-bridge.js:530-537,696-700` · confirmed (latent pattern, no live bug) · open
+`price-bridge.js:530-537,696-700` · confirmed (latent pattern, no live bug) · **fixed
+v2.1.0** (subscribeBars' resolution note, the per-bar preamble and getMarks' preamble +
+mark-merge are each contained in try/catch — the host's own callback always runs.
+Locked behaviorally in nativecharts.test.js: a poisoned bar/resolution throws inside the
+preamble and the host still receives its data; plus a source contract on the shapes.)
 A future throw in `noteResolution`/`barSymbolMatches`/`emitPadreBar` would break the
 HOST site's chart, not just PaperTrench.
 
@@ -277,6 +285,22 @@ real and paper lines were indistinguishable. Fix: avgPrice removed from the
 price keys, position-describing subtrees are tainted (identity flows, prices
 and caps never do), and the paper lines are labeled "PAPER Avg. Fill/Exit" —
 the watermark doctrine applied to chart lines. Locked by three tests.
+
+**F-31 · S1 · On mcap charts, fill bubbles floated above the candles and right of the last bar — while the avg line sat exactly right**
+`price-bridge.js` drawShapeFallback (raw levels.mcap, unclamped mark.time),
+`content.js` renderHeader label · Padre confirmed via maintainer screenshot
+(v2.0.1, live position: line correct at 16.1K, bubbles at ~25-27K past the
+final candle) · **fixed v2.1.0**
+Three mechanisms: (1) shapes used the RAW fill-time resolver-implied mcap
+while lines used the live-close correction — and the chart own cap
+definition (bonding curve) differs from the resolver by a constant factor.
+Fixed with the axis-agnostic formula lastBarClose × (fillPrice/currentPrice)
+— supply cancels, the chart own scale wins, shared by shapes and lines.
+(2) No time clamp: a fill stamped ms ahead of the newest 1 s bar parked its
+shape beyond the last candle. Shapes and marks now clamp to the newest bar
+time (reset per token). (3) The header sub-line "MC · $0.0₄21" read as "the
+MC IS $0.0₄21" when it meant "headline is the MC; this is the unit price" —
+now labeled "Price …". Locked by three tests.
 
 ## O — Overlay lifecycle & movability (audit: 2026-08-05, verified against source)
 
@@ -630,8 +654,7 @@ C-02/03/04/11 instead. Potentially the single highest-leverage marker fix.
 **C-23 · S4 · pollChartClose every 700 ms + 1 s widget sweep + 1 s chip sweep on EVERY tab on the internet** — see O-08/F-24. confirmed · **fixed v2.0.0** (structural: manifest narrowed to trading sites + F-26 stand-down; the poll cannot run on non-trading pages at all)
 **C-24 · S4 · Render/mutation feedback loop: observer watches the subtree renderMarkers writes into** — `chart-markers.js:214-223`; only the value-blind guard (C-10) breaks the cycle. confirmed · **fixed v2.0.0** (mutation records originating inside the rail are filtered; external mutations restore a wiped rail)
 **C-25 · S4 · Fallback strip hardcoded position** — see O-23. confirmed · **fixed v2.0.0** (corner dock with elementFromPoint occupancy probe — see O-23)
-**C-26 · S4 · GMGN marker times not snapped to bar grid** (`price-bridge.js:1164` vs snapMarkTime) · confirmed · open
-**backlog (v2.1):** GMGN marker times ride TradingView's own snapping; unify with snapMarkTime during the next chart touch.
+**C-26 · S4 · GMGN marker times not snapped to bar grid** (`price-bridge.js:1164` vs snapMarkTime) · confirmed · **fixed v2.1.0** (the GMGN drain snaps through snapMarkTime; the bar grid is noted from GMGN's own candle URL `?resolution=` — lowercase `1s/1m/1h` forms now parse — and snapping happens at draw time, so a C-12 remount re-snaps requeued fills onto the new grid. Locked in nativecharts.test.js C-26 tests.)
 **C-27 · S5 · Label pill width = charcount × 6.2 — overflows onto the site's price scale** — `chart-markers.js:456-458` · confirmed · **fixed v2.0.0** (rail rows/chips are HTML sized by the layout engine — no width estimate exists)
 **C-28 · S5 · Tooltip width same charcount estimate on a proportional font + emoji** — `chart-markers.js:498,490` · confirmed · **fixed v2.0.0** (tooltips replaced by always-visible row text; no estimated box remains)
 
@@ -836,8 +859,8 @@ sellPcts, listQuickBuy*. Only feedback is "Saved." `content.js:1126-1137` · con
 **backlog (v2.1):** scrub rebuild is now guarded (D-26) but still rebuilds per frame; memoize the view per cursor index.
 `dashboard.js:1004-1009,1020,1036` · confirmed · open
 **D-41 · S4 · Backup omits IndexedDB recordings — restored wallets show unplayable recording refs**
-**backlog (v2.1):** IndexedDB export needs a chunked format; the restore path now at least survives missing videos honestly (refs render as unplayable).
-`popup.js:150` · confirmed · open
+**disposition (v2.1):** the exclusion stays (a chunked IndexedDB export remains future work) but the UI now says so honestly — the post-backup status line states that screen recordings stay on this machine and are not in the file (**honesty note shipped v2.1.0**, locked in statepersist.test.js). The restore path already survives missing videos (refs render as unplayable).
+`popup.js:150` · confirmed · open (export half)
 **D-42 · S4 · Silent input coercions: balanceStartSol 0→10, empty preset lists→defaults, no count cap (500 presets = 500 overlay buttons)**
 `dashboard.js:2042,2045,2051` · confirmed · **fixed v2.0.0** (validated with visible coercion notes; caps at 8 entries)
 **D-43 · S4 · 4 s refresh interval never cleared; deserializes up to 80 base64 frames every tick for the tab's lifetime**

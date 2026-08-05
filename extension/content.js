@@ -3173,8 +3173,11 @@
 
     // The headline is market cap, so the second line carries the label and the
     // unit price rather than repeating the cap.
+    // The old label read "MC · $0.0₄21" — which parses as "the MC IS $0.0₄21"
+    // when it actually meant "the headline above is the MC; here is the unit
+    // price". Say what the number IS (F-31, reported from a live screenshot).
     const secondary = f.priceIsMarketCap
-      ? `MC · ${f.priceUsdText || (f.hasTrustedPrice ? Q.formatPrice(token.priceNative) + ' SOL' : '')}`.trim()
+      ? `Price ${f.priceUsdText || (f.hasTrustedPrice ? Q.formatPrice(token.priceNative) + ' SOL' : '')}`.trim()
       : (f.priceUsdText || '');
     els.priceUsd.textContent = f.stale ? `${secondary} · reconnecting…`.trim() : secondary;
   }

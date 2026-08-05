@@ -46,6 +46,9 @@
   // sites plot either token USD price or market cap; the bar close tells us
   // which magnitude the Y axis lives at, so lines and shapes land on it.
   let lastBarClose = 0;
+  // Chart time (seconds) of the newest live bar — paper shapes/marks clamp to
+  // it so a fill can never render ahead of the final candle (F-31).
+  let lastBarTimeSec = 0;
   // The pair/mint/symbol the content script has resolved for THIS page, used
   // to keep ticks, exports and drawing on the chart instance that matches it.
   // Axiom preloads charts for OTHER tokens — trusting their closes once put a
@@ -93,7 +96,7 @@
     // and the export dedupe must forget the old token's close, or the first
     // poll on the new token can be swallowed as "unchanged" (DEFECT F-19).
     // The GMGN candle close is the same class of per-token evidence (C-08).
-    if (changed) { lastBarClose = 0; lastExportedClose = 0; gmgnLastCandleClose = 0; }
+    if (changed) { lastBarClose = 0; lastBarTimeSec = 0; lastExportedClose = 0; gmgnLastCandleClose = 0; }
   }
   // GMGN runs a private TradingView widget inside a same-origin blob iframe.
   // Its live React chart manager exposes `getActiveChart().createOrderLine()`.
@@ -367,6 +370,11 @@
     // data.list[]. GMGN's iframe symbol is `<chain>/<mint>/USD/MCAP`, so its
     // `close` value is the exact Y-axis unit, never a token-price value.
     if (url && /\/api\/v1\/token_mcap_candles\//.test(url)) {
+      // DEFECT C-26: the candle request names the chart's bar grid
+      // (?resolution=1s/1m/...). Note it so GMGN fill markers snap to the
+      // bar boundary exactly like the Padre/Axiom mark path does.
+      const resMatch = /[?&]resolution=([0-9A-Za-z]+)/.exec(url);
+      if (resMatch) noteResolution(resMatch[1]);
       const candles = parsed && parsed.data && Array.isArray(parsed.data.list) ? parsed.data.list : [];
       const last = candles[candles.length - 1];
       const mcap = last && numberValue(last.close);
@@ -678,6 +686,12 @@
     if (!(close > 0)) return;
     lastBarClose = close;
     lastLiveBarAt = Date.now();
+    // F-31: remember the newest bar's chart time so paper shapes/marks can be
+    // clamped to it — a fill stamped milliseconds ahead of the last bar (feed
+    // latency or clock skew on a 1 s chart) parked its bubble beyond the
+    // final candle, floating at the right edge.
+    const barTimeMs = Number(bar.time);
+    if (barTimeMs > 0) lastBarTimeSec = barTimeMs > 1e12 ? Math.floor(barTimeMs / 1000) : Math.floor(barTimeMs);
 
     // Padre can chart token USD price or market cap. Send the decoded close as
     // both an unknown price candidate and a possible market cap. quote.js
@@ -704,11 +718,21 @@
       // DEFECT C-14: Axiom's hidden preload widget subscribes for OTHER
       // tokens (often at a different resolution); only the chart showing
       // THIS token may set the mark-snapping grid.
-      if (barSymbolMatches(symbolInfo)) noteResolution(resolution);
+      // DEFECT F-29: this runs inside the HOST site's own subscribe call —
+      // a PaperTrench throw here would break the site's chart, so the
+      // preamble is contained and the host path always proceeds.
+      try {
+        if (barSymbolMatches(symbolInfo)) noteResolution(resolution);
+      } catch (_) { /* our problem, never the host's */ }
       const wrappedCallback = (bar) => {
         // Bars for a different token's chart (Axiom preload) are still passed
         // to the site but must never move our price or axis detection.
-        if (barSymbolMatches(symbolInfo)) emitPadreBar(bar, resolution);
+        // F-29: the host's realtime callback MUST run whatever our
+        // preamble does — a poisoned bar object or a future bug in
+        // emitPadreBar must never kill the site's own chart feed.
+        try {
+          if (barSymbolMatches(symbolInfo)) emitPadreBar(bar, resolution);
+        } catch (_) { /* our problem, never the host's */ }
         return onRealtimeCallback(bar);
       };
       return original.call(
@@ -734,8 +758,13 @@
 
   function resolutionToMs(res) {
     const s = String(res || '');
-    if (/^\d+S$/.test(s)) return parseInt(s, 10) * 1000;
+    if (/^\d+s$/i.test(s)) return parseInt(s, 10) * 1000;
     if (/^\d+$/.test(s)) return parseInt(s, 10) * 60_000;
+    // DEFECT C-26: GMGN's candle URLs spell resolutions with lowercase unit
+    // suffixes ('1m', '5m', '1h'). Lowercase m is minutes and must be read
+    // BEFORE the uppercase-M month rule below.
+    if (/^\d+m$/.test(s)) return parseInt(s, 10) * 60_000;
+    if (/^\d+h$/i.test(s)) return parseInt(s, 10) * 3_600_000;
     // DEFECT C-14: TradingView sends BARE letters for daily/weekly/monthly
     // ('D', 'W', 'M'), where parseInt alone yields NaN — those charts kept a
     // stale lastResolutionMs and marks snapped to the wrong grid.
@@ -878,7 +907,13 @@
     if (shapeFallbackActive) return [];
     const lo = Number(from);
     const hi = Number(to);
-    return paperMarks.filter((mark) => mark.time >= lo && mark.time <= hi);
+    // F-31: a mark stamped ahead of the newest bar clamps onto it — clamp
+    // BEFORE the range filter so a "future" fill renders on the last candle
+    // instead of silently not rendering at all.
+    const clamp = (t) => (lastBarTimeSec > 0 && t > lastBarTimeSec ? lastBarTimeSec : t);
+    return paperMarks
+      .map((mark) => { const t = clamp(mark.time); return t === mark.time ? mark : { ...mark, time: t }; })
+      .filter((mark) => mark.time >= lo && mark.time <= hi);
   }
 
   function patchPadreMarks(datafeed) {
@@ -888,20 +923,28 @@
     const original = datafeed.getMarks;
     function getMarks(symbolInfo, from, to, onDataCallback, ...rest) {
       marksPipelineSeenAt = Date.now();
-      // C-14: same gate as subscribeBars — a preload chart's resolution must
-      // never overwrite the visible chart's snapping grid.
-      if (barSymbolMatches(symbolInfo)) noteResolution(rest[0]);
-      // The library IS pulling marks — the native pipeline wins. If the
-      // execution-shape fallback fired first (slow chart boot), hand
-      // rendering back and remove the temporary shapes. Paper fills then
-      // render as the site's own bubble marks (Axiom-styled on Axiom).
-      if (shapeFallbackActive) {
-        shapeFallbackActive = false;
-        clearShapeFallback();
-      }
+      // DEFECT F-29: everything PaperTrench does before handing control back
+      // runs inside the HOST's own getMarks call — contained, so a throw in
+      // our preamble can never break the site's chart.
+      try {
+        // C-14: same gate as subscribeBars — a preload chart's resolution must
+        // never overwrite the visible chart's snapping grid.
+        if (barSymbolMatches(symbolInfo)) noteResolution(rest[0]);
+        // The library IS pulling marks — the native pipeline wins. If the
+        // execution-shape fallback fired first (slow chart boot), hand
+        // rendering back and remove the temporary shapes. Paper fills then
+        // render as the site's own bubble marks (Axiom-styled on Axiom).
+        if (shapeFallbackActive) {
+          shapeFallbackActive = false;
+          clearShapeFallback();
+        }
+      } catch (_) { /* our problem, never the host's */ }
       const mergedCallback = (siteMarks) => {
         const base = Array.isArray(siteMarks) ? siteMarks : [];
-        const ours = marksInRange(from, to);
+        // F-29: the host's data callback ALWAYS runs; if merging our marks
+        // fails, the site still gets its own marks unharmed.
+        let ours = [];
+        try { ours = marksInRange(from, to); } catch (_) { ours = []; }
         onDataCallback(base.concat(ours));
       };
       return original.call(this, symbolInfo, from, to, mergedCallback, ...rest);
@@ -1282,6 +1325,30 @@
   const fallbackShapeHandles = new Map(); // mark id -> shape handle
   let fallbackCheckTimer = null;
 
+  /**
+   * F-31 (community screenshot, Padre mcap chart): fill shapes floated ~1.5x
+   * above the candles while the avg line sat exactly right. The line gets the
+   * live-close correction; shapes used the RAW fill-time resolver-implied
+   * mcap — and the chart's own cap definition (bonding curve, Padre supply
+   * math) differs from the resolver's by a constant factor. The universal
+   * honest formula is axis-agnostic: lastBarClose × (fillPrice/currentPrice).
+   * Whatever unit the close is in — USD cap, SOL cap, plain price — scaling
+   * it by the price ratio lands the fill in that same unit, and supply
+   * cancels out entirely. Explicit price axes still use the exact recorded
+   * values (no correction needed there).
+   */
+  function shapeLevelFor(levels) {
+    const spec = paperLineSpec || {};
+    const basis = spec.axisBasis;
+    if (basis === 'usd' && levels.usd > 0) return levels.usd;
+    if (basis === 'native' && levels.native > 0) return levels.native;
+    const currentNative = Number(spec.currentPriceNative);
+    if (lastBarClose > 0 && levels.native > 0 && currentNative > 0) {
+      return lastBarClose * (levels.native / currentNative);
+    }
+    return pickAxisLevel(levels.usd, levels.mcap, levels.native, levels.nativeMcap);
+  }
+
   function drawShapeFallback() {
     const charts = getRankedCharts();
     let drewAll = charts.length > 0;
@@ -1296,14 +1363,15 @@
       } else if (existing) {
         continue;
       }
-      const level = pickAxisLevel(levels.usd, levels.mcap, levels.native, levels.nativeMcap);
+      const level = shapeLevelFor(levels);
       if (!(level > 0)) continue;
       let handle = null;
       for (const chart of charts) {
         if (typeof chart.createExecutionShape !== 'function') continue;
         handle = spawnExecutionShape(chart, {
           side: levels.side,
-          timeSec: mark.time,
+          // F-31: never draw ahead of the chart's newest bar.
+          timeSec: lastBarTimeSec > 0 ? Math.min(mark.time, lastBarTimeSec) : mark.time,
           level,
           text: levels.side === 'sell' ? 'PT Sell' : 'PT Buy',
         });
@@ -1480,7 +1548,12 @@
       }
       const handle = spawnExecutionShape(chart, {
         side: payload.side,
-        timeSec: Math.floor((numberValue(payload.ts) || 0) / 1000),
+        // DEFECT C-26: snap to the chart's bar grid (noted from the candle
+        // URL) exactly like the Padre/Axiom mark path — a raw floor-to-second
+        // put mid-bar arrows off-grid. Snapping happens at DRAW time from the
+        // original fill ts, so a remount after a timeframe change (C-12)
+        // re-snaps the requeued fills onto the new grid for free.
+        timeSec: snapMarkTime(numberValue(payload.ts) || 0),
         level,
         text: payload.text,
       });
