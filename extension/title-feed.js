@@ -52,27 +52,62 @@
   const ACCEPT_RATIO = 3;
 
   let observer = null;
+  let headObserver = null;
   let listeners = new Set();
   let lastEmitted = null;
 
   /** Parse a market cap out of a page title. Returns null when unsure. */
   function parseTitle(title, siteId) {
-    if (typeof title !== 'string' || !title) return null;
-    const patterns = TITLE_PATTERNS[siteId] || TITLE_PATTERNS.gmgn;
+    const candidates = parseTitleCandidates(title, siteId);
+    return candidates.length ? candidates[0] : null;
+  }
 
+  /**
+   * Every distinct dollar figure a title offers under the site's patterns.
+   * Values within 5% of an already-collected one are treated as duplicates.
+   * Earlier patterns are more specific (an "MC:" or "|"-anchored form), so
+   * the first pattern that yields anything wins.
+   */
+  function parseTitleCandidates(title, siteId) {
+    if (typeof title !== 'string' || !title) return [];
+    const patterns = TITLE_PATTERNS[siteId] || TITLE_PATTERNS.gmgn;
+    const values = [];
     for (const pattern of patterns) {
-      const match = pattern.exec(title);
-      if (!match) continue;
-      const digits = Number(String(match[1]).replace(/,/g, ''));
-      if (!(digits > 0)) continue;
-      const suffix = match[2] ? match[2].toUpperCase() : '';
-      const value = digits * (MULTIPLIERS[suffix] || 1);
-      if (!isFinite(value) || value <= 0) continue;
-      // A market cap below $100 is not a market cap; it is a stray number.
-      if (value < 100) continue;
-      return value;
+      const flags = pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g';
+      const global = new RegExp(pattern.source, flags);
+      let match;
+      while ((match = global.exec(title)) !== null) {
+        const digits = Number(String(match[1]).replace(/,/g, ''));
+        if (!(digits > 0)) continue;
+        const suffix = match[2] ? match[2].toUpperCase() : '';
+        const value = digits * (MULTIPLIERS[suffix] || 1);
+        if (!isFinite(value) || value <= 0) continue;
+        // A market cap below $100 is not a market cap; it is a stray number.
+        if (value < 100) continue;
+        if (!values.some((v) => Math.abs(v - value) / value < 0.05)) values.push(value);
+      }
+      if (values.length) break;
     }
-    return null;
+    return values;
+  }
+
+  /**
+   * The one figure a title is allowed to contribute, or null.
+   *
+   * Ambiguity rule (DEFECT F-23): a tab title can carry several dollar
+   * figures — the cap, a P&L, a position value. Accept only when exactly ONE
+   * distinct candidate is consistent with the on-chain anchor; two in-band
+   * but different figures mean we cannot know which is the cap, so refuse
+   * rather than guess.
+   */
+  function acceptFromTitle(title, siteId, anchorMcap) {
+    const candidates = parseTitleCandidates(title, siteId);
+    const inBand = [];
+    for (const c of candidates) {
+      const v = validate(c, anchorMcap);
+      if (v !== null && !inBand.some((x) => Math.abs(x - v) / v < 0.05)) inBand.push(v);
+    }
+    return inBand.length === 1 ? inBand[0] : null;
   }
 
   /**
@@ -102,33 +137,46 @@
    */
   function start(siteId, getAnchor) {
     stop();
-    if (typeof document === 'undefined' || !document.title) return false;
+    if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return false;
 
     const read = () => {
-      const parsed = parseTitle(document.title, siteId);
-      const accepted = validate(parsed, typeof getAnchor === 'function' ? getAnchor() : null);
+      const anchor = typeof getAnchor === 'function' ? getAnchor() : null;
+      const accepted = acceptFromTitle(document.title, siteId, anchor);
       if (accepted && accepted !== lastEmitted) emit(accepted);
     };
 
-    read();
+    const attach = () => {
+      const titleEl = document.querySelector('title');
+      if (!titleEl) return false;
+      observer = new MutationObserver(read);
+      observer.observe(titleEl, { childList: true, characterData: true, subtree: true });
+      read();
+      return true;
+    };
 
-    const titleEl = document.querySelector('title');
-    if (!titleEl || typeof MutationObserver === 'undefined') return false;
-    observer = new MutationObserver(read);
-    observer.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    if (attach()) return true;
+
+    // An SPA that has not set <title> yet is the NORMAL case at document_idle
+    // on several supported sites. Giving up permanently left the title signal
+    // dead for the entire page load (DEFECT F-22) — wait for the element.
+    headObserver = new MutationObserver(() => {
+      if (attach() && headObserver) { headObserver.disconnect(); headObserver = null; }
+    });
+    headObserver.observe(document.head || document.documentElement, { childList: true, subtree: true });
     return true;
   }
 
   function stop() {
     if (observer) { observer.disconnect(); observer = null; }
+    if (headObserver) { headObserver.disconnect(); headObserver = null; }
     lastEmitted = null;
   }
 
   function onMarketCap(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
   const api = {
-    parseTitle, validate, start, stop, onMarketCap,
-    ACCEPT_RATIO, TITLE_PATTERNS,
+    parseTitle, parseTitleCandidates, acceptFromTitle, validate, start, stop,
+    onMarketCap, ACCEPT_RATIO, TITLE_PATTERNS,
     _lastEmitted: () => lastEmitted,
   };
 

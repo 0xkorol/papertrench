@@ -155,3 +155,32 @@ test('fills are priced from chain state, never from the title', () => {
   assert.doesNotMatch(content, /titleMcap[^)]*priceNative\s*=/,
     'the title signal must never be turned into a fill price');
 });
+
+/* ---------------- DEFECTS F-22 / F-23 ---------------- */
+
+test("F-23: a title carrying two plausible dollar figures is refused, not guessed at", () => {
+  const TF = loadTitleFeed();
+  const anchor = 250_000_000; // $250M established on-chain
+  // One consistent figure: accepted.
+  assert.equal(TF.acceptFromTitle("Bonk $255.83M | GMGN.AI", "gmgn", anchor), 255_830_000);
+  // Two in-band but different figures (cap + a P&L the site put in the tab
+  // title): there is no honest way to know which is the cap.
+  assert.equal(TF.acceptFromTitle("Bonk $255.83M | up $120.5M today", "padre", anchor), null,
+    "ambiguous titles must be refused");
+  // One in-band + one wildly out-of-band figure: the in-band one is safe.
+  assert.equal(TF.acceptFromTitle("Bonk $255.83M | fee $12.40", "padre", anchor), 255_830_000);
+  // The same figure twice (rounding variants) is not ambiguity.
+  assert.equal(TF.acceptFromTitle("$255.8M — Bonk $255.83M", "padre", anchor), 255_800_000);
+});
+
+test("F-22: start() waits for a late <title> instead of giving up for the whole page load", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "title-feed.js"), "utf8");
+  const fnStart = src.indexOf("function start(");
+  const block = src.slice(fnStart, src.indexOf("\n  }", fnStart) + 4);
+  assert.doesNotMatch(block, /!document\.title\) return false/,
+    "an empty title at document_idle is the NORMAL SPA case, not a reason to quit");
+  assert.match(block, /headObserver = new MutationObserver/,
+    "a head observer must wait for the <title> element to appear");
+  const stopFn = src.slice(src.indexOf("function stop("), src.indexOf("\n  }", src.indexOf("function stop(")) + 4);
+  assert.match(stopFn, /headObserver/, "stop() must also disconnect the wait observer");
+});

@@ -195,12 +195,12 @@ every connect is dropped (rescued only by onopen resubscribe). Orphaned entries 
 cleaned — unbounded Map growth over long sessions.
 
 **F-22 · S3 · title-feed gives up permanently if the SPA hasn't set a title yet**
-`title-feed.js:105`, called once from `content.js:454` · all sites · confirmed · open
+`title-feed.js:105`, called once from `content.js:454` · all sites · confirmed · **fixed v1.3.0** (a head observer waits for a late <title>; stop() cleans it up)
 `!document.title → return false` before installing the observer; no retry. Title signal
 dead for the whole page load on late-titling SPAs.
 
 **F-23 · S3 · Generic title patterns match the first $ figure in the title**
-`title-feed.js:38,40-43` · Padre, Axiom, BullX, DexScreener, Birdeye · confirmed · open
+`title-feed.js:38,40-43` · Padre, Axiom, BullX, DexScreener, Birdeye · confirmed · **fixed v1.3.0** (acceptFromTitle: exactly one anchor-consistent figure or refusal — ambiguous titles never guessed)
 Bare `$number` regex; the 3× validate band catches price↔mcap confusion but not a
 different dollar figure within 3× (P&L, position value in tab title).
 
