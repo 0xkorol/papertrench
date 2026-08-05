@@ -92,6 +92,15 @@
     // Public RPC limits are per IP, so the pool scales across every install.
     // Power users can paste their own endpoint here for extra headroom.
     rpcUrl: '',
+    // Flat per-transaction costs, emulating what real trading actually costs
+    // beyond the platform's percentage fee: a priority fee (gas) and a
+    // bribe/tip per transaction. Small trades are DOMINATED by these — a
+    // 0.1 SOL entry with 0.002 SOL of tx costs pays 2% before the platform
+    // fee — so practicing without them teaches economics that don't exist.
+    // Zero by default so existing wallets' math never changes silently; the
+    // Fees & costs settings card nudges users to copy their real setup.
+    gasSolPerTx: 0,
+    tipSolPerTx: 0,
     // "The After": keep watching a coin for a bounded window after a round
     // closes and record the observed extremes on the round — measured truth
     // about what your exit actually did, instead of FOMO guesswork.
@@ -206,6 +215,12 @@
   function buyPrice(px, settings) { return px * (1 + applyBps(1, settings.slippageBps)); }
   /** Effective sell price including simulated slippage. */
   function sellPrice(px, settings) { return px * (1 - applyBps(1, settings.slippageBps)); }
+  /** Flat per-transaction cost (priority fee + tip), sanity-bounded. */
+  function txCostSol(settings) {
+    const gas = clamp(Number(settings && settings.gasSolPerTx) || 0, 0, 0.5);
+    const tip = clamp(Number(settings && settings.tipSolPerTx) || 0, 0, 0.5);
+    return gas + tip;
+  }
 
   /* ---------------- fills ---------------- */
 
@@ -219,9 +234,14 @@
   function buy(state, settings, o) {
     const sol = Number(o.solAmount);
     const px = buyPrice(Number(o.priceNative), settings);
+    const flat = txCostSol(settings);
     if (!(sol > 0)) throw new Error('Buy amount must be > 0 SOL');
     if (!(px > 0)) throw new Error('No live price available');
-    if (sol > state.cashSol + EPS) throw new Error(`Insufficient paper balance (${fmt(state.cashSol)} SOL left)`);
+    if (sol + flat > state.cashSol + EPS) {
+      throw new Error(flat > 0
+        ? `Insufficient paper balance for ${fmt(sol)} SOL + ${fmt(flat)} SOL tx costs (${fmt(state.cashSol)} SOL left)`
+        : `Insufficient paper balance (${fmt(state.cashSol)} SOL left)`);
+    }
 
     const fee = applyBps(sol, settings.feeBps);
     const net = sol - fee;
@@ -253,20 +273,25 @@
     if (!pos.sessionId) pos.sessionId = replaySessionId(pos.mint, pos.openedAt || o.ts);
 
     pos.qty += qty;
-    pos.costSol += net;
-    pos.investedSol += sol;
+    // Flat tx costs (gas + tip) join the COST BASIS: they bought no tokens,
+    // but this trade cannot break even until the price covers them — which
+    // is exactly what real fills feel like. Routing them through costSol
+    // means per-sell P&L, rounds, the calendar, and the equity identity all
+    // account for them with no special cases downstream.
+    pos.costSol += net + flat;
+    pos.investedSol += sol + flat;
     // D-08: total NET invested never shrinks (mirrors investedSol). costSol
     // DOES shrink proportionally on partial sells, so costSol/netInvestedSol
     // is the surviving fraction of the stack — which lets grossOpenCostSol()
     // recover the gross cost of what is still open. Legacy positions predate
     // the field; `|| 0` upgrades them in place on their next buy.
-    pos.netInvestedSol = (Number(pos.netInvestedSol) || 0) + net;
+    pos.netInvestedSol = (Number(pos.netInvestedSol) || 0) + net + flat;
     pos.lastPriceNative = px;
     pos.lastPriceUsd = o.priceUsd || pos.lastPriceUsd;
 
-    state.cashSol -= sol;
+    state.cashSol -= sol + flat;
     state.stats.totalBuys += 1;
-    state.stats.feesPaidSol += fee;
+    state.stats.feesPaidSol += fee + flat;
 
     const trade = {
       id: tradeId(o.ts),
@@ -281,6 +306,7 @@
       priceUsd: o.priceUsd || null,
       solGross: sol,
       feeSol: fee,
+      txCostSol: flat,
       solNet: net,
       mcap: o.mcap || null,
     };
@@ -311,7 +337,11 @@
 
     const gross = qty * px;
     const fee = applyBps(gross, settings.feeBps);
-    const net = gross - fee;
+    const flat = txCostSol(settings);
+    // Net proceeds pay the platform fee AND the flat tx costs. A dust sell
+    // can genuinely net negative — you paid gas to exit a worthless bag,
+    // which is precisely the lesson worth learning on paper.
+    const net = gross - fee - flat;
 
     const costShare = pos.costSol * (qty / pos.qty);
     const pnl = net - costShare;
@@ -323,7 +353,7 @@
 
     state.cashSol += net;
     state.stats.totalSells += 1;
-    state.stats.feesPaidSol += fee;
+    state.stats.feesPaidSol += fee + flat;
     state.stats.realizedPnlSol += pnl;
 
     const trade = {
@@ -339,6 +369,7 @@
       priceUsd: o.priceUsd || null,
       solGross: gross,
       feeSol: fee,
+      txCostSol: flat,
       solNet: net,
       pnlSol: pnl,
       mcap: o.mcap || null,

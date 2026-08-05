@@ -3,6 +3,22 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## v2.2.0 — 2026-08-05
+
+Requested by the maintainer: make paper fills cost what real fills cost.
+
+- **Fees & costs emulation.** A new settings card models the FULL cost of a
+  real fill: the platform percentage (as before), plus a flat priority fee
+  (gas) and a bribe/tip per transaction — the costs that dominate small
+  entries and that zero-cost practice quietly ignores. Quick fill-in
+  presets give rough starting points; your own site settings are the truth.
+- The accounting is honest end to end: flat costs join the cost basis on
+  buys and reduce net proceeds on sells, so per-sell P&L, rounds, the
+  calendar, the equity curve (still exact to the SOL), and the verification
+  chain all include them. A dust exit can genuinely net negative — you paid
+  gas to leave a worthless bag, which is precisely the lesson.
+- Defaults are zero, so existing wallets change nothing until you opt in.
+
 ## v2.1.0 — 2026-08-05
 
 The value release: the practice loop gets its most important missing organ,

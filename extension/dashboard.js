@@ -2676,9 +2676,24 @@ function renderSettings(el) {
       <div class="card">
         <h3>Wallet &amp; Trading</h3>
         <div class="field"><label for="set-balance">Starting paper balance (SOL)</label><input id="set-balance" type="number" min="0.1" step="0.1" value="${settings.balanceStartSol}"></div>
-        <div class="field"><label for="set-fee">Fee bps per side (100 = 1%)</label><input id="set-fee" type="number" min="0" step="1" value="${settings.feeBps}"></div>
-        <div class="field"><label for="set-slippage">Simulated slippage bps</label><input id="set-slippage" type="number" min="0" step="1" value="${settings.slippageBps}"><small>Extra price impact on fills. 0 fills at the live tick.</small></div>
         <div class="field"><label for="set-sellpcts">Quick-sell presets (%)</label><input id="set-sellpcts" type="text" value="${esc(sellPctsList.join(', '))}"></div>
+      </div>
+      <div class="card">
+        <h3>Fees &amp; costs</h3>
+        <p class="dim" style="margin-top:0;font-size:12px;line-height:1.55">Make paper fills cost what real fills cost. Copy YOUR settings from the site you trade on — on small entries the flat costs below matter more than the percentage.</p>
+        <div class="field"><label for="set-fee-preset">Quick fill-in</label>
+          <select id="set-fee-preset">
+            <option value="">— pick a rough starting point —</option>
+            <option value="bot">≈ Axiom/Padre-style bot (1% + 0.001 gas + 0.001 tip)</option>
+            <option value="fast">≈ Aggressive sniper (1% + 0.003 gas + 0.005 tip)</option>
+            <option value="zero">No costs (pure price practice)</option>
+          </select>
+          <small>Fills the fields below — they stay yours to edit. Real fees drift; the site's own settings are the truth.</small>
+        </div>
+        <div class="field"><label for="set-fee">Platform fee, bps per side (100 = 1%)</label><input id="set-fee" type="number" min="0" step="1" value="${settings.feeBps}"></div>
+        <div class="field"><label for="set-gas">Priority fee per transaction (SOL)</label><input id="set-gas" type="number" min="0" max="0.5" step="0.0001" value="${Number(settings.gasSolPerTx) > 0 ? settings.gasSolPerTx : ''}" placeholder="0"><small>Charged on every buy AND sell, like real gas.</small></div>
+        <div class="field"><label for="set-tip">Bribe / tip per transaction (SOL)</label><input id="set-tip" type="number" min="0" max="0.5" step="0.0001" value="${Number(settings.tipSolPerTx) > 0 ? settings.tipSolPerTx : ''}" placeholder="0"><small>Jito-style inclusion tip. Flat, per transaction.</small></div>
+        <div class="field"><label for="set-slippage">Simulated slippage bps</label><input id="set-slippage" type="number" min="0" step="1" value="${settings.slippageBps}"><small>Extra price impact on fills. 0 fills at the live tick.</small></div>
       </div>
       <div class="card">
         <h3>Quick-buy (QB)</h3>
@@ -2741,6 +2756,24 @@ function renderSettings(el) {
 /** Wire the settings form. Called after the section is in the document. */
 function bindSettings() {
   document.getElementById('save-settings').addEventListener('click', saveFromForm);
+  // Fees & costs quick fill-in: writes the fields, never storage — Save still
+  // owns persistence, and the numbers stay the user's to edit.
+  const feePreset = document.getElementById('set-fee-preset');
+  if (feePreset) {
+    feePreset.addEventListener('change', () => {
+      const presets = {
+        bot: { fee: 100, gas: 0.001, tip: 0.001, slip: 0 },
+        fast: { fee: 100, gas: 0.003, tip: 0.005, slip: 50 },
+        zero: { fee: 0, gas: 0, tip: 0, slip: 0 },
+      };
+      const p = presets[feePreset.value];
+      if (!p) return;
+      document.getElementById('set-fee').value = p.fee;
+      document.getElementById('set-gas').value = p.gas || '';
+      document.getElementById('set-tip').value = p.tip || '';
+      document.getElementById('set-slippage').value = p.slip;
+    });
+  }
   const sizeSlider = document.getElementById('set-list-quick-buy-size');
   const sizeVal = document.getElementById('val-list-quick-buy-size');
   if (sizeSlider && sizeVal) {
@@ -2885,6 +2918,14 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     balanceStartSol,
     // D-11: integers 0..1000 only — a negative fee inverts the arithmetic.
     feeBps: clampInt('set-fee', 0, 1000, DEFAULTS.feeBps, 'fee bps'),
+    gasSolPerTx: (() => {
+      const v = Number(document.getElementById('set-gas').value);
+      return Number.isFinite(v) && v > 0 ? Math.min(v, 0.5) : 0;
+    })(),
+    tipSolPerTx: (() => {
+      const v = Number(document.getElementById('set-tip').value);
+      return Number.isFinite(v) && v > 0 ? Math.min(v, 0.5) : 0;
+    })(),
     // D-23: integers 0..2000 only — ≥ 10000 breaks every sell.
     slippageBps: clampInt('set-slippage', 0, 2000, DEFAULTS.slippageBps, 'slippage bps'),
     presetsBuy: presets.length ? presets : [0.1, 0.5, 1, 2],

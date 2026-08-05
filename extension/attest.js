@@ -90,6 +90,10 @@
       priceNative: Number(fill.priceNative) || 0,
       solGross: Number(fill.solGross) || 0,
       solNet: Number(fill.solNet !== undefined ? fill.solNet : fill.solGross) || 0,
+      // Flat per-transaction cost (gas + tip emulation). Stored like solNet —
+      // uncommitted but replayed — so the chain-derived P&L keeps agreeing
+      // with an honest wallet when cost emulation is on.
+      txCostSol: Number(fill.txCostSol) || 0,
       amount: Number(fill.side === 'buy'
         ? (fill.solGross !== undefined ? fill.solGross : fill.solNet)
         : (fill.solNet !== undefined ? fill.solNet : fill.solGross)
@@ -206,7 +210,11 @@
         // not proof, and a server re-verifies every fill against real price
         // history anyway. Links without solNet (foreign/minimal fills) fall
         // back to the committed gross amount, preserving old behaviour.
-        held.cost += Number(link.solNet) > 0 ? Number(link.solNet) : amount;
+        // Buy-side flat tx costs join the basis exactly as the engine books
+        // them (costSol += net + flat); sell-side flats already flow through
+        // the sell link's solNet.
+        held.cost += (Number(link.solNet) > 0 ? Number(link.solNet) : amount)
+          + (Number(link.txCostSol) || 0);
         positions.set(link.mint, held);
       } else if (link.side === 'sell') {
         const held = positions.get(link.mint);

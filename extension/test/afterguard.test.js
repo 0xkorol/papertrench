@@ -191,3 +191,90 @@ test("the dashboard surfaces The After and the Guardrails honestly", () => {
   assert.match(dash, /guardTiltEnabled: document\.getElementById/);
   assert.match(dash, /postExitWatchEnabled: document\.getElementById/);
 });
+
+/* ---------------- Fees & costs emulation (gas + tip) ----------------
+ *
+ * Real fills cost a platform %, PLUS flat per-transaction gas and tip — and
+ * on small entries the flat costs dominate. The model under test: flat costs
+ * join the cost basis on buys and reduce net proceeds on sells, so per-sell
+ * P&L, rounds, the calendar, the equity identity, and the attest chain all
+ * account for them with no special cases.
+ */
+
+test("buys debit amount + flat costs; the tokens bought are unchanged", () => {
+  const settings = settingsWith({ gasSolPerTx: 0.001, tipSolPerTx: 0.002 });
+  const state = E.defaultState(settings);
+  const { trade } = E.buy(state, settings, { ts: T0, mint: MINT, symbol: "B", site: "padre", solAmount: 1, priceNative: 0.001 });
+
+  assert.ok(Math.abs(state.cashSol - (10 - 1.003)) < 1e-12, "cash pays amount + gas + tip");
+  assert.ok(Math.abs(trade.qty - (0.99 / 0.001)) < 1e-9, "flat costs buy no tokens (qty from net swap only)");
+  assert.equal(trade.txCostSol, 0.003);
+  const pos = state.positions[MINT];
+  assert.ok(Math.abs(pos.costSol - 0.993) < 1e-12, "cost basis = net + flat");
+  assert.ok(Math.abs(state.stats.feesPaidSol - 0.013) < 1e-12, "fees paid = platform fee + flat");
+});
+
+test("insufficient balance counts the flat costs and says so", () => {
+  const settings = settingsWith({ gasSolPerTx: 0.05, tipSolPerTx: 0.05 });
+  const state = E.defaultState(settings); // 10 SOL
+  assert.throws(() => E.buy(state, settings, { ts: T0, mint: MINT, solAmount: 9.95, priceNative: 0.001 }),
+    /tx costs/, "the refusal must name the tx costs");
+});
+
+test("a dust sell can net NEGATIVE — you paid gas to exit a worthless bag", () => {
+  const settings = settingsWith({ gasSolPerTx: 0.001, tipSolPerTx: 0 });
+  const state = E.defaultState(settings);
+  E.buy(state, settings, { ts: T0, mint: MINT, symbol: "B", site: "padre", solAmount: 0.1, priceNative: 0.001 });
+  const cashBefore = state.cashSol;
+  // Price collapses 1000x; selling the bag grosses ~0.0001 SOL, gas is 0.001.
+  const { trade } = E.sell(state, settings, { ts: T0 + 1000, mint: MINT, qtyFraction: 1, priceNative: 0.000001 });
+  assert.ok(trade.solNet < 0, "net proceeds below zero are the honest outcome");
+  assert.ok(state.cashSol < cashBefore, "cash goes DOWN on the exit");
+});
+
+test("the equity identity holds exactly with costs on", () => {
+  const settings = settingsWith({ gasSolPerTx: 0.0015, tipSolPerTx: 0.001, feeBps: 100 });
+  const state = E.defaultState(settings);
+  E.buy(state, settings, { ts: T0, mint: MINT, symbol: "B", site: "padre", solAmount: 1, priceNative: 0.001 });
+  E.sell(state, settings, { ts: T0 + 60_000, mint: MINT, qtyFraction: 0.5, priceNative: 0.002 });
+  E.buy(state, settings, { ts: T0 + 120_000, mint: MINT, symbol: "B", site: "padre", solAmount: 0.5, priceNative: 0.0018 });
+  E.markPosition(state, MINT, 0.0021, null);
+
+  const pts = E.equityCurvePoints(state, settings.balanceStartSol, { now: T0 + 180_000 });
+  const eq = E.equitySol(state);
+  assert.ok(Math.abs(pts[pts.length - 1].eq - eq) < 1e-9,
+    "the curve final point must equal equity EXACTLY, flats included");
+});
+
+test("the attest chain replay agrees with the engine when costs are on", async () => {
+  const AT = require("../attest.js");
+  const settings = settingsWith({ gasSolPerTx: 0.002, tipSolPerTx: 0.001, feeBps: 100 });
+  const state = E.defaultState(settings);
+  const b = E.buy(state, settings, { ts: T0, mint: MINT, symbol: "B", site: "padre", solAmount: 1, priceNative: 0.001 });
+  const s = E.sell(state, settings, { ts: T0 + 60_000, mint: MINT, qtyFraction: 1, priceNative: 0.002 });
+
+  let prev = AT.GENESIS;
+  const chain = [];
+  for (const trade of [b.trade, s.trade]) {
+    const link = await AT.appendFill(prev, trade);
+    link.seq = chain.length;
+    chain.push(link);
+    prev = link.hash;
+  }
+  const replay = AT.replayChain(chain);
+  assert.ok(Math.abs(replay.realizedPnlSol - state.stats.realizedPnlSol) < 1e-9,
+    "chain-derived realized P&L must match the engine accumulator, flats included");
+});
+
+test("the Fees & costs card exists with honest copy and gathered keys", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dash = fs.readFileSync(path.join(__dirname, "..", "dashboard.js"), "utf8");
+  assert.match(dash, /Fees &amp; costs/);
+  for (const id of ["set-fee", "set-gas", "set-tip", "set-slippage", "set-fee-preset"]) {
+    assert.ok(dash.includes(`id="${id}"`), `${id} must exist`);
+  }
+  assert.match(dash, /gasSolPerTx: \(\(\) =>/, "gas must be gathered with validation");
+  assert.match(dash, /tipSolPerTx: \(\(\) =>/, "tip must be gathered with validation");
+  assert.match(dash, /never storage — Save still/i, "presets fill fields, never storage");
+});
