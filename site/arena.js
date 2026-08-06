@@ -12,7 +12,12 @@
 (() => {
   'use strict';
 
-  const API = 'https://api.papertrench.com';
+  // The site is on GitHub Pages with DNS at GoDaddy, so Cloudflare cannot
+  // route api.papertrench.com without moving the whole domain's nameservers.
+  // The API therefore answers on its workers.dev subdomain, which makes it
+  // CROSS-site to these pages — hence SameSite=None session cookies and an
+  // Origin allowlist enforced on every state-changing request server-side.
+  const API = 'https://papertrench-api.onerobby.workers.dev';
 
   /**
    * Is the verifier deployed yet?
@@ -28,7 +33,7 @@
    * Arena IS live, a failed request genuinely does mean an outage, and the
    * two states must never be conflated in either direction.
    */
-  const API_LIVE = false;
+  const API_LIVE = true;
   // The stable id the Chrome Web Store assigns the published extension.
   // Unpacked developer installs get per-machine ids the site cannot know —
   // those users use the exported-file path instead (server/DEPLOY.md).

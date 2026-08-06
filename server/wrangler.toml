@@ -1,9 +1,22 @@
 # PaperTrench leaderboard server — Cloudflare Workers config.
-# See DEPLOY.md for the one-time setup runbook.
+# See DEPLOY.md for the setup runbook.
 
 name = "papertrench-api"
 main = "worker/index.js"
 compatibility_date = "2026-07-01"
+
+# The site is on GitHub Pages with DNS at GoDaddy, so Cloudflare cannot route
+# api.papertrench.com without moving the whole domain's nameservers. The API
+# therefore lives on its workers.dev subdomain, which needs no DNS at all.
+#
+# That makes the API CROSS-site to the pages, which is why the session cookie
+# is SameSite=None (auth.js selects this by the absence of COOKIE_DOMAIN) and
+# why every POST independently enforces the Origin allowlist. To move to
+# api.papertrench.com later: put the zone on Cloudflare, add a [[routes]]
+# block, set COOKIE_DOMAIN below, and update API in site/arena.js. No code
+# changes — both topologies are already supported.
+workers_dev = true
+preview_urls = false
 
 # Pricing cron: drains one pending record per minute under the candle-API
 # budget (25 external lookups/run keeps GeckoTerminal's free tier happy).
@@ -13,18 +26,17 @@ crons = ["* * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "papertrench"
-database_id = "REPLACE_WITH_D1_ID"   # from: wrangler d1 create papertrench
+database_id = "79f96a39-0407-4e83-bf03-062ca616fe13"
 
 [vars]
 SITE_ORIGIN = "https://papertrench.com"
 SITE_ORIGIN_ALT = "https://www.papertrench.com"
-COOKIE_DOMAIN = "papertrench.com"
-X_CLIENT_ID = "REPLACE_WITH_X_OAUTH2_CLIENT_ID"
-X_REDIRECT_URI = "https://api.papertrench.com/api/auth/x/callback"
+# COOKIE_DOMAIN is deliberately UNSET: setting it would scope the session
+# cookie to papertrench.com, which the workers.dev origin cannot do, and would
+# switch auth.js to SameSite=Lax — silently dropping the session on every
+# cross-site fetch. Only set it once the API is a papertrench.com subdomain.
+X_CLIENT_ID = "N1BucEctX2dwVkNhSVRXSGRnWks6MTpjaQ"
+X_REDIRECT_URI = "https://papertrench-api.onerobby.workers.dev/api/auth/x/callback"
 
 # Secrets (never in this file):
-#   wrangler secret put SESSION_SECRET     # 32+ random bytes, e.g. `openssl rand -hex 32`
-
-[[routes]]
-pattern = "api.papertrench.com/*"
-zone_name = "papertrench.com"
+#   wrangler secret put SESSION_SECRET     # 32+ random bytes
