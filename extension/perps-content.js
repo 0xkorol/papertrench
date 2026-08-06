@@ -29,6 +29,7 @@
   const RC = window.PaperPerpsReconcile;
   const BARS = window.PaperBars;
   const TAC = window.PaperTA;
+  const CHART = window.PaperPerpsChart || null; // drawing is optional, never fatal
   if (!S || !V || !P || !T || !RC || !BARS || !TAC) return;
 
   const STORE_KEY = 'pt_perps';
@@ -766,6 +767,15 @@
     els.positions.replaceChildren(box);
     els.positions.style.display = rows.length ? '' : 'none';
 
+    // Fills and levels onto the venue's own chart, through the same
+    // MAIN-world machinery the spot overlay uses.
+    if (CHART) {
+      CHART.syncChart({
+        state, venue: adapter.venue, market: adapter.market,
+        px: lastPx > 0 ? lastPx : null,
+      });
+    }
+
     const balBox = el('div');
     els.bal.replaceChildren(el('span', '', 'Paper balance'), el('span', '', T.fmtUsd(state.cashUsd)));
     void balBox;
@@ -867,6 +877,7 @@
   }
 
   function leavePage() {
+    if (CHART && adapter) CHART.clearChart();
     if (root) { root.remove(); root = null; shadow = null; els = null; }
     if (titleObserver) { titleObserver.disconnect(); titleObserver = null; }
     adapter = null;

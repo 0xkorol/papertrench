@@ -1,0 +1,170 @@
+/* Tests for the perps chart producer (perps-chart.js).
+ *
+ * The drawing itself lives in price-bridge.js and is shared with spot. What
+ * is tested here is the seam: that a perps fill is described to the bridge in
+ * the ONE unit a perp actually has (absolute USD), that a fill draws once and
+ * only once, and that the two lines are the two numbers that matter — entry
+ * and liquidation.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+
+global.window = global.window || {};
+require('../perps-venues.js');
+require('../perps.js');
+require('../perps-chart.js');
+const P = global.window.PaperPerps;
+const C = global.window.PaperPerpsChart;
+
+const HL = { maxLeverage: 20 };
+const CLOSE = 1e-9;
+
+/* Capture what the producer posts, the way the bridge would receive it. */
+function captureMessages(fn) {
+  const sent = [];
+  const prior = global.window.postMessage;
+  global.window.postMessage = (msg) => sent.push(msg);
+  try { fn(); } finally { global.window.postMessage = prior; }
+  return sent;
+}
+
+/* Each fixture is a genuinely DIFFERENT fill (its own timestamp, hence its
+ * own id), and the producer's dedupe memory is reset between them — the
+ * "one fill, one bubble" rule is what the dedupe test exercises on purpose,
+ * so it must not leak into the others by accident. */
+let fixtureClock = 1_700_000_000;
+function bookWithFill() {
+  captureMessages(() => C.clearChart());
+  fixtureClock += 3600;
+  const s = P.defaultPerpsState({ perpsStartUsd: 1000 });
+  const r = P.openPerp(s, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: fixtureClock, params: HL,
+  });
+  return { state: s, id: r.id, pos: r.position };
+}
+
+test('the producer installs its API and posts under the content source tag', () => {
+  assert.equal(typeof C.syncChart, 'function');
+  const { state } = bookWithFill();
+  const sent = captureMessages(() => C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 100 }));
+  assert.ok(sent.length > 0, 'something must be posted');
+  for (const m of sent) {
+    assert.equal(m.source, 'papertrench-content', 'the bridge only listens to its own tag');
+  }
+});
+
+test('a perps fill is quoted in absolute USD, never in SOL or market cap', () => {
+  // The memecoin unit machinery exists because price and cap sit ~14 orders
+  // of magnitude apart. A perp axis is USD and only USD; borrowing that
+  // guesswork is how a marker lands 150x off its candle.
+  const { state } = bookWithFill();
+  const sent = captureMessages(() => C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 100 }));
+  const markers = sent.filter((m) => m.type === 'paper-marker');
+  assert.equal(markers.length, 1, 'the open fill draws one marker');
+  const p = markers[0].payload;
+  assert.equal(p.quote, 'usd-abs', 'the payload must declare its unit');
+  assert.ok(Math.abs(p.priceUsd - 100) < CLOSE, 'at the USD fill price');
+  assert.equal(p.priceNative, undefined, 'a perp has no SOL price to claim');
+  assert.equal(p.mcap, undefined, 'and no market cap');
+  assert.equal(p.side, 'long');
+  assert.equal(p.symbol, 'SOL', 'the symbol needle gates drawing to the right chart');
+
+  const lines = sent.filter((m) => m.type === 'paper-lines');
+  assert.equal(lines[0].payload.axisBasis, 'usd-abs');
+});
+
+test('the two lines are the entry and the LIQUIDATION price', () => {
+  const { state, pos } = bookWithFill();
+  const sent = captureMessages(() => C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 100 }));
+  const spec = sent.filter((m) => m.type === 'paper-lines').pop().payload;
+  assert.ok(Math.abs(spec.avgBuyUsd - 100) < CLOSE, 'entry line at the entry price');
+  // The liquidation line must be the live computed one, not a stale stored copy.
+  const live = P.perpMark(pos, 100).liqPx;
+  assert.ok(Math.abs(spec.avgSellUsd - live) < CLOSE, 'liquidation line at the computed liq price');
+  assert.match(spec.buyLabel, /PAPER/, 'a paper artifact must never be mistakable for a real one');
+  assert.match(spec.sellLabel, /Liquidation/);
+});
+
+test('one fill, one bubble — a redraw never mints a second', () => {
+  const { state } = bookWithFill();
+  const first = captureMessages(() => C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 100 }));
+  assert.equal(first.filter((m) => m.type === 'paper-marker').length, 1);
+  // A render handoff, a storage echo, a tick — all re-run the sync.
+  const second = captureMessages(() => {
+    C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 101 });
+    C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 102 });
+  });
+  assert.equal(second.filter((m) => m.type === 'paper-marker').length, 0,
+    'the same fill must never be posted twice');
+});
+
+test('fills from another market or venue are never drawn on this chart', () => {
+  captureMessages(() => C.clearChart());
+  const s = P.defaultPerpsState({ perpsStartUsd: 1000 });
+  P.openPerp(s, {
+    venue: 'hyperliquid', market: 'BTC', side: 'long',
+    marginUsd: 10, leverage: 20, price: 64000, t: 1_700_000_000, params: { maxLeverage: 40 },
+  });
+  P.openPerp(s, {
+    venue: 'jupiter', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 10, price: 100, t: 1_700_000_100,
+    params: { impactScalarAdjUsd: 125000000000 },
+  });
+  const sent = captureMessages(() => C.syncChart({ state: s, venue: 'hyperliquid', market: 'SOL', px: 100 }));
+  assert.equal(sent.filter((m) => m.type === 'paper-marker').length, 0,
+    'a BTC fill and a Jupiter fill must not appear on the Hyperliquid SOL chart');
+});
+
+test('a closed book clears its lines instead of leaving them on the chart', () => {
+  const { state, id } = bookWithFill();
+  captureMessages(() => C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 100 }));
+  const closed = P.closePerp(state, id, { price: 101, t: state.positions[id].openT + 60 });
+  assert.equal(closed.ok, true, `the fixture must actually close (${closed.reason || ''})`);
+  const sent = captureMessages(() => C.syncChart({ state, venue: 'hyperliquid', market: 'SOL', px: 101 }));
+  assert.ok(sent.some((m) => m.type === 'paper-lines-clear'),
+    'with no open position there is no entry and no liquidation to draw');
+});
+
+test('journal times are converted from seconds to the marker contract milliseconds', () => {
+  const entry = { t: 1_700_000_000, venue: 'hyperliquid', market: 'SOL', id: 1, type: 'open', side: 'long', price: 100 };
+  const m = C.markerFor(entry, 'SOL');
+  assert.equal(m.ts, 1_700_000_000_000,
+    'the perps journal stores seconds; the bridge contract is milliseconds');
+});
+
+test('a liquidation is drawn as a liquidation, not as a close', () => {
+  const entry = { t: 1_700_000_000, venue: 'hyperliquid', market: 'SOL', id: 1, type: 'liquidation', side: 'long', price: 97 };
+  assert.equal(C.markerFor(entry, 'SOL').kind, 'liquidation');
+  const closed = C.markerFor({ ...entry, type: 'close' }, 'SOL');
+  assert.equal(closed.kind, 'close');
+});
+
+/* ---------------- the bridge half of the seam ---------------- */
+
+const bridgeSrc = fs.readFileSync(path.join(__dirname, '..', 'price-bridge.js'), 'utf8');
+
+test('the bridge keeps the spot price gate intact and gives perps its own door', () => {
+  // The spot gate refuses any mark without a SOL price, because a level
+  // built from the wrong unit lands arrows orders of magnitude off. Perps
+  // must not weaken it — it declares itself and takes a separate normalizer.
+  assert.match(bridgeSrc, /if \(!payload \|\| !\(numberValue\(payload\.priceNative\) > 0\)\) return null;/,
+    'the spot priceNative gate must survive');
+  assert.match(bridgeSrc, /if \(payload && payload\.quote === 'usd-abs'\) return normalizePerpMark\(payload\);/,
+    'and perps routes around it explicitly, not by loosening it');
+});
+
+test('the usd-abs basis returns the level verbatim, with no cap conversion', () => {
+  assert.match(bridgeSrc, /if \(basis === 'usd-abs'\)/, 'lineLevelFor must know the basis');
+  assert.match(bridgeSrc, /if \(basis === 'usd-abs'\) return levels\.usd > 0 \? levels\.usd : null;/,
+    'shapeLevelFor must return the USD level unscaled');
+});
+
+test('spot line labels are unchanged when a surface does not name its own', () => {
+  assert.match(bridgeSrc, /typeof spec\.buyLabel === 'string' \? spec\.buyLabel : 'PAPER Avg\. Fill'/,
+    'spot keeps PAPER Avg. Fill');
+  assert.match(bridgeSrc, /typeof spec\.sellLabel === 'string' \? spec\.sellLabel : 'PAPER Avg\. Exit'/,
+    'spot keeps PAPER Avg. Exit');
+});

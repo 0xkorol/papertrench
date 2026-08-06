@@ -34,7 +34,7 @@ test('the manifest registers the perps stack on exactly the probed venue hosts',
 
 test('the perps stack loads in dependency order', () => {
   const js = perpsEntry().js;
-  const order = ['perps-venues.js', 'perps.js', 'bar-store.js', 'ta-core.js', 'perps-sites.js', 'perps-reconcile.js', 'perps-ticket.js', 'perps-content.js'];
+  const order = ['perps-venues.js', 'perps.js', 'bar-store.js', 'ta-core.js', 'perps-sites.js', 'perps-reconcile.js', 'perps-ticket.js', 'perps-chart.js', 'perps-content.js'];
   const positions = order.map((f) => js.indexOf(f));
   assert.ok(positions.every((p) => p >= 0), 'every perps module must be in the entry: ' + JSON.stringify(js));
   for (let i = 1; i < positions.length; i++) {

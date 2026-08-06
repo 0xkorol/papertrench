@@ -982,7 +982,50 @@
   const AXIOM_SELL_BUBBLE = '#f23645';
   const AXIOM_BUBBLE_SIZE = 25;
 
+  /* A PERPS fill is quoted in absolute USD and has no SOL price, no mint and
+   * no market cap — the whole unit-disambiguation machine below exists for
+   * memecoin charts where price and cap sit ~14 orders of magnitude apart,
+   * and a perp axis is USD and only USD. Rather than loosen the spot gate
+   * (which exists because C-09/C-16 proved a level built from the wrong unit
+   * lands arrows 150x off), a USD-quoted payload declares itself and takes
+   * its own normalizer. Everything downstream — dedupe, re-snap, the
+   * marks/shapes/bubbles handoff, frozen levels — is shared unchanged. */
+  function normalizePerpMark(payload) {
+    const price = numberValue(payload.priceUsd);
+    if (!(price > 0)) return null;
+    const long = payload.side === 'long' || payload.side === 'buy';
+    const tsMs = numberValue(payload.ts) || Date.now();
+    const id = typeof payload.fillId === 'string' && payload.fillId
+      ? `papertrench-${payload.fillId}`
+      : `papertrench-perp-${Math.floor(tsMs)}-${Math.random().toString(36).slice(2, 8)}`;
+    const kind = typeof payload.kind === 'string' ? payload.kind : (long ? 'long' : 'short');
+    const color = kind === 'liquidation' ? '#E73A44' : (long ? '#17C671' : '#E73A44');
+    const head = kind === 'liquidation'
+      ? 'Liquidated (Paper)'
+      : `${kind === 'close' ? 'Close' : (long ? 'Long' : 'Short')} (Paper)`;
+    const sizeText = numberValue(payload.notionalUsd) > 0
+      ? `${formatCompactUsd(numberValue(payload.notionalUsd))}` : '';
+    const levText = numberValue(payload.leverage) > 0 ? `${payload.leverage}x` : '';
+    return {
+      id,
+      time: snapMarkTime(tsMs),
+      _tsMs: Math.floor(tsMs),
+      color: { background: color, border: color },
+      text: `${head}${sizeText ? `\n${sizeText}${levText ? ` @ ${levText}` : ''}` : ''}`
+        + `\n${formatCompactUsd(price)}${payload.symbol ? `\n${payload.symbol}` : ''}`,
+      label: kind === 'liquidation' ? 'X' : (long ? 'L' : 'S'),
+      labelFontColor: '#FFFFFF',
+      minSize: 18,
+      borderWidth: 1,
+      hoveredBorderWidth: 3,
+      imageUrl: null,
+      showLabelWhenImageLoaded: true,
+      _paperTrench: true,
+    };
+  }
+
   function normalizePaperMark(payload) {
+    if (payload && payload.quote === 'usd-abs') return normalizePerpMark(payload);
     if (!payload || !(numberValue(payload.priceNative) > 0)) return null;
     const side = payload.side === 'sell' ? 'sell' : 'buy';
     const price = numberValue(payload.priceNative);
@@ -1575,6 +1618,13 @@
     const currentNative = Number(spec.currentPriceNative);
     const currentUsd = Number(spec.currentPriceUsd);
 
+    if (basis === 'usd-abs') {
+      // A perp axis is plain USD: no supply, no cap, nothing to convert. The
+      // level is the level, or there is no line.
+      const usd = Number(spec['avg' + side + 'Usd']);
+      return usd > 0 ? usd : null;
+    }
+
     if (basis) {
       // DEFECT C-07: fresh launches can have fills that predate the SOL/USD
       // rate, so avgBuyUsd is null while avgBuyNative sits in the same spec.
@@ -1750,8 +1800,16 @@
       // the two indistinguishable when both positions exist (DEFECT F-30).
       // Same doctrine as the P&L-card watermark — a paper artifact must
       // never be mistakable for a real one.
-      const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, 'PAPER Avg. Fill', '#90A8FA99', wantsBuy);
-      const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, 'PAPER Avg. Exit', '#F7DC8599', wantsSell);
+      // A perps book has an ENTRY and a LIQUIDATION, not a fill and an exit,
+      // and the liquidation line is the one number that matters most on the
+      // chart. The spec may therefore name its own two lines; spot supplies
+      // nothing and keeps its labels and colours exactly as they were.
+      const buyLabel = typeof spec.buyLabel === 'string' ? spec.buyLabel : 'PAPER Avg. Fill';
+      const sellLabel = typeof spec.sellLabel === 'string' ? spec.sellLabel : 'PAPER Avg. Exit';
+      const buyColor = typeof spec.buyColor === 'string' ? spec.buyColor : '#90A8FA99';
+      const sellColor = typeof spec.sellColor === 'string' ? spec.sellColor : '#F7DC8599';
+      const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, buyLabel, buyColor, wantsBuy);
+      const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, sellLabel, sellColor, wantsSell);
       if (buyOk && sellOk) {
         // Every wanted level drew, or one is still waiting on a close —
         // ok only when nothing wanted is missing.
@@ -1783,6 +1841,8 @@
   function shapeLevelFor(levels) {
     const spec = paperLineSpec || {};
     const basis = spec.axisBasis;
+    // Perps: the mark's USD level IS the chart level, with no ratio scaling.
+    if (basis === 'usd-abs') return levels.usd > 0 ? levels.usd : null;
     if (basis === 'usd' && levels.usd > 0) return levels.usd;
     if (basis === 'native' && levels.native > 0) return levels.native;
     const currentNative = Number(spec.currentPriceNative);
@@ -2524,6 +2584,11 @@
         avgSellNative: numberValue(payload && payload.avgSellNative),
         avgBuyMcapNative: numberValue(payload && payload.avgBuyMcapNative),
         avgSellMcapNative: numberValue(payload && payload.avgSellMcapNative),
+        // Optional per-surface labelling (perps names its own two lines).
+        buyLabel: typeof (payload && payload.buyLabel) === 'string' ? payload.buyLabel : null,
+        sellLabel: typeof (payload && payload.sellLabel) === 'string' ? payload.sellLabel : null,
+        buyColor: typeof (payload && payload.buyColor) === 'string' ? payload.buyColor : null,
+        sellColor: typeof (payload && payload.sellColor) === 'string' ? payload.sellColor : null,
       };
       // F-41: freeze PARITY with bubbles. A fill's bubble freezes its level
       // for life; the line recomputed on every 2 s repost, so the moment the

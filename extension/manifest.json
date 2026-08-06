@@ -37,7 +37,8 @@
         "https://pump.fun/*",
         "https://*.pump.fun/*",
         "https://fomo.family/*",
-        "https://*.fomo.family/*"
+        "https://*.fomo.family/*",
+        "https://app.hyperliquid.xyz/*"
       ],
       "js": [
         "xlinks.js",
@@ -150,6 +151,7 @@
         "perps-sites.js",
         "perps-reconcile.js",
         "perps-ticket.js",
+        "perps-chart.js",
         "perps-content.js"
       ],
       "run_at": "document_idle",
@@ -181,7 +183,8 @@
         "https://birdeye.so/*",
         "https://jup.ag/*",
         "https://pump.fun/*",
-        "https://fomo.family/*"
+        "https://fomo.family/*",
+        "https://app.hyperliquid.xyz/*"
       ]
     }
   ],
