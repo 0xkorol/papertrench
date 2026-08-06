@@ -693,3 +693,98 @@ test('F-34: the on-curve check agrees with reality on known points', () => {
       curve + ' is a PDA and must be off-curve');
   }
 });
+
+/* ---------------- measured supply: non-pump launchpads bootstrap too -------
+ *
+ * The Padre re-report of the F-34 screen: a brand-new NON-pump coin (letsbonk
+ * and friends — no "pump" suffix, no derivable curve) on an MCap-mode chart.
+ * The pump constant cannot price it and no aggregator knows it, so the armed
+ * buy sat on "waiting for first quote" forever while the site's own chart
+ * ticked away. The prewatch probe now reads the coin's supply OFF THE MINT
+ * ACCOUNT (token.supplyUi, whole tokens) — a protocol fact, not scraped page
+ * data — and bootstrapTick prices mcap-scale readings through it under the
+ * same exactly-one-sane discipline. Measured-supply coins get the generic
+ * sanity band, NOT pump's tighter launch-cap band: nothing pins their
+ * starting cap.
+ */
+
+const BONK_MINT = 'BonkMint1111111111111111111111111111111bonk';
+
+test('measured supply: an mcap-only tick prices a non-pump coin', () => {
+  const pending = { mint: BONK_MINT, pending: true, supplyUi: 1e9 };
+  const rate = 200;
+  const verdict = Q.bootstrapTick(pending, {
+    mint: BONK_MINT, source: 'padre-chart-bar', mcap: 8000,
+  }, rate);
+  assert.equal(verdict.accepted, true, 'a measured supply makes the mcap readable');
+  assert.equal(verdict.basis, 'mcap');
+  assert.ok(Math.abs(verdict.priceUsd - 8000 / 1e9) < 1e-15, 'unit price = mcap / measured supply');
+  assert.ok(Math.abs(verdict.priceNative - 8000 / 1e9 / rate) < 1e-15);
+});
+
+test('measured supply: an MCap-mode chart close prices a non-pump coin', () => {
+  // The Padre screenshot: chart in MCap display, ~$39K cap, unlabelled close.
+  const pending = { mint: BONK_MINT, pending: true, supplyUi: 1e9 };
+  const verdict = Q.bootstrapTick(pending, {
+    mint: BONK_MINT, source: 'chart-export',
+    candidates: [{ value: 39000, unit: 'unknown' }],
+  }, 200);
+  assert.equal(verdict.accepted, true);
+  assert.equal(verdict.basis, 'mcap', 'only the USD-mcap reading of 39000 is sane');
+  assert.ok(Math.abs(verdict.priceUsd - 39000 / 1e9) < 1e-15);
+  assert.equal(verdict.mcap, 39000);
+});
+
+test('measured supply: two sane readings still refuse — measured never loosens F-25', () => {
+  // At supply 1e9 and rate 200, a close of 200 reads sanely as BOTH a USD
+  // mcap (unit 2e-7) and a SOL mcap (unit 4e-5). Guessing between them is
+  // the double-division corruption; the tick must be refused.
+  const pending = { mint: BONK_MINT, pending: true, supplyUi: 1e9 };
+  const verdict = Q.bootstrapTick(pending, {
+    mint: BONK_MINT, source: 'chart-export',
+    candidates: [{ value: 200, unit: 'unknown' }],
+  }, 200);
+  assert.equal(verdict.accepted, false);
+  assert.equal(verdict.reason, 'ambiguous-unit');
+});
+
+test('measured supply: no supply and no pump suffix still refuses mcap readings', () => {
+  // The pre-probe state of the same coin: nothing measured, nothing implied.
+  const pending = { mint: BONK_MINT, pending: true };
+  const close = Q.bootstrapTick(pending, {
+    mint: BONK_MINT, source: 'chart-export',
+    candidates: [{ value: 39000, unit: 'unknown' }],
+  }, 200);
+  assert.equal(close.accepted, false);
+  assert.equal(close.reason, 'mcap-no-supply');
+  const mcOnly = Q.bootstrapTick(pending, {
+    mint: BONK_MINT, source: 'padre-chart-bar', mcap: 8000,
+  }, 200);
+  assert.equal(mcOnly.accepted, false);
+  assert.equal(mcOnly.reason, 'mcap-only-no-supply',
+    'a supply nobody measured must never price a fill');
+});
+
+test('measured supply: pump-family coins keep their tighter launch-cap band', () => {
+  // At a $1K cap the two bands split: for a pump coin the USD reading
+  // (unit 1e-6) sits below the 3e-6 protocol launch floor and the SOL
+  // reading (unit 2e-4) is above both bands — refused. For a
+  // measured-supply coin the USD reading lands inside the generic sanity
+  // band and is the only sane one — accepted.
+  const rate = 200;
+  const pump = { mint: 'GAcMLQLWHRM9XmQjvkkpDjinXBuvn7uYhLQ5cerQpump', pending: true };
+  const bonk = { mint: BONK_MINT, pending: true, supplyUi: 1e9 };
+  const tickOf = (mint) => ({ mint, source: 'padre-chart-bar', mcap: 1000 });
+  assert.equal(Q.bootstrapTick(pump, tickOf(pump.mint), rate).accepted, false,
+    'pump launches near $4K — a $1K cap reading is not credible for one');
+  assert.equal(Q.bootstrapTick(bonk, tickOf(bonk.mint), rate).accepted, true,
+    'nothing pins a measured-supply launchpad to pump’s starting cap');
+});
+
+test('measured supply: bootstrapSupply prefers the measured value and refuses the rest', () => {
+  assert.equal(Q.bootstrapSupply({ mint: BONK_MINT, supplyUi: 5e8 }), 5e8);
+  assert.equal(Q.bootstrapSupply({ mint: 'GAcMLQLWHRM9XmQjvkkpDjinXBuvn7uYhLQ5cerQpump' }), 1e9,
+    'the pump constant remains the fallback for pump-family coins');
+  assert.equal(Q.bootstrapSupply({ mint: BONK_MINT }), null,
+    'no measurement and no protocol constant -> no supply, honestly');
+});

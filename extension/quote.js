@@ -348,6 +348,33 @@
   }
 
   /**
+   * The supply an mcap-scale reading may honestly be divided by, or null.
+   *
+   * Two sources, both protocol facts rather than scraped page data: the
+   * pump.fun constant (1e9, a rule of the program), and a supply READ FROM
+   * THE MINT ACCOUNT ITSELF by the prewatch probe (token.supplyUi, in whole
+   * tokens). The measured value is what lets a letsbonk/Believe/Moonshot
+   * launch — any coin whose mint does not end in "pump" — be priced from the
+   * page's own mcap feed during the minutes before an aggregator indexes it.
+   * No supply from either source means mcap readings stay unpriceable, which
+   * is the honest answer, not a gap.
+   */
+  function bootstrapSupply(t) {
+    if (!t) return null;
+    var measured = Number(t.supplyUi);
+    if (measured > 0) return measured;
+    return isPumpFamily(t) ? PUMP_FAMILY_SUPPLY : null;
+  }
+
+  /** The unit-price band an mcap reading must land in to be credible. The
+   * pump band is tighter because the protocol pins the launch cap (~$4K);
+   * a measured-supply coin only gets the generic pre-index sanity band. */
+  function mcapUnitBand(t) {
+    if (isPumpFamily(t)) return { min: PUMP_MCAP_UNIT_MIN, max: PUMP_MCAP_UNIT_MAX };
+    return { min: BOOTSTRAP_SANE_USD_MIN, max: BOOTSTRAP_SANE_USD_MAX };
+  }
+
+  /**
    * Accept the very first price for a coin no aggregator has indexed yet.
    *
    * The on-screen price is treated as the only truthful quote, so the trader
@@ -444,28 +471,33 @@
 
       // unit === 'unknown' is the common TradingView chart close case.
       if (unit === 'unknown') {
-        // Pump-family coins have a protocol-constant supply (1e9), so
-        // mcap-scale closes CAN price them — the one thing the general path
+        // A KNOWN supply — pump.fun's protocol constant or one measured off
+        // the mint account by the prewatch probe — is what lets an
+        // mcap-scale close price the coin; without one the general path
         // below must refuse ("no implied supply"). An Axiom chart parked in
         // MCap mode was exactly the screen that could never bootstrap a
         // fresh launch: the armed buy sat on "waiting for first quote"
         // forever while the site's own chart ticked away (maintainer video,
-        // 39-second-old coin). A SOL-denominated cap is a SMALL number (a
-        // $7K cap is ~47 SOL), so this cannot hide behind a magnitude
-        // floor: all four readings of the unlabelled value — native unit,
-        // USD unit, SOL mcap, USD mcap — are judged against the same sane
-        // band, and the tick is priced only when EXACTLY ONE fits (the
-        // F-25 discipline, extended).
-        if (rate && isPumpFamily(pendingToken)) {
+        // 39-second-old coin; the Padre re-report was the same screen on a
+        // non-pump launchpad coin, which is why the constant alone was not
+        // enough). A SOL-denominated cap is a SMALL number (a $7K cap is
+        // ~47 SOL), so this cannot hide behind a magnitude floor: all four
+        // readings of the unlabelled value — native unit, USD unit, SOL
+        // mcap, USD mcap — are judged against the same sane band, and the
+        // tick is priced only when EXACTLY ONE fits (the F-25 discipline,
+        // extended).
+        var supply = bootstrapSupply(pendingToken);
+        if (rate && supply) {
+          var band = mcapUnitBand(pendingToken);
           var readings = [
             { basis: 'native', usd: v * rate, native: v, mcap: null,
               min: BOOTSTRAP_SANE_USD_MIN, max: BOOTSTRAP_SANE_USD_MAX },
             { basis: 'usd', usd: v, native: v / rate, mcap: null,
               min: BOOTSTRAP_SANE_USD_MIN, max: BOOTSTRAP_SANE_USD_MAX },
-            { basis: 'native-mcap', usd: (v * rate) / PUMP_FAMILY_SUPPLY, native: v / PUMP_FAMILY_SUPPLY, mcap: v * rate,
-              min: PUMP_MCAP_UNIT_MIN, max: PUMP_MCAP_UNIT_MAX },
-            { basis: 'mcap', usd: v / PUMP_FAMILY_SUPPLY, native: v / PUMP_FAMILY_SUPPLY / rate, mcap: v,
-              min: PUMP_MCAP_UNIT_MIN, max: PUMP_MCAP_UNIT_MAX },
+            { basis: 'native-mcap', usd: (v * rate) / supply, native: v / supply, mcap: v * rate,
+              min: band.min, max: band.max },
+            { basis: 'mcap', usd: v / supply, native: v / supply / rate, mcap: v,
+              min: band.min, max: band.max },
           ];
           var sane = readings.filter(function (r) {
             return r.usd >= r.min && r.usd <= r.max;
@@ -513,16 +545,19 @@
       }
     }
 
-    // A market-cap-only tick (GMGN/Axiom pre-index) can price a pump-family
-    // coin through the constant supply — same exactly-one-sane discipline.
-    if (tickMcap > 0 && rate && isPumpFamily(pendingToken)) {
-      var usdMc = tickMcap / PUMP_FAMILY_SUPPLY;
-      var solMc = (tickMcap * rate) / PUMP_FAMILY_SUPPLY;
-      var usdOk = usdMc >= PUMP_MCAP_UNIT_MIN && usdMc <= PUMP_MCAP_UNIT_MAX;
-      var solOk = solMc >= PUMP_MCAP_UNIT_MIN && solMc <= PUMP_MCAP_UNIT_MAX;
+    // A market-cap-only tick (GMGN/Axiom pre-index) can price any coin whose
+    // supply is KNOWN — pump's protocol constant or a supply measured off the
+    // mint account — through the same exactly-one-sane discipline.
+    var mcSupply = bootstrapSupply(pendingToken);
+    if (tickMcap > 0 && rate && mcSupply) {
+      var mcBand = mcapUnitBand(pendingToken);
+      var usdMc = tickMcap / mcSupply;
+      var solMc = (tickMcap * rate) / mcSupply;
+      var usdOk = usdMc >= mcBand.min && usdMc <= mcBand.max;
+      var solOk = solMc >= mcBand.min && solMc <= mcBand.max;
       if (usdOk && solOk) return reject('ambiguous-unit');
       if (usdOk) return accept(usdMc / rate, usdMc, tickMcap, 'mcap');
-      if (solOk) return accept(tickMcap / PUMP_FAMILY_SUPPLY, solMc, tickMcap * rate, 'native-mcap');
+      if (solOk) return accept(tickMcap / mcSupply, solMc, tickMcap * rate, 'native-mcap');
     }
     // A market-cap-only tick has no token price, so nothing can be filled yet.
     if (tickMcap > 0) return reject('mcap-only-no-supply');
@@ -1105,6 +1140,7 @@
     isPriceStale,
     fillSourcesAgree,
     isPumpFamily,
+    bootstrapSupply,
     rugVerdict,
     parsePresetList,
     positionMark,

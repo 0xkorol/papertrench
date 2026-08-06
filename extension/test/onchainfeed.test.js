@@ -337,3 +337,190 @@ test('F-34: a non-pump pool refuses prewatch rather than guessing', async () => 
   });
   assert.equal(await feed.prewatch({ pool: CURVE_ADDR }), null);
 });
+
+/* ---------------- probe-everything prewatch (the Padre re-report) ----------
+ *
+ * The original prewatch only ever answered for pump.fun bonding curves, and
+ * the content script only probed pump-suffixed mint addresses at all. A
+ * brand-new NON-pump launch (letsbonk and friends) on an MCap-mode chart
+ * therefore had no instant path whatsoever: no curve to derive, no supply to
+ * price mcap ticks with, no aggregator that had heard of the coin — the
+ * armed buy sat on "waiting for first quote" indefinitely.
+ *
+ * prewatch now classifies whatever single address the page has by its
+ * account OWNER (F-45: the page's kind label is a claim, not a fact) and
+ * returns the best instant answer that address supports: a live primed feed
+ * for any pool with a verified decoder, or measured supply facts for a bare
+ * mint account.
+ */
+
+const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const WSOL = 'So11111111111111111111111111111111111111112';
+
+/** A guaranteed-round-trippable base58 address from 32 bytes of `fill`. */
+function addrOf(fill) {
+  return Onchain.readPubkey(Buffer.alloc(32, fill), 0);
+}
+
+function writePubkey(buf, offset, base58) {
+  const bytes = Onchain.b58decode(base58);
+  for (let i = 0; i < 32; i++) buf[offset + i] = bytes[i];
+}
+
+/** Like tokenAccountB64 above, but with a real mint pubkey at offset 0 (the
+ * discovery scan classifies vaults BY their mint) and a nonzero OWNER pubkey
+ * at 32 — real token accounts always have one, and it matters here: bytes
+ * 36..43 of a token account sit inside the owner key, which is exactly where
+ * decodeMint would misread a "supply" from. A zeroed owner would let a
+ * missing layout gate pass on the supply-zero guard instead — a vacuous
+ * lock (caught by mutation-testing this file). */
+function splAccountB64(mint, amount) {
+  const bytes = Buffer.alloc(165);
+  writePubkey(bytes, 0, mint);
+  writePubkey(bytes, 32, addrOf(0x42));
+  bytes.writeBigUInt64LE(BigInt(amount), 64);
+  return bytes.toString('base64');
+}
+
+/** Map-driven RPC fake: unknown addresses answer null, like a real node. */
+function feedWithAccounts(accountsByAddress) {
+  return feedWithRpc(async (method, params) => {
+    if (method === 'getMultipleAccounts') {
+      return {
+        context: { slot: 7000 },
+        value: params[0].map((address) => accountsByAddress[address] || null),
+      };
+    }
+    if (method === 'getTokenAccountsByOwner') return { value: [] };
+    throw new Error('unexpected rpc ' + method);
+  });
+}
+
+test('an address the page labeled "mint" that is really a pump curve still prewatches (F-45)', async () => {
+  // Identical on-chain state to the bare-curve test above — only the label
+  // differs. The owner program decides the path, never the label.
+  const curveB64 = curveAccountB64({
+    virtualToken: 1_000_000_000_000_000, virtualSol: 30_000_000_000, complete: false,
+  });
+  const feed = feedWithRpc(async (method, params) => {
+    if (method === 'getMultipleAccounts') {
+      return {
+        context: { slot: 4321 },
+        value: params[0].map((address) => {
+          if (address === CURVE_ADDR) return { owner: PUMP_PROGRAM_ID, data: [curveB64] };
+          if (address === FRESH_MINT) return { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] };
+          return null;
+        }),
+      };
+    }
+    if (method === 'getTokenAccountsByOwner') {
+      return {
+        value: [{
+          pubkey: RESERVE_ADDR,
+          account: { data: { parsed: { info: { mint: FRESH_MINT, tokenAmount: { amount: '793000000000000' } } } } },
+        }],
+      };
+    }
+    throw new Error('unexpected rpc ' + method);
+  });
+  const found = await feed.prewatch({ mint: CURVE_ADDR });
+  assert.ok(found, 'the mislabel must not cost the sniping window');
+  assert.equal(found.mint, FRESH_MINT);
+  assert.equal(found.pool, CURVE_ADDR);
+  assert.equal(found.poolKind, 'pump-curve');
+  assert.ok(Math.abs(found.priceNative - 3e-8) < 1e-18);
+});
+
+test('a bare non-pump mint account answers with measured supply facts', async () => {
+  const PLAIN_MINT = addrOf(11);
+  const feed = feedWithAccounts({
+    [PLAIN_MINT]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] },
+  });
+  const found = await feed.prewatch({ mint: PLAIN_MINT });
+  assert.ok(found, 'a visible mint account is an answer, not a refusal');
+  assert.equal(found.mint, PLAIN_MINT);
+  assert.equal(found.pool, null, 'no pool was identified and none may be implied');
+  assert.equal(found.priceNative, null, 'supply facts are not a price');
+  assert.equal(found.decimals, 6);
+  assert.ok(Math.abs(found.supplyUi - 1e9) < 1e-6,
+    'supplyUi is the raw u64 supply over its decimals — whole tokens');
+  assert.equal(feed.currentQuote(PLAIN_MINT), null,
+    'no live feed exists for a poolless mint; nothing must pretend one does');
+});
+
+test('a 165-byte token ACCOUNT is refused as mint facts — garbage supply prices garbage fills', async () => {
+  const NOT_A_MINT = addrOf(12);
+  const feed = feedWithAccounts({
+    [NOT_A_MINT]: { owner: TOKEN_PROGRAM_ID, data: [splAccountB64(addrOf(8), 5)] },
+  });
+  assert.equal(await feed.prewatch({ mint: NOT_A_MINT }), null,
+    'decodeMint would happily misread a token account; the layout gate must refuse it');
+});
+
+test('a SOL-quoted whirlpool prewatches from the bare pool address with a primed quote', async () => {
+  const WP_POOL = addrOf(3);
+  const TOK_MINT = addrOf(9);
+  // sqrtPrice 2^60 exactly: ratio (2^60/2^64)^2 = 1/256 B-per-A raw, and at
+  // 6dp token / 9dp WSOL the native price is 1/256 * 10^-3 = 3.90625e-6.
+  const wp = Buffer.alloc(256);
+  wp.writeBigUInt64LE(BigInt(2) ** BigInt(60), 65);   // sqrtPrice low u64
+  wp.writeBigUInt64LE(BigInt(0), 73);                 // sqrtPrice high u64
+  writePubkey(wp, 101, TOK_MINT);
+  writePubkey(wp, 181, WSOL);
+  const feed = feedWithAccounts({
+    [WP_POOL]: { owner: 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', data: [wp.toString('base64')] },
+    [TOK_MINT]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] },
+    [WSOL]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1, decimals: 9 })] },
+  });
+  const found = await feed.prewatch({ pool: WP_POOL });
+  assert.ok(found, 'a decodable SOL-quoted pool must prewatch whatever its program is');
+  assert.equal(found.mint, TOK_MINT, 'the token is the non-WSOL side');
+  assert.equal(found.poolKind, 'whirlpool');
+  assert.ok(Math.abs(found.priceNative - 3.90625e-6) < 1e-18, 'the primed price is the pool price');
+  const live = feed.currentQuote(TOK_MINT);
+  assert.ok(live && live.poolKind === 'whirlpool', 'the primed quote is immediately servable');
+});
+
+test('a constant-product pool discovers its mint through the WSOL-anchored vault scan', async () => {
+  const CP_POOL = addrOf(4);
+  const BASE_VAULT = addrOf(5);
+  const QUOTE_VAULT = addrOf(6);
+  const TOK_MINT = addrOf(8);
+  const pool = Buffer.alloc(512);
+  writePubkey(pool, 40, BASE_VAULT);
+  writePubkey(pool, 72, QUOTE_VAULT);
+  const feed = feedWithAccounts({
+    [CP_POOL]: { owner: 'CPMMoo8L3F4NbTegBCKVNunggL7H1Zpdmwpwh8KMoZ0F', data: [pool.toString('base64')] },
+    // 7e8 tokens against 21 SOL -> 3e-8 SOL each.
+    [BASE_VAULT]: { owner: TOKEN_PROGRAM_ID, data: [splAccountB64(TOK_MINT, 700_000_000_000_000)] },
+    [QUOTE_VAULT]: { owner: TOKEN_PROGRAM_ID, data: [splAccountB64(WSOL, 21_000_000_000)] },
+    [TOK_MINT]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] },
+    [WSOL]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1, decimals: 9 })] },
+  });
+  const found = await feed.prewatch({ pool: CP_POOL });
+  assert.ok(found, 'the WSOL side proves the quote; the other side names the token');
+  assert.equal(found.mint, TOK_MINT);
+  assert.equal(found.poolKind, 'cp-vaults');
+  assert.ok(Math.abs(found.priceNative - 3e-8) < 1e-18);
+  assert.deepEqual(JSON.parse(JSON.stringify(feed.reserveAccounts(TOK_MINT))), [BASE_VAULT],
+    'the base vault is liquidity, not a holder — the rug guard must exclude it');
+});
+
+test('a pool between two non-SOL tokens is refused — nothing says which side the page charts', async () => {
+  const WP_POOL = addrOf(13);
+  const wp = Buffer.alloc(256);
+  wp.writeBigUInt64LE(BigInt(2) ** BigInt(60), 65);
+  writePubkey(wp, 101, addrOf(14));
+  writePubkey(wp, 181, addrOf(15));
+  // Both mints are fully resolvable — decimals, supply, everything a watch
+  // would need. The ONLY thing standing between this pool and a wrong-side
+  // quote is the WSOL-anchor refusal itself; a fake that starved the
+  // decimals fetch instead let a mutated guard pass on the downstream
+  // failure (the vacuous-lock trap, caught by mutation-testing this file).
+  const feed = feedWithAccounts({
+    [WP_POOL]: { owner: 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', data: [wp.toString('base64')] },
+    [addrOf(14)]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] },
+    [addrOf(15)]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] },
+  });
+  assert.equal(await feed.prewatch({ pool: WP_POOL }), null);
+});

@@ -410,18 +410,26 @@
 
   /* ---------------- pre-index prewatch (the sniping case) ----------------
    *
-   * A brand-new pump.fun coin has no aggregator quote for its first minutes,
-   * but its bonding curve is ALREADY on chain — and the page usually knows
-   * either the curve address (Axiom /meme/<pair>) or the mint (Padre /t/).
-   * prewatch turns either into a live watched feed plus an IMMEDIATE first
-   * quote read from the curve account itself, so an armed buy fires seconds
-   * after launch instead of sitting on "waiting for first quote" until
-   * Dexscreener notices the coin exists.
+   * A brand-new coin has no aggregator quote for its first minutes, but its
+   * market is ALREADY on chain. prewatch turns whatever single address the
+   * page has — a pump bonding curve, any pool with a verified decoder, or
+   * the bare mint — into the best instant answer that address supports:
    *
-   * Refusals are as important as the path itself: a pool that is not a
-   * pump curve, a completed (migrated) curve, or a curve whose reserve
-   * account cannot be positively identified all return null — the caller
-   * falls back to the aggregator path rather than guessing.
+   *   pool with a verified decoder -> live watched feed + IMMEDIATE quote
+   *   plain mint account           -> measured supply + decimals, which is
+   *                                   what lets bootstrapTick price the
+   *                                   page's own mcap feed for launchpads
+   *                                   with no derivable pool (letsbonk,
+   *                                   Believe, Moonshot, ...)
+   *
+   * The address is classified by its account OWNER, never by the page's
+   * kind label — F-45 established that a site's URL slot can carry a pool
+   * where the adapter says mint, and the chain's answer costs one read.
+   *
+   * Refusals are as important as the path itself: a completed (migrated)
+   * curve, a pool without a WSOL side, an account that is neither a known
+   * pool nor a plain mint — all return null, and the caller falls back to
+   * the aggregator path rather than guessing.
    */
 
   /** The mint held by a curve's reserve token account (largest balance wins;
@@ -451,66 +459,206 @@
     return null;
   }
 
-  /** Seed a freshly-watched pump curve with a price read RIGHT NOW, so the
-   * first quote exists before the first post-watch trade lands. */
-  async function primeCurve(mint) {
+  /** Seed a freshly-watched pool of ANY decodable kind with a price read
+   * RIGHT NOW, so the first quote exists before the first post-watch trade
+   * lands. Mirrors handleMessage's state rules exactly — including the
+   * per-leg slot guard for vault pairs — so a socket frame racing the prime
+   * can never be overwritten by older state. */
+  async function primeEntry(mint) {
     const entry = watched.get(mint);
-    if (!entry || !entry.desc || entry.desc.kind !== 'pump-curve') return null;
-    const { slot, accounts } = await getAccountsWithSlot([entry.desc.watch]);
-    const account = accounts[0];
-    if (!account || !(slot > 0)) return null;
-    const bytes = O.bytesFromBase64(account.data[0]);
-    if (!O.isNewerObservation(slot, entry.slot)) return currentQuote(mint);
-    entry.raw = bytes;
+    if (!entry || !entry.desc) return null;
+    const desc = entry.desc;
+    const { slot, accounts } = await getAccountsWithSlot(accountsToWatch(desc));
+    if (!(slot > 0)) return null;
+
+    if (desc.kind === 'cp-vaults') {
+      const base = accounts[0] && O.decodeTokenAccount(O.bytesFromBase64(accounts[0].data[0]));
+      const quote = accounts[1] && O.decodeTokenAccount(O.bytesFromBase64(accounts[1].data[0]));
+      if (!base || !quote) return null;
+      if (!(entry.baseSlot > slot)) { entry.baseAmount = base.amount; entry.baseSlot = slot; }
+      if (!(entry.quoteSlot > slot)) { entry.quoteAmount = quote.amount; entry.quoteSlot = slot; }
+    } else {
+      const account = accounts[0];
+      if (!account) return null;
+      if (!O.isNewerObservation(slot, entry.slot)) return currentQuote(mint);
+      entry.raw = O.bytesFromBase64(account.data[0]);
+    }
+
     const priceNative = priceFromEntry(entry);
-    if (!(priceNative > 0)) return null; // malformed or already-complete curve
-    entry.slot = slot;
+    if (!(priceNative > 0)) return null; // malformed, or an already-complete curve
+    entry.slot = Math.max(Number(entry.slot) || 0, slot);
     entry.priceNative = priceNative;
     entry.observedAt = Date.now();
     const quote = {
       mint, priceNative, slot,
-      source: 'onchain', poolKind: 'pump-curve', observedAt: entry.observedAt,
+      source: 'onchain', poolKind: desc.kind, observedAt: entry.observedAt,
     };
     emit(quote);
     return quote;
   }
 
+  /** The non-WSOL side of a SOL-quoted whirlpool/CLMM, or null. A pool
+   * between two non-SOL tokens is refused — nothing says which side the
+   * page is charting. */
+  function whirlpoolTokenMint(pool) {
+    if (!pool) return null;
+    if (pool.mintA === O.WSOL_MINT) return pool.mintB;
+    if (pool.mintB === O.WSOL_MINT) return pool.mintA;
+    return null;
+  }
+
   /**
-   * Start watching a pre-index pump.fun coin from whichever address the page
-   * has. Returns { mint, pool, priceNative } or null (not a live pump curve).
+   * Identify which mint a constant-product pool trades against SOL, from the
+   * pool bytes alone (the caller knows only the pool address). Same scan as
+   * findVaults and the same largest-balance rule curveMint uses: embedded
+   * pubkeys -> plain SPL token accounts -> the largest WSOL holder proves
+   * the pool is SOL-quoted, the largest non-WSOL holder names the token.
+   * No WSOL side -> null, refused rather than guessed.
+   */
+  async function discoverPoolMint(poolBytes) {
+    if (!poolBytes) return null;
+    const scan = async (step) => {
+      const candidates = [];
+      const seen = new Set();
+      for (let offset = 0; offset + 32 <= poolBytes.length; offset += step) {
+        const key = O.readPubkey(poolBytes, offset);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(key);
+      }
+      let base = null;
+      let quote = null;
+      for (let i = 0; i < candidates.length; i += 100) {
+        const chunk = candidates.slice(i, i + 100);
+        const accounts = await getAccounts(chunk);
+        accounts.forEach((account, index) => {
+          if (!account) return;
+          if (account.owner !== O.TOKEN_PROGRAM && account.owner !== O.TOKEN_2022_PROGRAM) return;
+          const decoded = O.decodeTokenAccount(O.bytesFromBase64(account.data[0]));
+          if (!decoded) return;
+          if (decoded.mint === O.WSOL_MINT) {
+            if (!quote || decoded.amount > quote.amount) quote = decoded;
+          } else if (!base || decoded.amount > base.amount) {
+            base = { mint: decoded.mint, amount: decoded.amount, address: chunk[index] };
+          }
+        });
+      }
+      return base && quote ? base.mint : null;
+    };
+    let found = await scan(8);
+    if (!found && poolBytes.length <= 1024) found = await scan(1);
+    return found;
+  }
+
+  /**
+   * SPL mint layouts only: a classic mint account is EXACTLY 82 bytes, and a
+   * token-2022 mint with extensions declares AccountType::Mint (1) at offset
+   * 165. A 165-byte token ACCOUNT would sail through decodeMint's length
+   * check and yield garbage supply — and a wrong supply becomes a wrong fill
+   * price, so ambiguity here is refused, not tolerated.
+   */
+  function mintFactsFromAccount(account, address) {
+    if (!account) return null;
+    if (account.owner !== O.TOKEN_PROGRAM && account.owner !== O.TOKEN_2022_PROGRAM) return null;
+    const bytes = O.bytesFromBase64(account.data[0]);
+    if (!bytes) return null;
+    const isMintLayout = bytes.length === 82
+      || (bytes.length > 165 && bytes[165] === 1);
+    if (!isMintLayout) return null;
+    const info = O.decodeMint(bytes);
+    if (!info || !(info.supply > 0) || !(info.decimals >= 0)) return null;
+    decimalsCache.set(address, info.decimals);
+    return {
+      mint: address,
+      pool: null,
+      poolKind: null,
+      priceNative: null,
+      decimals: info.decimals,
+      // Whole tokens — the divisor an mcap reading needs (quote.js
+      // bootstrapSupply). u64 supply over up to 9 decimals fits a double
+      // with room to spare for any real memecoin.
+      supplyUi: info.supply / Math.pow(10, info.decimals),
+    };
+  }
+
+  /** Watch + prime a pool of any decodable kind. `knownMint` is the page's
+   * claim when it has one; it is trusted only where the pool corroborates
+   * it. `preread` avoids a second fetch when the caller already holds the
+   * pool account. */
+  async function prewatchPool(poolAddress, knownMint, preread) {
+    const account = preread || (await getAccounts([poolAddress]))[0];
+    if (!account) return null;
+    const kind = O.poolKindForOwner(account.owner);
+    if (!kind) return null;
+    const bytes = O.bytesFromBase64(account.data[0]);
+
+    let realMint = knownMint || null;
+    let reserveAccount = null;
+
+    if (kind === 'pump-curve') {
+      const curve = O.decodePumpCurve(bytes);
+      if (!curve || curve.complete) return null; // migrated: the resolver path owns it
+      // The reserve token account is wanted either way (it identifies the
+      // mint when only the pool was known, and the rug guard must exclude it
+      // from holder concentration), so this read is unconditional.
+      const found = await curveMint(poolAddress);
+      reserveAccount = found ? found.reserveAccount : null;
+      realMint = realMint || (found && found.mint) || null;
+    } else if (kind === 'whirlpool' || kind === 'clmm') {
+      const decoded = O.decodeWhirlpool(bytes);
+      if (!decoded) return null;
+      if (realMint && realMint !== decoded.mintA && realMint !== decoded.mintB) return null;
+      realMint = realMint || whirlpoolTokenMint(decoded);
+    } else {
+      realMint = realMint || (await discoverPoolMint(bytes));
+    }
+    if (!realMint) return null;
+
+    const live = await watch(realMint, poolAddress);
+    if (!live) return null;
+    const entry = watched.get(realMint);
+    if (entry && entry.desc && reserveAccount) entry.desc.reserveAccount = reserveAccount;
+    const quote = await primeEntry(realMint);
+    return {
+      mint: realMint,
+      pool: poolAddress,
+      poolKind: kind,
+      priceNative: quote ? quote.priceNative : null,
+    };
+  }
+
+  /**
+   * Turn whichever single address the page has into the best instant answer
+   * it supports. Returns { mint, pool, poolKind, priceNative } for a live
+   * watched pool, { mint, supplyUi, decimals } for a bare mint account, or
+   * null (nothing on chain answers for this address yet).
    */
   async function prewatch({ pool, mint }) {
     if (!O || !POOL) return null;
     try {
-      let curveAddress = pool || null;
-      if (!curveAddress && typeof mint === 'string' && /pump$/.test(mint)) {
-        curveAddress = await O.derivePumpCurve(mint);
+      // A pump-suffixed mint: the derived curve is the strongest answer (a
+      // live PRICE, not just supply facts), so try it first.
+      if (!pool && typeof mint === 'string' && /pump$/.test(mint)) {
+        const curveAddress = await O.derivePumpCurve(mint);
+        if (curveAddress) {
+          const found = await prewatchPool(curveAddress, mint);
+          if (found) return found;
+        }
+        // Not a live curve (migrated, or a non-pump.fun coin that merely
+        // ends in "pump") — the mint account itself may still hold supply.
       }
-      if (!curveAddress) return null;
 
-      const [account] = await getAccounts([curveAddress]);
-      if (!account || O.poolKindForOwner(account.owner) !== 'pump-curve') return null;
-      const curve = O.decodePumpCurve(O.bytesFromBase64(account.data[0]));
-      if (!curve || curve.complete) return null; // migrated: the resolver path owns it
+      const address = pool || mint;
+      if (!address) return null;
+      const [account] = await getAccounts([address]);
+      if (!account) return null;
 
-      // The reserve token account is wanted either way (it identifies the
-      // mint when only the pool was known, and the rug guard must exclude it
-      // from holder concentration), so this read is unconditional.
-      const found = await curveMint(curveAddress);
-      const reserveAccount = found ? found.reserveAccount : null;
-      const realMint = (typeof mint === 'string' && mint) || (found && found.mint) || null;
-      if (!realMint) return null;
-
-      const live = await watch(realMint, curveAddress);
-      if (!live) return null;
-      const entry = watched.get(realMint);
-      if (entry && entry.desc && reserveAccount) entry.desc.reserveAccount = reserveAccount;
-      const quote = await primeCurve(realMint);
-      return {
-        mint: realMint,
-        pool: curveAddress,
-        priceNative: quote ? quote.priceNative : null,
-      };
+      // The chain's classification, not the page's kind label (F-45).
+      if (O.poolKindForOwner(account.owner)) {
+        const hint = typeof mint === 'string' && mint !== address ? mint : null;
+        return await prewatchPool(address, hint, account);
+      }
+      return mintFactsFromAccount(account, address);
     } catch (error) {
       try { console.debug('PaperTrench: prewatch failed:', error && error.message); } catch (_) {}
       return null;
@@ -598,6 +746,9 @@
     _watched: watched,
     _subToMint: subToMint,
     _priceFromEntry: priceFromEntry,
+    _mintFactsFromAccount: mintFactsFromAccount,
+    _discoverPoolMint: discoverPoolMint,
+    _primeEntry: primeEntry,
   };
 
   if (typeof self !== 'undefined') self.PTOnchainFeed = api;

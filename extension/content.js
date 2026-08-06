@@ -702,20 +702,24 @@
   // resolver's own retry loop stays the fallback path.
   let prewatchedAddress = null;
 
-  /** Pre-index launch: identify and watch the pump.fun bonding curve behind a
+  /** Pre-index launch: identify and watch the on-chain market behind a
    * PENDING page right now, instead of waiting for an aggregator to index the
-   * coin. The reply's primed curve price rides the normal tick pipeline, so
-   * the anchor, staleness stamps, renders and the armed-buy flush behave
+   * coin. The reply's primed price rides the normal tick pipeline, so the
+   * anchor, staleness stamps, renders and the armed-buy flush behave
    * exactly as for any accepted first quote — this is what makes an armed
    * buy on a 39-second-old coin actually fire (maintainer report: Axiom
-   * mcap-mode chart, "ARMED — ON FIRST QUOTE" forever). */
+   * mcap-mode chart, "ARMED — ON FIRST QUOTE" forever). Every pending
+   * Solana address is probed — one RPC read classifies it by account owner
+   * (F-45: the page's kind label is a claim, not a fact). A pool with a
+   * verified decoder comes back as a live feed; a bare mint comes back as
+   * measured supply facts, which is what lets bootstrapTick price the
+   * page's own mcap feed for launchpads with no derivable pool (the Padre
+   * re-report: a non-pump launch on an MCap-mode chart could never
+   * bootstrap, so the armed buy sat on "waiting for first quote" forever).
+   */
   function prewatchPending(candidate) {
     if (!candidate || prewatchedAddress === candidate.address) return;
     prewatchedAddress = candidate.address;
-    // Mint-kind pages: only pump-suffix mints have a derivable curve; skip
-    // the round trip for everything else. Pair-kind pages always probe — the
-    // account's owner program is the proof, whatever the address looks like.
-    if (candidate.kind !== 'pair' && !/pump$/.test(candidate.address)) return;
     const ids = candidate.kind === 'pair'
       ? { pool: candidate.address }
       : { mint: candidate.address };
@@ -723,6 +727,19 @@
       if (!found || !found.mint) return;
       if (!token || !token.pending) return;
       if (token.srcAddress !== candidate.address && token.mint !== candidate.address) return;
+
+      // Supply facts only (bare mint account, no decodable pool): the coin
+      // stays pending, but mcap-scale page ticks can now be priced honestly
+      // through the measured supply.
+      if (!found.pool) {
+        if (Number(found.supplyUi) > 0) {
+          token.supplyUi = Number(found.supplyUi);
+          token.decimals = Number(found.decimals);
+          refreshRugVerdict(found.mint);
+        }
+        return;
+      }
+
       // Positive identification: the stand-in address gives way to the real
       // mint. srcAddress keeps the URL identity, so the pending re-detect
       // and the eventual resolve both still recognize the token, and the
@@ -730,7 +747,10 @@
       if (armedBuy && armedBuy.mint === token.mint) armedBuy.mint = found.mint;
       token.mint = found.mint;
       token.pairAddress = found.pool || token.pairAddress || null;
-      token.pumpCurve = true;
+      // pumpCurve implies the protocol-constant 1e9 supply (quote.js
+      // bootstrapSupply) — claiming it for a whirlpool- or vault-backed
+      // coin would price mcap ticks against a supply nobody measured.
+      token.pumpCurve = found.poolKind === 'pump-curve';
       onchainLive = true;
       renderSiteStatus();
       refreshRugVerdict(found.mint);
@@ -807,6 +827,17 @@
         // each failed attempt cleared markers and stopped the price loop,
         // then the next tick rebuilt everything from scratch.
         pendingAttempts += 1;
+        // A coin can be newer than its own accounts' visibility: the first
+        // probe may land before the RPC node can see the mint or curve, and
+        // a single-shot probe then leaves the whole pre-index window to the
+        // aggregators — the exact window prewatch exists for. Re-probe on a
+        // slow cadence while still unresolved; the address dedup makes each
+        // retry one RPC read, and it stops the moment anything resolves.
+        if (token && token.pending && pendingAttempts % 5 === 0
+          && (!candidate.chain || candidate.chain === 'solana')) {
+          prewatchedAddress = null;
+          prewatchPending(candidate);
+        }
         renderHeader();
         // Re-evaluate the false-positive give-up (DEFECT O-10) as the
         // failure count grows; cheap, and reversible the moment it resolves.

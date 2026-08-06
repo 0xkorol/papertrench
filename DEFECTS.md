@@ -459,8 +459,18 @@ writes v2 links reaches a user.**
 **F-45 · S3 · Padre's URL slot is a MARKET address and we label it `kind: 'mint'` — a mislabel that has only ever been survivable by luck**
 `sites.js` padre adapter · found by reading Padre's own shipped bundle
 (`trade.padre.gg/assets/index-*.js`, logged-out, 2026-08-06) while scoping
-per-chain native balances · **open — needs ONE live URL to confirm before any
-fix**.
+per-chain native balances · **narrowed 2026-08-06: for pump-family coins the
+slot is a MINT — a live indexed URL
+(`trade.padre.gg/trade/solana/7khiFjmaeKcdHrJMEPBqaqAVZCo4toggDNGmkXDfpump`)
+carries the vanity `pump` suffix, which only ground mint keypairs have; a
+bonding-curve PDA is an off-curve hash and cannot be chosen. The non-pump
+case (post-migration and foreign-launchpad coins) is still unconfirmed and
+still owed the logged-in probe. Operationally the label is no longer
+load-bearing for the sniping path: prewatch now classifies every probed
+address by its account OWNER and takes the pool path even when the page said
+mint (extension/test/onchainfeed.test.js pins exactly that mislabel case).
+`det.kind` consumers outside the sniping path (forge.js chain branching,
+per-chain routing) still believe the label, so the label itself stays open.**
 Padre's router declares `/trade/:chain/:marketAddress`; our adapter returns
 `{ kind: 'mint' }` for whatever sits in that slot. Their bundle draws the
 distinction explicitly: `formatMarketId` and `formatTokenId` are SEPARATE
