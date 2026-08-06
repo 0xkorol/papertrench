@@ -112,6 +112,47 @@ test('position rows report PnL, liquidatability, and never mutate the book', () 
   assert.equal(JSON.stringify(state), before, 'rendering must never move the book');
 });
 
+test('rows print the liquidation price they just computed, not a stale stored one', () => {
+  // A pure mark writes nothing back, so pos.liqPx is only as fresh as the last
+  // COMMITTED write. Anything on the row that reads the stored copy instead of
+  // the mark's own answer puts a stale liquidation price on screen — and the
+  // liq distance, in percent and in ATRs, is measured from it.
+  const state = P.defaultPerpsState({ perpsStartUsd: 1000 });
+  const { id } = P.openPerp(state, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: 1000, params: { maxLeverage: 20 },
+  });
+  const truth = P.perpMark(state.positions[id], 100).liqPx;
+  // Poison the stored copy on a HEALTHY position. (It must be healthy: on a
+  // breached one, carrying the stored price is the intended behaviour.)
+  state.positions[id].liqPx = 42;
+
+  const rows = T.buildPositionRows(state, { venue: 'hyperliquid', market: 'SOL', px: 100, atr: 0.5 });
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].liqText, /^97\./, `the row must show the computed ${truth}, not the stored 42`);
+  assert.ok(Math.abs(rows[0].liqDistPct - (100 - truth)) < 1e-9, 'distance measured from the computed price');
+  assert.ok(Math.abs(rows[0].liqDistAtr - (100 - truth) / 0.5) < 1e-9, 'ATR distance likewise');
+});
+
+test('a render cannot write to the book — proven against a frozen one', () => {
+  for (const [venue, params, price] of [
+    ['hyperliquid', { maxLeverage: 20 }, 100],
+    ['jupiter', { impactScalarAdjUsd: 125000000000 }, 100],
+  ]) {
+    const state = P.defaultPerpsState({ perpsStartUsd: 1000 });
+    const { id } = P.openPerp(state, {
+      venue, market: 'SOL', side: 'long',
+      marginUsd: 20, leverage: 10, price, t: 1000, params,
+    });
+    Object.freeze(state);
+    Object.freeze(state.positions);
+    Object.freeze(state.positions[id]);
+    const rows = T.buildPositionRows(state, { venue, market: 'SOL', px: 101 });
+    assert.equal(rows.length, 1, `${venue} row must render`);
+    assert.ok(Number.isFinite(rows[0].uPnlUsd), `${venue} row must carry real numbers`);
+  }
+});
+
 test('an unverified-gap position carries its honesty note into the row', () => {
   const state = P.defaultPerpsState({ perpsStartUsd: 1000 });
   const { position: pos } = P.openPerp(state, {

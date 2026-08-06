@@ -15,6 +15,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const dashJs = fs.readFileSync(path.join(ROOT, 'dashboard.js'), 'utf8');
 const perpsContentJs = fs.readFileSync(path.join(ROOT, 'perps-content.js'), 'utf8');
+const perpsTicketJs = fs.readFileSync(path.join(ROOT, 'perps-ticket.js'), 'utf8');
 const attestJs = fs.readFileSync(path.join(ROOT, 'attest.js'), 'utf8');
 
 const AT = require('../attest.js');
@@ -187,56 +188,45 @@ test('an empty chain still verifies to GENESIS', async () => {
   assert.ok(typeof empty.head === 'string' && empty.head.length > 0);
 });
 
-/* ---------------- perps: probe one position, not the whole book -------- */
+/* ---------------- perps: the read paths hold no book at all ------------
+ *
+ * The original form of this lock pinned a one-position CLONE passed to the
+ * mutating markPerp. That was a convention two callers had to keep in step;
+ * it is now structural. P.perpMark takes the position record and no book, so
+ * a read path cannot reach cash, the journal, totals, or a sibling position,
+ * and it writes nothing — which is why neither caller needs a clone to stay
+ * non-destructive, and why neither pays a cost that grows with history.
+ * The behavioural equivalence lives in perps.test.js (perpMark vs markPerp,
+ * on a sibling book AND a lone book); these are the source contracts.
+ */
 
-test('the liquidation probe clones ONE position, never the whole book', () => {
+test('the tick-path liquidation check holds no book and clones nothing', () => {
   const fn = perpsContentJs.slice(
     perpsContentJs.indexOf('function watchLiquidations()'),
     perpsContentJs.indexOf('/* ------------------------------- UI ---'),
   );
   assert.ok(fn, 'watchLiquidations must exist');
-  assert.ok(!/JSON\.parse\(JSON\.stringify\(state\)\)/.test(fn),
-    'cloning the entire perps state per position per tick scales the cost of asking '
-    + '"am I liquidated?" with the size of the journal — it must clone the position only');
-  assert.match(fn, /const probe = \{ positions: \{ \[pos\.id\]: JSON\.parse\(JSON\.stringify\(pos\)\) \} \}/,
-    'the probe carries exactly the one position markPerp touches');
-  assert.match(fn, /P\.markPerp\(probe, pos\.id/, 'and markPerp is asked about that probe');
+  assert.ok(!/JSON\.parse\(JSON\.stringify\(/.test(fn),
+    'asking "am I liquidated?" must not deep-copy anything — the pure mark needs no clone');
+  assert.match(fn, /P\.perpMark\(pos, lastPx\)/,
+    'the pure mark takes the position record, not the book');
+  assert.ok(!/P\.markPerp\(/.test(fn),
+    'the committing twin belongs to the applyOp path below, never to the read');
 });
 
-test('a one-position probe gives markPerp the same answer as the whole book, and mutates nothing', () => {
-  // Build a real book: the position under test plus unrelated ones that the
-  // probe deliberately does not carry.
-  const state = P.defaultPerpsState();
-  const opened = P.openPerp(state, {
-    venue: 'hyperliquid', market: 'SOL', side: 'long',
-    marginUsd: 100, leverage: 10, price: 100, t: 1_700_000_000,
-    params: { maxLeverage: 20, markPx: 100, oraclePx: 100 },
-  });
-  assert.equal(opened.ok, true, `the fixture position must open (${opened.reason || ''})`);
-  const id = Object.keys(state.positions)[0];
-  // Noise the probe deliberately does NOT carry — this is the cost that used to
-  // be cloned on every tick.
-  state.journal = new Array(500).fill(0).map((_, i) => ({ t: i, kind: 'noise' }));
-  const before = JSON.parse(JSON.stringify(state));
-
-  for (const px of [100, 1]) { // flat, then far past a 10x long's liquidation
-    const whole = JSON.parse(JSON.stringify(state));
-    const fromWhole = P.markPerp(whole, id, { price: px });
-    const probe = { positions: { [id]: JSON.parse(JSON.stringify(state.positions[id])) } };
-    const fromProbe = P.markPerp(probe, id, { price: px });
-    assert.equal(fromProbe.ok, fromWhole.ok, `ok must match at ${px}`);
-    assert.equal(fromProbe.liquidatable, fromWhole.liquidatable,
-      `the liquidation verdict must be identical at ${px} — this is the whole point`);
-    assert.equal(fromProbe.liqBreached, fromWhole.liqBreached, `liqBreached must match at ${px}`);
-    assert.equal(Math.round(Number(fromProbe.uPnlUsd) * 1e6), Math.round(Number(fromWhole.uPnlUsd) * 1e6),
-      `unrealized PnL must match at ${px}`);
-  }
-  assert.equal(P.markPerp({ positions: { [id]: JSON.parse(JSON.stringify(state.positions[id])) } },
-    id, { price: 1 }).liquidatable, true, 'the deep-loss case must actually be liquidatable, '
-    + 'or this test would pass vacuously');
-
-  // And the probe must never have touched the live book: marking is a question,
-  // not a commitment. Only the committed applyOp path may write.
-  assert.deepEqual(state, before,
-    'probing must not mutate the real perps state in any way');
+test('the render path holds no book clone and prints the mark it computed', () => {
+  const fn = perpsTicketJs.slice(
+    perpsTicketJs.indexOf('function buildPositionRows(state, o)'),
+    perpsTicketJs.indexOf('/* The TA strip'),
+  );
+  assert.ok(fn, 'buildPositionRows must exist');
+  assert.ok(!/JSON\.parse\(JSON\.stringify\(/.test(fn),
+    'a render cloned the whole book — journal, rounds and all — so drawing rows cost more '
+    + 'the longer the account had existed; the pure mark removes the reason for the clone');
+  assert.match(fn, /P\.perpMark\(pos, o\.px\)/, 'rows mark through the pure read');
+  assert.ok(!/P\.markPerp\(/.test(fn), 'a render must never commit a write');
+  assert.ok(!/pos\.liqPx/.test(fn),
+    'the row must print m.liqPx — the answer this mark just computed. A pure mark writes '
+    + 'nothing back, so pos.liqPx is only as fresh as the last COMMITTED write, and printing '
+    + 'it would put a stale liquidation price on screen');
 });

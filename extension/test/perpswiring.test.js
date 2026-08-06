@@ -61,6 +61,56 @@ test('the feed talks to the venue API directly and adds no background message ty
   assert.ok(!/pt_perps/.test(backgroundSrc), 'background.js stays untouched by perps');
 });
 
+/* ---------------- carry: leverage is never free while you hold it ----------
+ *
+ * The ticket quotes a funding/borrow cost per hour before every entry. If the
+ * surface never charges it, the paper position is permanently cheaper than
+ * the real venue and its liquidation price never drifts the way the real one
+ * does — the exact "free leverage" lesson this product exists to prevent.
+ */
+
+test('a live Jupiter position is actually charged the borrow the ticket quoted', () => {
+  assert.match(contentSrc, /P\.accrueJupBorrow\(/,
+    'the content script must charge Jupiter borrow, not merely display a rate');
+  assert.match(contentSrc, /hourlyRateFrac: jupBorrowFrac/,
+    'and it must charge the venue\'s own displayed rate');
+  const fn = contentSrc.slice(
+    contentSrc.indexOf('async function accrueJupBorrowLive'),
+    contentSrc.indexOf('async function reconcileOnBoot'),
+  );
+  assert.ok(fn, 'accrueJupBorrowLive must exist');
+  assert.match(fn, /if \(!Number\.isFinite\(jupBorrowFrac\)/,
+    'no live rate means no charge — an invented rate is worse than an honest gap');
+});
+
+test('the observed-until stamp advances ONLY as part of applying carry', () => {
+  // A bare heartbeat that stamped lastSeenMs consumed the very window the
+  // funding replay reads, so an open tab paid no funding at all. The stamp
+  // must therefore live inside the carry paths, and nowhere else.
+  const stamps = contentSrc.match(/lastSeenMs = nowMs/g) || [];
+  assert.ok(stamps.length >= 3, 'the carry paths each stamp their own settlement');
+  assert.ok(!/function persistSeen/.test(contentSrc),
+    'the bare heartbeat must be gone — it silently skipped the carry window');
+  const carry = contentSrc.slice(
+    contentSrc.indexOf('async function carryTick()'),
+    contentSrc.indexOf('/* ------------------------------- UI ---'),
+  );
+  assert.ok(carry, 'carryTick must exist');
+  assert.match(carry, /reconcileHlPosition/, 'HL settles through the venue-history reconciler');
+  assert.match(carry, /accrueJupBorrowLive/, 'Jupiter accrues at the live displayed rate');
+  assert.match(contentSrc, /managedInterval\(carryTick, CARRY_TICK_MS\)/,
+    'and the carry must run on its own cadence, not only at boot');
+});
+
+test('funding is applied with an explicit mark, never a stale stored one', () => {
+  const calls = contentSrc.match(/P\.applyHlFunding\([^;]*?\);/gs) || [];
+  assert.ok(calls.length >= 2, 'both reconciler verdicts settle funding');
+  for (const call of calls) {
+    assert.match(call, /markPx:/,
+      'the caller observes the mark; the engine must not reach into stored state for it');
+  }
+});
+
 test('the content script honors the orphaned-script doctrine', () => {
   assert.match(contentSrc, /chrome\.runtime\.id/, 'context-invalidation guard');
   assert.match(contentSrc, /visibilityState/, 'intervals defer while hidden');

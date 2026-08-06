@@ -58,17 +58,24 @@
 
   /* --------------------- per-venue liq refresh --------------------- */
 
-  function refreshHl(pos, markPx) {
+  /* The liq reads are PURE: they take a position record and return what its
+   * liquidation state is, touching nothing. Everything that needs the answer
+   * — the ticket's rows, the tick-path liquidation check, and the committing
+   * writers below — goes through the same arithmetic, so a number on screen
+   * and a number in a fill can never be computed two different ways. */
+  function liqReadHl(pos, markPx) {
     const liq = V.hlLiqPrice({
       side: pos.side, markPx, entryPx: pos.entryPx, sizeUnits: pos.sizeUnits,
       marginUsd: pos.marginUsd, maxLeverage: pos.maxLeverage,
     });
     // When the mark is already past liquidation the venue formula has no
-    // solution — keep the last true liquidation price so the fill still
+    // solution — carry the last true liquidation price so the fill still
     // happens where the venue would actually have triggered.
-    if (liq && !liq.breached) pos.liqPx = liq.px;
-    else if (!isNum(pos.liqPx)) pos.liqPx = liq ? liq.px : null;
-    pos.liqBreached = liq ? liq.breached : true;
+    return {
+      liqPx: liq && !liq.breached ? liq.px : (isNum(pos.liqPx) ? pos.liqPx : (liq ? liq.px : null)),
+      liqBreached: liq ? liq.breached : true,
+      closeFeeEstUsd: null,
+    };
   }
 
   function jupCloseFeeEstUsd(pos) {
@@ -79,22 +86,45 @@
     return fee ? fee.knownUsd : null;
   }
 
-  function refreshJup(pos) {
+  function liqReadJup(pos) {
     const closeFee = jupCloseFeeEstUsd(pos);
     const liq = closeFee === null ? null : V.jupLiqPrice({
       side: pos.side, entryPx: pos.entryPx, sizeUsd: pos.sizeUsd,
       collateralUsd: pos.collateralUsd, closeFeeUsd: closeFee, borrowFeeUsd: pos.borrowUsd,
     });
-    pos.closeFeeEstUsd = closeFee;
-    if (liq && !liq.breached) pos.liqPx = liq.px;
-    else if (!isNum(pos.liqPx)) pos.liqPx = liq ? liq.px : null;
-    pos.liqBreached = liq ? liq.breached : true;
+    return {
+      liqPx: liq && !liq.breached ? liq.px : (isNum(pos.liqPx) ? pos.liqPx : (liq ? liq.px : null)),
+      liqBreached: liq ? liq.breached : true,
+      closeFeeEstUsd: closeFee,
+    };
+  }
+
+  function liqRead(pos, markPx) {
+    return pos.venue === 'hyperliquid' ? liqReadHl(pos, markPx) : liqReadJup(pos);
+  }
+
+  /* The ONLY writers of pos.liqPx / pos.liqBreached / pos.closeFeeEstUsd. */
+  function refreshHl(pos, markPx) {
+    const r = liqReadHl(pos, markPx);
+    pos.liqPx = r.liqPx;
+    pos.liqBreached = r.liqBreached;
+  }
+
+  function refreshJup(pos) {
+    const r = liqReadJup(pos);
+    pos.closeFeeEstUsd = r.closeFeeEstUsd;
+    pos.liqPx = r.liqPx;
+    pos.liqBreached = r.liqBreached;
+  }
+
+  function pastLiqAt(side, liqPx, liqBreached, px) {
+    if (liqBreached) return true;
+    if (!isNum(liqPx)) return true;
+    return side === 1 ? px <= liqPx + EPS : px >= liqPx - EPS;
   }
 
   function pastLiq(pos, px) {
-    if (pos.liqBreached) return true;
-    if (!isNum(pos.liqPx)) return true;
-    return pos.side === 1 ? px <= pos.liqPx + EPS : px >= pos.liqPx - EPS;
+    return pastLiqAt(pos.side, pos.liqPx, pos.liqBreached, px);
   }
 
   /* ------------------------------ open ------------------------------ */
@@ -191,23 +221,47 @@
     return V.jupUnrealizedPnlUsd({ side: pos.side, entryPx: pos.entryPx, px, sizeUsd: pos.sizeUsd });
   }
 
-  /* px must be the venue's liquidation basis: HL mark price, Jupiter oracle
+  /* perpMark — the PURE mark. Takes the position record, not the book, so it
+   * cannot read cash, the journal, totals, or a sibling position, and it
+   * writes nothing. Read paths (the ticket's rows, the tick-path liquidation
+   * check) call this directly: no clone is needed to keep the question
+   * non-destructive, and the cost does not grow with the account's history.
+   *
+   * px must be the venue's liquidation basis: HL mark price, Jupiter oracle
    * price. The caller labels its feed; the engine trusts the label. */
-  function markPerp(state, id, o) {
-    const pos = state.positions[id];
-    if (!pos) return refuse('unknown-position');
+  function perpMark(pos, px) {
+    if (!pos || typeof pos !== 'object') return refuse('unknown-position');
     if (pos.status !== 'open') return refuse('position-not-open');
-    if (!o || !isNum(o.price) || o.price <= 0) return refuse('bad-price');
-    pos.lastPx = o.price;
-    if (pos.venue === 'hyperliquid') refreshHl(pos, o.price); else refreshJup(pos);
-    const uPnl = unrealizedUsd(pos, o.price);
+    if (!isNum(px) || px <= 0) return refuse('bad-price');
+    const liq = liqRead(pos, px);
+    const uPnl = unrealizedUsd(pos, px);
     const equityUsd = pos.venue === 'hyperliquid'
       ? pos.marginUsd + uPnl
       : pos.collateralUsd - pos.borrowUsd + uPnl;
     return {
       ok: true, uPnlUsd: uPnl, equityUsd,
-      liqPx: pos.liqPx, liqBreached: pos.liqBreached,
-      liquidatable: pastLiq(pos, o.price),
+      liqPx: liq.liqPx, liqBreached: liq.liqBreached,
+      closeFeeEstUsd: liq.closeFeeEstUsd,
+      liquidatable: pastLiqAt(pos.side, liq.liqPx, liq.liqBreached, px),
+    };
+  }
+
+  /* markPerp — perpMark's COMMITTING twin, for the paths that own a write.
+   * Same arithmetic, then stamped onto the book. lastPx is load-bearing: it
+   * is the stored record of where the position was last genuinely marked. */
+  function markPerp(state, id, o) {
+    const pos = state.positions[id];
+    if (!pos) return refuse('unknown-position');
+    const m = perpMark(pos, o && o.price);
+    if (!m.ok) return m;
+    pos.lastPx = o.price;
+    pos.liqPx = m.liqPx;
+    pos.liqBreached = m.liqBreached;
+    if (pos.venue !== 'hyperliquid') pos.closeFeeEstUsd = m.closeFeeEstUsd;
+    return {
+      ok: true, uPnlUsd: m.uPnlUsd, equityUsd: m.equityUsd,
+      liqPx: m.liqPx, liqBreached: m.liqBreached,
+      liquidatable: m.liquidatable,
     };
   }
 
@@ -216,25 +270,41 @@
   /* [HL-FUND] events = [{ t, hourlyRateFrac, oraclePx }] — one per hourly
    * funding payment, rates from the venue (live feed or fundingHistory for
    * reconciliation). Funding settles against isolated margin. */
-  function applyHlFunding(state, id, events) {
+  /* o.markPx is REQUIRED: funding moves the margin, which moves the
+   * liquidation state, and the mark to re-read that state at is something
+   * the caller observes and the engine does not. Deriving it from the
+   * stored pos.lastPx looked equivalent but is not — the read paths mark
+   * on their own copies, so the stored mark only advances on a committed
+   * mark and is otherwise as old as the position. */
+  function applyHlFunding(state, id, events, o) {
     const pos = state.positions[id];
     if (!pos) return refuse('unknown-position');
     if (pos.venue !== 'hyperliquid') return refuse('wrong-venue');
     if (pos.status !== 'open') return refuse('position-not-open');
     if (!Array.isArray(events)) return refuse('bad-params');
-    let paid = 0;
+    const markPx = o && o.markPx;
+    if (!isNum(markPx) || markPx <= 0) return refuse('bad-price');
+
+    // Validate every event BEFORE applying any of them: a bad event halfway
+    // through must not leave the margin moved and the totals unmoved.
+    const deltas = [];
     for (const ev of events) {
       const delta = V.hlFundingDeltaUsd({
         side: pos.side, sizeUnits: pos.sizeUnits,
         oraclePx: ev && ev.oraclePx, hourlyRateFrac: ev && ev.hourlyRateFrac,
       });
       if (delta === null) return refuse('bad-funding-event');
+      deltas.push(delta);
+    }
+
+    let paid = 0;
+    for (const delta of deltas) {
       pos.marginUsd += delta;
       paid -= delta;
     }
     pos.fundingPaidUsd += paid;
     state.totals.fundingPaidUsd += paid;
-    refreshHl(pos, pos.lastPx);
+    refreshHl(pos, markPx);
     return { ok: true, fundingPaidUsd: paid, marginUsd: pos.marginUsd, liqPx: pos.liqPx, liqBreached: pos.liqBreached };
   }
 
@@ -330,6 +400,16 @@
 
     const remaining = pos.venue === 'hyperliquid' ? pos.sizeUnits : pos.sizeUsd;
     const fullyClosed = fraction === 1 || remaining <= EPS;
+
+    // A partial close moves every input of the liquidation formula (size,
+    // collateral, borrow owed, margin). Nothing else refreshes the stored
+    // copy on a read path, and the commit paths — closePerp's own gate,
+    // liquidatePerp, and the offline reconciler — all read the STORED value.
+    // Leaving it stale means the survivor's liquidation price is whatever it
+    // was at a size the position no longer has.
+    if (!fullyClosed) {
+      if (pos.venue === 'hyperliquid') refreshHl(pos, o.price); else refreshJup(pos);
+    }
     if (fullyClosed) {
       pos.status = 'closed';
       // Cash truth: the round's net is what came back minus what went in.
@@ -396,6 +476,7 @@
     DEFAULT_PERPS_SETTINGS,
     defaultPerpsState,
     openPerp,
+    perpMark,
     markPerp,
     applyHlFunding,
     accrueJupBorrow,

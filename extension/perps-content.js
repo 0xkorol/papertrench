@@ -36,7 +36,7 @@
   const HL_INFO_URL = 'https://api.hyperliquid.xyz/info';
   const PARAMS_REFRESH_MS = 30000;
   const LOCATION_POLL_MS = 1000;
-  const PERSIST_SEEN_MS = 60000;
+  const CARRY_TICK_MS = 60000;
   const ACCEPT_RATIO = 20; // same magnitude gate doctrine as quote.js
   const BARS_REFRESH_MS = 60000;
   const BARS_LOOKBACK_MS = 12 * 3600 * 1000; // ~144 5m bars: emaSlow warms honestly
@@ -155,11 +155,24 @@
 
   function freshState() { return P.defaultPerpsState({}); }
 
+  /* A stored book that does not have the shape of a book degrades to an
+   * empty one rather than throwing on every tick from inside an interval.
+   * `positions` is dereferenced on the hot path, so an absent or non-object
+   * value took the whole ticket down silently once per tick. */
+  function usableBook(candidate) {
+    return Boolean(candidate)
+      && typeof candidate === 'object'
+      && Boolean(candidate.positions)
+      && typeof candidate.positions === 'object'
+      && typeof candidate.cashUsd === 'number'
+      && Number.isFinite(candidate.cashUsd);
+  }
+
   function loadStore() {
     return new Promise((resolve) => {
       chrome.storage.local.get([STORE_KEY], (o) => {
         const rec = o && o[STORE_KEY];
-        state = rec && rec.state ? rec.state : freshState();
+        state = usableBook(rec && rec.state) ? rec.state : freshState();
         stateRev = rec && Number.isInteger(rec.rev) ? rec.rev : 0;
         resolve();
       });
@@ -196,6 +209,94 @@
    * candle+funding replay; Jupiter gets the wake-price check with the gap
    * recorded. Runs once per page load, before the first render of rows. */
 
+  /* One Hyperliquid position, reconciled against the venue's own history for
+   * everything since it was last settled. This runs on boot AND on the carry
+   * interval, deliberately: funding is a real cost the venue charges whether
+   * or not anyone is looking, so an open tab must not be cheaper than a
+   * closed one. Reusing the reconciler rather than accruing locally keeps
+   * ONE arithmetic — the rates are the venue's actual published rates in
+   * both cases, never an interpolation of our own.
+   *
+   * lastSeenMs advances ONLY here, as part of applying the carry. Stamping
+   * it on a bare heartbeat (as an earlier version did) silently consumed the
+   * window the funding replay reads, so an open tab paid no funding at all. */
+  async function reconcileHlPosition(pos, nowMs) {
+    const fromMs = Number.isInteger(pos.lastSeenMs) ? pos.lastSeenMs : pos.openT * 1000;
+    if (nowMs - fromMs < 5 * 60000) return;
+    let candles = null, funding = null;
+    try {
+      [candles, funding] = await Promise.all([
+        fetchHlInfo({ type: 'candleSnapshot', req: { coin: pos.market, interval: '5m', startTime: fromMs - 300000, endTime: nowMs } }),
+        fetchHlInfo({ type: 'fundingHistory', coin: pos.market, startTime: fromMs }),
+      ]);
+    } catch (e) { return; /* unreachable venue: the gap stays a gap */ }
+    const plan = RC.reconcileHl(pos, {
+      candles, funding, fromMs: fromMs - 300000, toMs: nowMs, intervalMs: 300000,
+    });
+    await applyOp((st) => {
+      const live = st.positions[pos.id];
+      if (!live) return { ok: true };
+      if (plan.verdict === 'liquidated') {
+        P.applyHlFunding(st, live.id, plan.fundingBefore, { markPx: plan.crossPx });
+        const r = P.liquidatePerp(st, live.id, { price: plan.crossPx, t: Math.floor(plan.atMs / 1000) });
+        if (r.ok) st.rounds[st.rounds.length - 1].provenance = plan.provenance;
+        return r;
+      }
+      if (plan.verdict === 'survived') {
+        P.applyHlFunding(st, live.id, plan.fundingApplied, { markPx: plan.lastPx });
+        P.markPerp(st, live.id, { price: plan.lastPx });
+        live.lastSeenMs = nowMs;
+        return { ok: true };
+      }
+      live.unverifiedGapSec = (live.unverifiedGapSec || 0) + Math.round((nowMs - fromMs) / 1000);
+      live.lastSeenMs = nowMs;
+      return { ok: true };
+    });
+  }
+
+  /* Jupiter at wake: the gap's borrow is NOT invented — we did not observe
+   * the rate over it, so it is recorded as unobserved and said so on the
+   * row. Only a crossing we can prove from the wake price is acted on. */
+  async function reconcileJupPositionOnWake(pos, nowMs) {
+    if (!(adapter && adapter.venue === 'jupiter' && adapter.market === pos.market && lastPx > 0)) return;
+    const plan = RC.reconcileJup(pos, {
+      nowPx: lastPx, nowMs,
+      lastSeenMs: Number.isInteger(pos.lastSeenMs) ? pos.lastSeenMs : pos.openT * 1000,
+    });
+    await applyOp((st) => {
+      const live = st.positions[pos.id];
+      if (!live) return { ok: true };
+      if (plan.verdict === 'liquidated') {
+        const r = P.liquidatePerp(st, live.id, { price: plan.crossPx, t: Math.floor(nowMs / 1000) });
+        if (r.ok) st.rounds[st.rounds.length - 1].provenance = plan.provenance;
+        return r;
+      }
+      live.unverifiedGapSec = (live.unverifiedGapSec || 0) + (plan.gapSec || 0);
+      live.lastSeenMs = nowMs;
+      return { ok: true };
+    });
+  }
+
+  /* Jupiter while we ARE watching: the venue publishes its effective hourly
+   * borrow rate on the page, the ticket quotes it to the user before every
+   * entry, and the position must actually be charged it. Without this the
+   * paper position is permanently cheaper than the real venue — the ticket
+   * would promise a cost it never collects, and the liquidation price would
+   * never drift the way the real one does. No live rate means no charge and
+   * no stamp: the time then falls to the unobserved-gap path instead. */
+  async function accrueJupBorrowLive(pos, nowMs) {
+    if (!Number.isFinite(jupBorrowFrac) || jupBorrowFrac < 0) return;
+    await applyOp((st) => {
+      const live = st.positions[pos.id];
+      if (!live) return { ok: true };
+      const r = P.accrueJupBorrow(st, live.id, {
+        toT: Math.floor(nowMs / 1000), hourlyRateFrac: jupBorrowFrac,
+      });
+      if (r.ok) live.lastSeenMs = nowMs;
+      return r;
+    });
+  }
+
   async function reconcileOnBoot() {
     if (reconciled) return;
     reconciled = true;
@@ -203,75 +304,21 @@
     const open = Object.values(state.positions);
     if (!open.length) return;
     const nowMs = Date.now();
-
     for (const pos of open) {
-      if (pos.venue === 'hyperliquid') {
-        const fromMs = Number.isInteger(pos.lastSeenMs) ? pos.lastSeenMs : pos.openT * 1000;
-        if (nowMs - fromMs < 5 * 60000) continue;
-        let candles = null, funding = null;
-        try {
-          [candles, funding] = await Promise.all([
-            fetchHlInfo({ type: 'candleSnapshot', req: { coin: pos.market, interval: '5m', startTime: fromMs - 300000, endTime: nowMs } }),
-            fetchHlInfo({ type: 'fundingHistory', coin: pos.market, startTime: fromMs }),
-          ]);
-        } catch (e) { continue; /* unreachable venue: the gap stays a gap */ }
-        const plan = RC.reconcileHl(pos, {
-          candles, funding, fromMs: fromMs - 300000, toMs: nowMs, intervalMs: 300000,
-        });
-        await applyOp((st) => {
-          const live = st.positions[pos.id];
-          if (!live) return { ok: true };
-          if (plan.verdict === 'liquidated') {
-            P.applyHlFunding(st, live.id, plan.fundingBefore);
-            const r = P.liquidatePerp(st, live.id, { price: plan.crossPx, t: Math.floor(plan.atMs / 1000) });
-            if (r.ok) st.rounds[st.rounds.length - 1].provenance = plan.provenance;
-            return r;
-          }
-          if (plan.verdict === 'survived') {
-            P.applyHlFunding(st, live.id, plan.fundingApplied);
-            P.markPerp(st, live.id, { price: plan.lastPx });
-            live.lastSeenMs = nowMs;
-            return { ok: true };
-          }
-          live.unverifiedGapSec = (live.unverifiedGapSec || 0) + Math.round((nowMs - fromMs) / 1000);
-          live.lastSeenMs = nowMs;
-          return { ok: true };
-        });
-      } else if (pos.venue === 'jupiter') {
-        if (!(adapter && adapter.venue === 'jupiter' && adapter.market === pos.market && lastPx > 0)) continue;
-        const plan = RC.reconcileJup(pos, {
-          nowPx: lastPx, nowMs,
-          lastSeenMs: Number.isInteger(pos.lastSeenMs) ? pos.lastSeenMs : pos.openT * 1000,
-        });
-        await applyOp((st) => {
-          const live = st.positions[pos.id];
-          if (!live) return { ok: true };
-          if (plan.verdict === 'liquidated') {
-            const r = P.liquidatePerp(st, live.id, { price: plan.crossPx, t: Math.floor(nowMs / 1000) });
-            if (r.ok) st.rounds[st.rounds.length - 1].provenance = plan.provenance;
-            return r;
-          }
-          live.unverifiedGapSec = (live.unverifiedGapSec || 0) + (plan.gapSec || 0);
-          live.lastSeenMs = nowMs;
-          return { ok: true };
-        });
-      }
+      if (pos.venue === 'hyperliquid') await reconcileHlPosition(pos, nowMs);
+      else if (pos.venue === 'jupiter') await reconcileJupPositionOnWake(pos, nowMs);
     }
   }
 
-  function persistSeen() {
-    if (!adapter || !state) return;
+  /* The carry tick: what leverage costs while you hold it. */
+  async function carryTick() {
+    if (!adapter || !state || !reconciled) return;
     const nowMs = Date.now();
-    const touched = Object.values(state.positions).some(
-      (p) => p.venue === adapter.venue && p.market === adapter.market
-    );
-    if (!touched) return;
-    applyOp((st) => {
-      for (const p of Object.values(st.positions)) {
-        if (p.venue === adapter.venue && p.market === adapter.market) p.lastSeenMs = nowMs;
-      }
-      return { ok: true };
-    });
+    for (const pos of Object.values(state.positions)) {
+      if (pos.venue !== adapter.venue || pos.market !== adapter.market) continue;
+      if (pos.venue === 'hyperliquid') await reconcileHlPosition(pos, nowMs);
+      else if (pos.venue === 'jupiter') await accrueJupBorrowLive(pos, nowMs);
+    }
   }
 
   /* ------------------------ liquidation watch ------------------------ */
@@ -280,16 +327,13 @@
     if (!adapter || !state || !(lastPx > 0)) return;
     for (const pos of Object.values(state.positions)) {
       if (pos.venue !== adapter.venue || pos.market !== adapter.market) continue;
-      // markPerp reads and writes ONLY state.positions[id] (perps.js:196-212),
-      // so the probe needs exactly that one position — not a JSON round trip of
-      // the entire book. The old whole-state clone ran once PER POSITION PER
-      // TICK and grew with the journal and closed-round history, so the cost of
-      // asking "am I liquidated?" scaled with how long the account had existed.
-      // This is flat regardless of book size, and the clone still keeps the
-      // probe non-destructive: the real position is never marked here, only the
-      // committed applyOp path below may mutate it.
-      const probe = { positions: { [pos.id]: JSON.parse(JSON.stringify(pos)) } };
-      const m = P.markPerp(probe, pos.id, { price: lastPx });
+      // perpMark is pure: it takes the position record, not the book, so it
+      // cannot read cash, the journal, totals or a sibling position, and it
+      // writes nothing. No clone is needed to keep the question
+      // non-destructive, and none to keep the cost flat as the account's
+      // history grows. Only the committed applyOp path below may write, and
+      // it re-decides against the real book.
+      const m = P.perpMark(pos, lastPx);
       if (m.ok && m.liquidatable) {
         applyOp((st) => {
           if (!st.positions[pos.id]) return { ok: true };
@@ -673,16 +717,21 @@
     if (!alive()) return;
     if (area === 'local' && changes[STORE_KEY]) {
       const rec = changes[STORE_KEY].newValue;
-      if (rec && rec.state) { state = rec.state; stateRev = rec.rev || 0; scheduleRender(); }
+      // Our own write echoes back here; ingesting it re-renders for nothing.
+      if (rec && Number.isInteger(rec.rev) && rec.rev === stateRev) return;
+      if (usableBook(rec && rec.state)) { state = rec.state; stateRev = rec.rev || 0; scheduleRender(); }
     }
   });
 
   managedInterval(pollLocation, LOCATION_POLL_MS);
   managedInterval(refreshParams, PARAMS_REFRESH_MS);
   managedInterval(refreshBars, BARS_REFRESH_MS);
-  managedInterval(persistSeen, PERSIST_SEEN_MS);
+  managedInterval(carryTick, CARRY_TICK_MS);
+  // Coming back to a hidden tab settles the carry for the time away before
+  // anything is rendered — the row must never show a position cheaper than
+  // the venue has been charging it.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && alive()) persistSeen();
+    if (document.visibilityState === 'visible' && alive()) carryTick();
   });
   pollLocation();
 })();

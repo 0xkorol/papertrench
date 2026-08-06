@@ -130,19 +130,25 @@
     };
   }
 
-  /* Rows for the open-positions section. Read-only: works on a clone so
-   * the caller's state object is never touched by a render. */
+  /* Rows for the open-positions section. Read-only by construction: perpMark
+   * is pure, so no clone is needed to protect the caller's book — and the
+   * cost of a render no longer grows with the journal and closed-round
+   * history the way a whole-book clone did.
+   *
+   * Every liquidation number below comes from `m`, the mark's own answer,
+   * never from the stored pos.liqPx: a pure mark writes nothing back, so
+   * the stored copy is only as fresh as the last committed write, and
+   * printing it would put a stale liquidation price on screen. */
   function buildPositionRows(state, o) {
-    const clone = JSON.parse(JSON.stringify(state));
     const rows = [];
-    for (const id of Object.keys(clone.positions)) {
-      const pos = clone.positions[id];
+    for (const id of Object.keys(state.positions)) {
+      const pos = state.positions[id];
       if (pos.venue !== o.venue || pos.market !== o.market) continue;
-      const m = P.markPerp(clone, pos.id, { price: o.px });
+      const m = P.perpMark(pos, o.px);
       if (!m.ok) continue;
       const uPnlPct = (m.uPnlUsd / pos.marginUsd0) * 100;
-      const rowAtr = isNum(o.atr) && o.atr > 0 && isNum(pos.liqPx)
-        ? Math.abs(o.px - pos.liqPx) / o.atr : null;
+      const rowAtr = isNum(o.atr) && o.atr > 0 && isNum(m.liqPx)
+        ? Math.abs(o.px - m.liqPx) / o.atr : null;
       rows.push({
         id: pos.id,
         label: (pos.side === 1 ? 'LONG' : 'SHORT') + ' ' + pos.leverage + 'x',
@@ -151,8 +157,8 @@
         uPnlUsd: m.uPnlUsd,
         uPnlText: fmtUsd(m.uPnlUsd, { signed: true }) + ' (' + fmtPct(Math.abs(uPnlPct)) + ')',
         equityText: fmtUsd(m.equityUsd),
-        liqText: fmtPx(pos.liqPx) + (rowAtr !== null ? ' · ' + rowAtr.toFixed(1) + ' ATR' : ''),
-        liqDistPct: isNum(pos.liqPx) ? (Math.abs(o.px - pos.liqPx) / o.px) * 100 : null,
+        liqText: fmtPx(m.liqPx) + (rowAtr !== null ? ' · ' + rowAtr.toFixed(1) + ' ATR' : ''),
+        liqDistPct: isNum(m.liqPx) ? (Math.abs(o.px - m.liqPx) / o.px) * 100 : null,
         liqDistAtr: rowAtr,
         liquidatable: m.liquidatable,
         gapNote: pos.unverifiedGapSec > 0

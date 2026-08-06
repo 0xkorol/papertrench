@@ -26,10 +26,112 @@ function journalCashSum(state) {
 }
 
 test('perps engine installs its public API on the browser global', () => {
-  for (const fn of ['defaultPerpsState', 'openPerp', 'markPerp', 'applyHlFunding',
+  for (const fn of ['defaultPerpsState', 'openPerp', 'perpMark', 'markPerp', 'applyHlFunding',
     'accrueJupBorrow', 'closePerp', 'liquidatePerp']) {
     assert.equal(typeof P[fn], 'function', `${fn} must be exported`);
   }
+});
+
+/* ------------------- the pure mark and its committing twin -------------------
+ *
+ * perpMark answers "where does this position stand?" without a book and
+ * without a write; markPerp is the same arithmetic, stamped. Two numbers for
+ * the same question computed two different ways is how a screen and a fill
+ * come to disagree, so the equivalence is pinned here rather than assumed.
+ */
+
+function siblingBook() {
+  const s = fresh();
+  const a = P.openPerp(s, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: 1000, params: HL,
+  });
+  const b = P.openPerp(s, {
+    venue: 'hyperliquid', market: 'SOL', side: 'short',
+    marginUsd: 25, leverage: 5, price: 100, t: 1000, params: HL,
+  });
+  const c = P.openPerp(s, {
+    venue: 'jupiter', market: 'SOL', side: 'long',
+    marginUsd: 20, leverage: 10, price: 100, t: 1000, params: JUP,
+  });
+  assert.ok(a.ok && b.ok && c.ok, 'the sibling fixture must open');
+  // History the old whole-book clone used to copy on every single render.
+  s.journal = s.journal.concat(new Array(300).fill(0).map((_, i) => ({ t: i, kind: 'noise' })));
+  return { state: s, ids: [a.id, b.id, c.id] };
+}
+
+test('perpMark equals markPerp on a SIBLING book and on a LONE book alike', () => {
+  // Both shapes are required. With only the sibling book, an edit that reads
+  // a neighbouring position could still agree with itself; with only a lone
+  // book, a cross-margin edit is invisible because there is nothing to cross
+  // to. The fixture sizes are asserted so neither can silently decay.
+  const { state: sib, ids } = siblingBook();
+  assert.equal(Object.keys(sib.positions).length, 3, 'the sibling book must really have siblings');
+
+  const lone = fresh();
+  const only = P.openPerp(lone, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: 1000, params: HL,
+  });
+  assert.equal(Object.keys(lone.positions).length, 1, 'the lone book must really be alone');
+
+  const cases = [[sib, ids[0]], [sib, ids[1]], [sib, ids[2]], [lone, only.id]];
+  let sawLiquidatable = false;
+  for (const [book, id] of cases) {
+    for (const px of [100, 101.5, 99.4, 97.2, 60, 1]) {
+      const pure = P.perpMark(book.positions[id], px);
+      const committing = P.markPerp(JSON.parse(JSON.stringify(book)), id, { price: px });
+      assert.equal(pure.ok, committing.ok, `ok must match (id ${id} @ ${px})`);
+      if (!pure.ok) { assert.equal(pure.reason, committing.reason); continue; }
+      assert.equal(pure.liquidatable, committing.liquidatable,
+        `the liquidation verdict must be identical (id ${id} @ ${px}) — this is the whole point`);
+      assert.equal(pure.liqBreached, committing.liqBreached, `liqBreached (id ${id} @ ${px})`);
+      for (const k of ['uPnlUsd', 'equityUsd', 'liqPx']) {
+        const a = pure[k], b = committing[k];
+        if (a === null || b === null) assert.equal(a, b, `${k} (id ${id} @ ${px})`);
+        else assert.ok(Math.abs(a - b) < CLOSE, `${k} must match (id ${id} @ ${px})`);
+      }
+      if (pure.liquidatable) sawLiquidatable = true;
+    }
+  }
+  assert.ok(sawLiquidatable, 'some case must actually be liquidatable, or this passes vacuously');
+});
+
+test('perpMark writes NOTHING — proven against a frozen position', () => {
+  const { state, ids } = siblingBook();
+  const pos = state.positions[ids[0]];
+  Object.freeze(pos);
+  // perps.js is strict mode, so a write throws rather than failing silently.
+  const m = P.perpMark(pos, 97);
+  assert.equal(m.ok, true, 'the pure mark must answer against a frozen position');
+  assert.ok(Number.isFinite(m.liqPx));
+  // And its twin must genuinely be the mutating one — if markPerp stopped
+  // committing, the two would be indistinguishable and the split pointless.
+  assert.throws(() => P.markPerp({ positions: { [ids[0]]: pos } }, ids[0], { price: 97 }),
+    /read only|not extensible|Cannot assign/,
+    'markPerp must still write: the commit paths depend on it');
+});
+
+test('markPerp still stamps the book (lastPx, liqPx, liqBreached)', () => {
+  const s = fresh();
+  const { id } = P.openPerp(s, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: 1000, params: HL,
+  });
+  const m = P.markPerp(s, id, { price: 98.5 });
+  assert.equal(m.ok, true);
+  const pos = s.positions[id];
+  assert.equal(pos.lastPx, 98.5, 'the stored mark must advance on a committed mark');
+  assert.ok(Math.abs(pos.liqPx - m.liqPx) < CLOSE, 'and the stored liq price must be what it reported');
+  assert.equal(pos.liqBreached, m.liqBreached);
+});
+
+test('perpMark takes a position and a price — no book in its signature', () => {
+  // A source tripwire for the property the equivalence test proves: a book in
+  // scope is what would let a future edit read a sibling position.
+  assert.equal(P.perpMark.length, 2, 'perpMark(pos, px)');
+  const src = P.perpMark.toString().replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.ok(!/\bstate\b/.test(src), 'no book may appear inside the pure mark');
 });
 
 /* ------------------- scenario: $10 at 20x on Hyperliquid ------------------- */
@@ -62,7 +164,7 @@ test('$10 at 20x long on Hyperliquid: notional, fee, liq price, funding, close �
 
   // One hourly funding event at the fixture-observed rate: long pays
   // 2 * 99 * 0.0000125 = $0.002475 out of isolated margin.
-  const f = P.applyHlFunding(s, pos.id, [{ t: 4600, hourlyRateFrac: 0.0000125, oraclePx: 99 }]);
+  const f = P.applyHlFunding(s, pos.id, [{ t: 4600, hourlyRateFrac: 0.0000125, oraclePx: 99 }], { markPx: 99 });
   assert.equal(f.ok, true);
   assert.ok(Math.abs(pos.marginUsd - (10 - 0.002475)) < CLOSE);
   assert.ok(Math.abs(f.fundingPaidUsd - 0.002475) < CLOSE);
@@ -256,6 +358,75 @@ test('partial close: two slices settle like one, and the round records the whole
   assert.ok(Math.abs(s.rounds[0].netUsd - (totalPayout - 10)) < CLOSE, 'round net is cash truth across slices');
 });
 
+/* ------------------- carry and staleness: the stored copy ------------------- */
+
+test('a partial close refreshes the stored liquidation price it just invalidated', () => {
+  // closePerp moves every input of the Jupiter formula (size, collateral,
+  // borrow owed). The commit paths — closePerp's own beyond-liquidation gate,
+  // liquidatePerp, and the offline reconciler — all read the STORED copy, so
+  // leaving it stale prices the survivor at a size it no longer has.
+  const s = fresh();
+  const { id } = P.openPerp(s, {
+    venue: 'jupiter', market: 'SOL', side: 'long',
+    marginUsd: 20, leverage: 20, price: 100, t: 1000, params: JUP,
+  });
+  P.accrueJupBorrow(s, id, { toT: 1000 + 7200, hourlyRateFrac: 0.00002 });
+  const before = s.positions[id].liqPx;
+
+  const r = P.closePerp(s, id, { price: 101, t: 1000 + 7200, fraction: 0.5 });
+  assert.equal(r.ok, true);
+  const pos = s.positions[id];
+  assert.notEqual(pos.liqPx, before, 'halving the position must move its liquidation price');
+  // The stored copy must equal what the pure mark computes from the position
+  // as it now stands — one arithmetic, not a stale snapshot of an older one.
+  const fresh2 = P.perpMark(pos, 101);
+  assert.ok(Math.abs(pos.liqPx - fresh2.liqPx) < CLOSE,
+    'the stored liq price must match what the position now implies');
+  assert.ok(Math.abs(pos.closeFeeEstUsd - (pos.sizeUsd * 0.0006 + (pos.sizeUsd ** 2) / 125000000000)) < CLOSE,
+    'and the stored close-fee estimate must be for the size that remains');
+});
+
+test('funding is applied at a mark the CALLER supplies, never a stale stored one', () => {
+  const s = fresh();
+  const { id } = P.openPerp(s, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: 1000, params: HL,
+  });
+  const ev = [{ t: 4600, hourlyRateFrac: 0.0000125, oraclePx: 99 }];
+  // No mark, no funding: the engine must not reach for pos.lastPx, which the
+  // read paths never advance (they mark their own copies), so it can be as
+  // old as the position itself.
+  assert.equal(P.applyHlFunding(s, id, ev).reason, 'bad-price');
+  assert.equal(P.applyHlFunding(s, id, ev, {}).reason, 'bad-price');
+  assert.equal(P.applyHlFunding(s, id, ev, { markPx: 0 }).reason, 'bad-price');
+  assert.equal(s.positions[id].fundingPaidUsd, 0, 'a refused call must charge nothing');
+
+  const ok = P.applyHlFunding(s, id, ev, { markPx: 99 });
+  assert.equal(ok.ok, true);
+  assert.ok(Math.abs(ok.fundingPaidUsd - 2 * 99 * 0.0000125) < CLOSE);
+  assert.ok(Math.abs(s.positions[id].liqPx - P.perpMark(s.positions[id], 99).liqPx) < CLOSE,
+    'the refreshed liq price must be the one the current position implies');
+});
+
+test('a bad funding event charges nothing at all — no half-applied batch', () => {
+  const s = fresh();
+  const { id } = P.openPerp(s, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: 1000, params: HL,
+  });
+  const marginBefore = s.positions[id].marginUsd;
+  const r = P.applyHlFunding(s, id, [
+    { t: 4600, hourlyRateFrac: 0.0000125, oraclePx: 99 },   // good
+    { t: 8200, hourlyRateFrac: 'oops', oraclePx: 99 },      // bad
+  ], { markPx: 99 });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'bad-funding-event');
+  assert.equal(s.positions[id].marginUsd, marginBefore,
+    'the good event must not have been applied — margin moved with totals unmoved is a torn write');
+  assert.equal(s.positions[id].fundingPaidUsd, 0);
+  assert.equal(s.totals.fundingPaidUsd, 0);
+});
+
 test('borrow accrual refuses time running backwards', () => {
   const s = fresh();
   const { id } = P.openPerp(s, { venue: 'jupiter', market: 'SOL', side: 'long', marginUsd: 5, leverage: 50, price: 100, t: 5000, params: JUP });
@@ -292,7 +463,7 @@ test('cash truth holds across a seeded random walk of every operation', () => {
       } else if (roll < 0.6) {
         P.closePerp(s, pos.id, { price: px, t, fraction: rnd() < 0.3 ? 0.5 : 1 });
       } else if (pos.venue === 'hyperliquid') {
-        P.applyHlFunding(s, pos.id, [{ t, hourlyRateFrac: (rnd() - 0.5) * 0.0002, oraclePx: px }]);
+        P.applyHlFunding(s, pos.id, [{ t, hourlyRateFrac: (rnd() - 0.5) * 0.0002, oraclePx: px }], { markPx: px });
       } else {
         P.accrueJupBorrow(s, pos.id, { toT: t, hourlyRateFrac: rnd() * 0.0001 });
       }
