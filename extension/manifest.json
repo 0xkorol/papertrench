@@ -135,6 +135,24 @@
       "run_at": "document_idle",
       "world": "ISOLATED",
       "all_frames": false
+    },
+    {
+      "matches": [
+        "https://app.hyperliquid.xyz/*",
+        "https://jup.ag/*",
+        "https://*.jup.ag/*"
+      ],
+      "js": [
+        "perps-venues.js",
+        "perps.js",
+        "perps-sites.js",
+        "perps-reconcile.js",
+        "perps-ticket.js",
+        "perps-content.js"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED",
+      "all_frames": false
     }
   ],
   "action": {
