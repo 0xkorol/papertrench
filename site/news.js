@@ -10,6 +10,16 @@
  *   - No number appears here that isn't in the changelog. A patch-notes page
  *     that inflates its own numbers is the same failure as a terminal that
  *     inflates a fill price.
+ *   - An entry appears only once the thing has actually SHIPPED. The extension
+ *     ships by git tag; a version sitting in the changelog untagged is not a
+ *     release and must not be logged here. (v2.11.1 is exactly that case at the
+ *     time of writing — written up, not tagged, deliberately absent below.)
+ *
+ * Website releases carry `site: true` instead of a version, because the site
+ * deploys continuously and has no version to name. They get a "Website" chip
+ * rather than a `v…` one — inventing a version number for them, or filing them
+ * under the next extension version, would both claim something untrue about
+ * what a user has installed.
  *
  * tags: 'feature' | 'fix' | 'security' | 'speed'  (a release can carry several)
  */
@@ -17,6 +27,21 @@
   'use strict';
 
   const RELEASES = [
+    {
+      site: true, date: 'Aug 6, 2026', iso: '2026-08-06',
+      tags: ['feature', 'security'],
+      major: true,
+      title: 'The Arena is open — and clans arrived with it',
+      blurb: 'A leaderboard that cannot be faked: every fill re-hashed, every book replayed, every price re-checked against real market history. Plus team standings that nobody can buy.',
+      points: [
+        '<b>A verified leaderboard, live at papertrench.com/leaderboard.</b> Standings are recomputed server-side from your raw fills — never from a self-reported number — and every fill is re-priced against the token’s real traded range in that exact minute. Rank is ROI × ln(1+rounds) × discipline, five closed rounds minimum, so one lottery ticket does not top the board.',
+        '<b>Only fully verified records take a position.</b> The hash chain proves a history is <em>consistent</em>, not that it happened, and attest.js is open source — so a record the re-pricer could not check is exactly the record a fabricator would build. Anything below verified is shown and labeled, but ranks nowhere. Reported by a user who edited an exported file to hand themselves an absurd P&amp;L.',
+        '<b>Clans.</b> Found one or join with an invite code, and trade under a [TAG] that follows your handle across every board. A clan’s number is the <b>mean of its five best members</b>, and your rounds only count <b>from the day you joined</b> — so a lifetime record cannot be recruited in and donated. Extra members are free, so taking in beginners costs a clan nothing; and cutting a struggling member can never raise your score, only cost you the five-member minimum.',
+        '<b>The weekly Trench Sprint and head-to-head duels.</b> Both are the same committed chain seen through a different window, so there is no second book to inflate. A duel settles only from a record submitted <em>after</em> its window closes — which kills the one trick the chain cannot: submitting while ahead, then going quiet.',
+        '<b>Watch it verify.</b> The board’s hero is the verifier’s live output — chains accepted, records verified, submissions rejected, as they happen. Rejections appear <b>without a handle</b>: an automated verdict can fire on thin candle data as easily as on fraud, and must never publicly brand a named person a cheat.',
+        '<b>Public profiles, process-only badges, and self-serve deletion.</b> No badge for profit, win streaks or volume — every one is a process claim carrying the evidence that earned it. Your record reaches the site only when you send it: a JSON export, or the Site sync toggle that is off by default. The extension still never phones home.',
+      ],
+    },
     {
       v: '2.11.0', date: 'Aug 5, 2026', iso: '2026-08-05',
       tags: ['feature', 'fix'],
@@ -412,7 +437,10 @@
     const el = document.createElement('div');
     el.className = 'rel' + (r.major ? ' is-major' : '');
     el.dataset.tags = r.tags.join(' ');
-    el.id = 'v' + r.v.replace(/\./g, '-');
+    // Website releases have no version, so they get a stable slug instead of
+    // `v` + undefined — which would have produced an id of "vundefined" and
+    // silently broken deep links for every entry sharing it.
+    el.id = r.site ? 'site-' + r.iso : 'v' + r.v.replace(/\./g, '-');
 
     const tags = r.tags.map(t => `<span class="tag ${t}">${TAG_LABEL[t]}</span>`).join('');
     const points = r.points.map(p => `<div class="rel-point"><span class="bullet"></span><span>${p}</span></div>`).join('');
@@ -434,7 +462,7 @@
     el.innerHTML = `
       <div class="rel-card${r.superseded ? ' is-superseded' : ''}">
         <div class="rel-head">
-          <span class="ver-chip${r.major ? ' major' : ''}">v${r.v}</span>
+          <span class="ver-chip${r.major ? ' major' : ''}"${r.site ? ' title="Shipped to papertrench.com — the site deploys continuously and carries no version number"' : ''}>${r.site ? 'Website' : 'v' + r.v}</span>
           ${tags}
           <time class="rel-date" datetime="${r.iso}">${r.date}</time>
         </div>

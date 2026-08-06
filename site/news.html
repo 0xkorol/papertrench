@@ -52,8 +52,15 @@
            drifts the moment a release is added, and a wrong number on this
            page is the one thing the page is about. -->
       <div><div class="num o" style="color:var(--orange)" id="relCount">—</div><div class="lbl">RELEASES LOGGED</div></div>
-      <div><div class="num g" style="color:var(--green)">872</div><div class="lbl">TESTS PASSING</div></div>
-      <div><div class="num b" style="color:var(--blue)">116</div><div class="lbl">AUDITED DEFECTS CLOSED</div></div>
+      <!-- These two are hand-typed and therefore drift, which is exactly what
+           the comment above warns about — they sat at 872 and 116 for weeks
+           while the real figures moved to 1212 and 131. A page whose next stat
+           reads "0 NUMBERS INVENTED" cannot carry a stale one, so
+           scripts/preflight.sh now recomputes both and fails the release if
+           either disagrees. Update them together with that check, never alone.
+           1212 = 1108 extension + 104 server. -->
+      <div><div class="num g" style="color:var(--green)" data-check="tests">1212</div><div class="lbl">TESTS PASSING</div></div>
+      <div><div class="num b" style="color:var(--blue)" data-check="defects">131</div><div class="lbl">AUDITED DEFECTS CLOSED</div></div>
       <div><div class="num o" style="color:var(--violet)">0</div><div class="lbl">NUMBERS INVENTED</div></div>
     </div>
   </div>

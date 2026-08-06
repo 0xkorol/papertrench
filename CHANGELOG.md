@@ -39,6 +39,13 @@ whether any of this is real; that is what it is for.
   toggles off, nothing is injected anywhere (docs/PERMISSIONS.md has the
   full audit).
 
+## Live on the website — 2026-08-06
+
+Everything below is **deployed and live** at papertrench.com and the
+verifier API — unlike the extension work above, which is committed but not
+yet released. The two were sharing one "Unreleased" heading, which made a
+shipped feature and an untagged one look like the same state.
+
 The Arena — PaperTrench gets a social half, operated entirely through the
 website so the extension stays lightweight, open-source and disconnected.
 

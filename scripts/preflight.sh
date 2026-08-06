@@ -73,6 +73,61 @@ echo "Running test suite..."
   || { tail -30 /tmp/pt-preflight-tests.log; fail "test suite not green"; }
 tail -8 /tmp/pt-preflight-tests.log | grep -E "pass|fail"
 
+# The server suite is NOT in CI (.github/workflows/test.yml runs the extension
+# suite only), so this is the only gate on it before a release.
+echo "Running server suite..."
+(cd server && node --test > /tmp/pt-preflight-server.log 2>&1) \
+  || { tail -30 /tmp/pt-preflight-server.log; fail "server suite not green"; }
+tail -8 /tmp/pt-preflight-server.log | grep -E "pass|fail"
+
+# The news hero prints "TESTS PASSING" and "AUDITED DEFECTS CLOSED" as
+# hand-typed numbers, on a page whose next stat reads "0 NUMBERS INVENTED".
+# They sat at 872/116 while the real figures moved to 1212/131. Nobody noticed
+# because nothing checked — the same failure mode as the nav and the download
+# link above. Gate on the parsed FAIL COUNT, never on a pipeline exit code:
+# `node --test | grep` exits 0 even at 1105/1108.
+EXT_PASS=$(grep -E '^ℹ pass ' /tmp/pt-preflight-tests.log | awk '{print $3}')
+EXT_FAIL=$(grep -E '^ℹ fail ' /tmp/pt-preflight-tests.log | awk '{print $3}')
+SRV_PASS=$(grep -E '^ℹ pass ' /tmp/pt-preflight-server.log | awk '{print $3}')
+SRV_FAIL=$(grep -E '^ℹ fail ' /tmp/pt-preflight-server.log | awk '{print $3}')
+[ -n "$EXT_PASS" ] && [ -n "$SRV_PASS" ] || fail "could not parse suite totals"
+[ "$EXT_FAIL" = "0" ] && [ "$SRV_FAIL" = "0" ] \
+  || fail "suite fail count non-zero (extension $EXT_FAIL, server $SRV_FAIL)"
+TESTS_REAL=$((EXT_PASS + SRV_PASS))
+for page in site/news.html site/index.html; do
+  shown=$(grep -oP 'data-check="tests">\K[0-9]+' "$page")
+  [ "$shown" = "$TESTS_REAL" ] \
+    || fail "$page says $shown tests passing; the suites report $TESTS_REAL ($EXT_PASS + $SRV_PASS)"
+done
+
+# The homepage's "TRADING SITES" figure must never exceed what the build
+# actually supports — over-claiming advertises a capability the user does not
+# have. Under-claiming is tolerated on purpose: between a commit and its tag,
+# the manifest legitimately runs ahead of what anyone can install.
+SITES_REAL=$(python3 - <<'PY'
+import json
+m = json.load(open('extension/manifest.json'))
+hosts = set()
+for cs in m.get('content_scripts', []):
+    for pat in cs.get('matches', []):
+        h = pat.split('://')[-1].split('/')[0].replace('*.', '')
+        if h != '*':
+            hosts.add(h)
+print(len(hosts - {'x.com', 'twitter.com'}))
+PY
+)
+SITES_SHOWN=$(grep -oP 'data-check="sites">\K[0-9]+' site/index.html)
+[ "$SITES_SHOWN" -le "$SITES_REAL" ] \
+  || fail "site/index.html claims $SITES_SHOWN trading sites; the manifest supports $SITES_REAL"
+[ "$SITES_SHOWN" = "$SITES_REAL" ] \
+  || echo "  note: index.html says $SITES_SHOWN trading sites, manifest now has $SITES_REAL — bump it when this ships"
+
+DEFECTS_REAL=$(grep -cE 'fixed v[0-9]' DEFECTS.md)
+DEFECTS_SHOWN=$(grep -oP 'data-check="defects">\K[0-9]+' site/news.html)
+[ "$DEFECTS_SHOWN" = "$DEFECTS_REAL" ] \
+  || fail "site/news.html says $DEFECTS_SHOWN defects closed; DEFECTS.md marks $DEFECTS_REAL"
+echo "news stats OK (tests $TESTS_REAL = $EXT_PASS + $SRV_PASS, defects closed $DEFECTS_REAL)"
+
 echo
 echo "PREFLIGHT OK for v$MANIFEST_V"
 echo "Remaining manual steps:"

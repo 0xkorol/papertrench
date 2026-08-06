@@ -48,9 +48,17 @@
       <a class="btn btn-ghost" href="streams.html"><span style="width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red)"></span>Watch live</a>
       <a class="btn btn-ghost" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">★ Star on GitHub</a>
     </div>
+    <!-- Both of these are hand-typed and both had gone stale (9 sites when the
+         shipped build supports 10; 872 tests when the suites report 1212).
+         scripts/preflight.sh now recomputes them. The site count describes what
+         you can INSTALL today, so it tracks the released tag, not the working
+         tree — HEAD currently adds Hyperliquid, which is committed but not
+         released, and claiming it here would advertise a capability nobody has.
+         The guard therefore fails on over-claiming and tolerates under-claiming
+         during an unreleased window. 1212 = 1108 extension + 104 server. -->
     <div class="hero-stats reveal d3">
-      <div class="hero-stat"><div class="num o">9</div><div class="lbl">TRADING SITES</div></div>
-      <div class="hero-stat"><div class="num g">872</div><div class="lbl">TESTS PASSING</div></div>
+      <div class="hero-stat"><div class="num o" data-check="sites">10</div><div class="lbl">TRADING SITES</div></div>
+      <div class="hero-stat"><div class="num g" data-check="tests">1212</div><div class="lbl">TESTS PASSING</div></div>
       <div class="hero-stat"><div class="num b">0</div><div class="lbl">PRICES INVENTED</div></div>
       <div class="hero-stat"><div class="num o">100%</div><div class="lbl">LOCAL &amp; PRIVATE</div></div>
     </div>
@@ -259,6 +267,7 @@
           <a class="btn btn-primary" href="leaderboard.html">🛡 Enter the Arena</a>
           <a class="btn btn-ghost" href="sprint.html">⚡ This week's Sprint</a>
           <a class="btn btn-ghost" href="duels.html">⚔ Duels</a>
+          <a class="btn btn-ghost" href="clans.html">🏴 Clans</a>
         </div>
       </div>
       <div class="split-visual reveal d1">
