@@ -209,7 +209,7 @@ test('the site table stays bounded: the stalest site is evicted', async () => {
   assert.ok('site-12.example' in jank);
 });
 
-test('both receipt writers serialize through ONE promise chain (source contract)', () => {
+test('every receipt writer serializes through ONE promise chain (source contract)', () => {
   const turboBlock = backgroundJs.slice(
     backgroundJs.indexOf('const TURBO_STATS_KEY'),
     backgroundJs.indexOf('warm X links (instant post opens)'),
@@ -220,12 +220,19 @@ test('both receipt writers serialize through ONE promise chain (source contract)
   // read-modify-writes on the shared key in the field.
   assert.equal((turboBlock.match(/let turboChain/g) || []).length, 1,
     'exactly one write chain may exist for the stats key');
+  // Three writers now share the key: route timings, FILL stage timings, and
+  // the page-jank merge. The count below must equal the number of writers —
+  // if a fourth is added it belongs on this chain too, and this assertion is
+  // the thing that will say so.
   const noteFn = turboBlock.slice(
-    turboBlock.indexOf('function turboNote('), turboBlock.indexOf('function turboJankNote('));
+    turboBlock.indexOf('function turboNote('), turboBlock.indexOf('function turboFillNote('));
+  const fillFn = turboBlock.slice(
+    turboBlock.indexOf('function turboFillNote('), turboBlock.indexOf('function turboJankNote('));
   const jankFn = turboBlock.slice(turboBlock.indexOf('function turboJankNote('));
   assert.match(noteFn, /turboChain = turboChain/, 'turboNote rides the chain');
+  assert.match(fillFn, /turboChain = turboChain/, 'turboFillNote rides the SAME chain');
   assert.match(jankFn, /turboChain = turboChain/, 'turboJankNote rides the SAME chain');
-  assert.equal((turboBlock.match(/turboChain = turboChain/g) || []).length, 2,
+  assert.equal((turboBlock.match(/turboChain = turboChain/g) || []).length, 3,
     'no writer bypasses the chain');
 });
 

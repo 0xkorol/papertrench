@@ -957,6 +957,51 @@ function turboNote(route, ms) {
   }));
 }
 
+/* Fill receipts. The one interaction that most defines this product had no
+ * instrument at all: routing had a median, page jank had a rate, the FILL had
+ * nothing. Stages arrive already differenced by the content script (monotonic
+ * performance.now deltas — never a wall clock, which must never be confusable
+ * with a fill's attestation ts) and are folded here, on the SAME write chain as
+ * the route timings and the jank merge, so three writers can never lose each
+ * other's read-modify-write on the one stats key.
+ *
+ * Stored per kind ('buy'/'sell') as a bounded ring per stage. Nothing
+ * page-derived is accepted — no mint, no symbol, no hostname — so this key
+ * gains no attacker-writable string, and every value is re-validated here
+ * rather than trusted from the content script. */
+const TURBO_FILL_STAGES = ['quoteMs', 'commitMs', 'paintMs', 'totalMs'];
+function turboFillNote(message) {
+  const kind = message && message.kind === 'sell' ? 'sell' : 'buy';
+  const sample = {};
+  for (const stage of TURBO_FILL_STAGES) {
+    const value = Math.round(Number(message && message[stage]));
+    // A negative or non-finite stage is a broken measurement, not a fast one.
+    if (!Number.isFinite(value) || value < 0) return;
+    sample[stage] = value;
+  }
+  turboChain = turboChain.catch(() => {}).then(() => new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([TURBO_STATS_KEY], (value) => {
+        if (chrome.runtime && chrome.runtime.lastError) { resolve(); return; }
+        const stats = (value && value[TURBO_STATS_KEY]) || {};
+        const fills = stats.fills || {};
+        const entry = fills[kind] || { count: 0 };
+        entry.count += 1;
+        for (const stage of TURBO_FILL_STAGES) {
+          if (!Array.isArray(entry[stage])) entry[stage] = [];
+          entry[stage].push(sample[stage]);
+          if (entry[stage].length > TURBO_RING_MAX) {
+            entry[stage].splice(0, entry[stage].length - TURBO_RING_MAX);
+          }
+        }
+        fills[kind] = entry;
+        stats.fills = fills;
+        chrome.storage.local.set({ [TURBO_STATS_KEY]: stats }, () => resolve());
+      });
+    } catch (_) { resolve(); }
+  }));
+}
+
 /* Page jank receipts. Content scripts sample the browser's own 'longtask'
  * entries (any main-thread task over 50 ms) and flush ONE aggregate at most
  * every minute — never a per-event write. The merge lives here, on the same
@@ -2505,6 +2550,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       case 'pt_turbo_jank':
         turboJankNote(message.site, message);
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_turbo_fill':
+        turboFillNote(message);
         sendResponse({ ok: true });
         break;
 

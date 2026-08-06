@@ -2144,8 +2144,10 @@
     // arming — re-check at fire time. Sells are never gated.
     const rugRefusal = rugRefusalMessage();
     if (rugRefusal) return toast(rugRefusal);
+    const tClick = perfNow();
     const fillQuote = await quoteForTrade();
     if (!fillQuote) return toast('Could not obtain a fresh price — paper buy not filled.');
+    const tQuoted = perfNow();
     try {
       const result = await withState(async () => {
         if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper buy could be filled');
@@ -2186,6 +2188,7 @@
         if (!hadPosition) profitAlertLevels.set(token.mint, 0);
         return { trade, position, opened: !hadPosition };
       });
+      const tCommitted = perfNow();
       if (result) {
         sendMessage({
           type: 'pt_trade_event',
@@ -2203,6 +2206,7 @@
           ? `$${E.fmt(quotedUsd, quotedUsd < 10 ? 2 : 0)}`
           : `${E.fmt(solAmount, 3)} SOL`;
         toast(`Bought ${boughtText} of ${token.symbol}${atMcap ? ` at ${fmtMoney(atMcap)} MC` : ''} (paper)`);
+        noteFillTiming('buy', tClick, tQuoted, tCommitted);
       }
     } catch (err) { toast(err.message || 'Buy failed'); }
     renderAll();
@@ -2330,8 +2334,10 @@
   }
 
   async function doSellInner(fraction) {
+    const tClick = perfNow();
     const fillQuote = await quoteForTrade();
     if (!fillQuote) return toast('Could not obtain a fresh price — paper sell not filled.');
+    const tQuoted = perfNow();
     try {
       const result = await withState(async () => {
         if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper sell could be filled');
@@ -2358,6 +2364,7 @@
         if (round) profitAlertLevels.delete(token.mint);
         return { trade, position, round };
       });
+      const tCommitted = perfNow();
       if (result) {
         sendMessage({
           type: 'pt_trade_event',
@@ -2393,6 +2400,7 @@
             toast(`${red ? 'Red round' : 'Green round'}, ${grade.letter} process — ${flavor}`);
           }
         }
+        noteFillTiming('sell', tClick, tQuoted, tCommitted);
       }
     } catch (err) { toast(err.message || 'Sell failed'); }
     renderAll();
@@ -6610,6 +6618,54 @@
   // "closed" would silently drop the whole first window's visible time.
   let jankVisibleSince = -1;
   let jankFlushTimer = null;
+
+  /* Fill receipts. The product could time link routing and page jank but had
+   * NO instrument on its most-felt interaction — the fill. Every argument about
+   * whether the fill got faster was therefore an argument, which is the wrong
+   * shape for this codebase.
+   *
+   * Three stages, measured on the real path, deliberately reported apart
+   * because they are not all ours to fix:
+   *   quote  — click → a fresh price in hand. Mostly the chain/aggregator
+   *            round trip. NOT ours; showing it folded into a total would let
+   *            us take credit for a fast RPC or get blamed for a slow one.
+   *   commit — price → wallet written. The full-state read, the engine, the
+   *            attestation append and the persist. This is OURS, and it is
+   *            exactly the stage the pt_state heartbeat work would move.
+   *   paint  — wallet written → the trader sees the confirmation.
+   *
+   * Two rules this obeys, both non-negotiable:
+   *  - performance.now() deltas ONLY, never a wall clock. A fill already
+   *    carries an attestation `ts`, and a second time-like number near it that
+   *    could be mistaken for the fill's own timestamp is a footgun in the one
+   *    record that must never be ambiguous.
+   *  - Numbers and a fixed 'buy'/'sell' key only. No mint, no symbol, no
+   *    hostname — nothing page-derived enters the receipts store at all, so
+   *    there is no attacker-writable string to escape at render time.
+   * Measurement must never move what it measures: this runs after the toast,
+   * off the awaited path, and a failure to send is swallowed. */
+  /** Monotonic clock, or NaN where there isn't one. NaN is deliberate: it
+   * flows into noteFillTiming's validation and drops the receipt, so a
+   * missing clock costs a measurement and never a fill. It must NOT fall back
+   * to Date.now() — see the wall-clock rule above. */
+  function perfNow() {
+    return (typeof performance !== 'undefined' && performance
+      && typeof performance.now === 'function') ? performance.now() : NaN;
+  }
+
+  function noteFillTiming(kind, tClick, tQuoted, tCommitted) {
+    const painted = perfNow();
+    const ms = (a, b) => Math.max(0, Math.round(b - a));
+    if (!(tClick >= 0) || !(tQuoted >= tClick) || !(tCommitted >= tQuoted)) return;
+    sendMessage({
+      type: 'pt_turbo_fill',
+      kind: kind === 'sell' ? 'sell' : 'buy',
+      quoteMs: ms(tClick, tQuoted),
+      commitMs: ms(tQuoted, tCommitted),
+      paintMs: ms(tCommitted, painted),
+      totalMs: ms(tClick, painted),
+    }).catch(() => {});
+  }
 
   /** Fold the currently open visible-time window into jankVisibleMs. */
   function jankCloseWindow() {
