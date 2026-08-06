@@ -817,6 +817,14 @@
   /* --------------------------- title feed --------------------------- */
 
   function onTitle() {
+    // Hyperliquid switches markets WITHOUT changing the URL, so the title is
+    // the only signal that the page is now showing a different instrument.
+    // The location poll cannot see this; without it the ticket would keep
+    // pricing HYPE while the user looks at SOL.
+    if (adapter && adapter.venue === 'hyperliquid') {
+      const nowMarket = S.hlTitleMarket(document.title);
+      if (nowMarket && nowMarket !== adapter.market) { enterPage(); return; }
+    }
     if (!adapter) return;
     const t = document.title;
     const tick = adapter.venue === 'hyperliquid'
@@ -839,7 +847,7 @@
   /* ------------------------------ boot ------------------------------ */
 
   async function enterPage() {
-    const found = S.detect(location.hostname, location.pathname);
+    const found = S.detect(location.hostname, location.pathname, document.title);
     if (!found) { leavePage(); return; }
     if (adapter && found.venue === adapter.venue && found.market === adapter.market) return;
     leavePage();
@@ -911,7 +919,7 @@
       // answer and has not, the page says so instead of staying blank —
       // the user cannot tell "no perps here" from "we are broken" otherwise.
       if (entryAttempts >= ENTRY_ATTEMPTS_BEFORE_NOTICE && !root) {
-        const found = S.detect(location.hostname, location.pathname);
+        const found = S.detect(location.hostname, location.pathname, document.title);
         if (found && found.venue === 'hyperliquid') {
           adapter = found;
           mountTicket();

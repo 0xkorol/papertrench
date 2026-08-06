@@ -35,13 +35,29 @@
 
   /* --------------------------- URL detection --------------------------- */
 
-  function detectHyperliquid(host, pathname) {
+  /* The market a Hyperliquid page is showing lives in its TITLE, not its
+   * URL. Verified live 2026-08-06: the app trades from a bare `/trade`
+   * route ("55.063 | HYPE | Hyperliquid") and switching markets in the UI
+   * does not change the path at all. An earlier version required
+   * `/trade/<COIN>`, so on the real site detect() returned null and the
+   * ticket could never mount — the URL form exists (it deep-links) but is
+   * not what a trading session actually sits on. The title is therefore
+   * authoritative and the path segment is only a fallback. */
+  function hlTitleMarket(title) {
+    if (typeof title !== 'string') return null;
+    const m = title.match(/^[0-9][0-9,]*\.?[0-9]*\s*\|\s*([A-Za-z0-9:_-]{1,32})\s*\|\s*Hyperliquid$/);
+    return m ? m[1] : null;
+  }
+
+  function detectHyperliquid(host, pathname, title) {
     if (!/(^|\.)app\.hyperliquid\.xyz$/.test(host)) return null;
-    const m = pathname.match(/^\/trade\/([A-Za-z0-9:_-]{1,32})\/?$/);
-    if (!m) return null;
-    // Candidate only: the feed layer must confirm the tail against the live
-    // perp universe before any position can reference it.
-    return { venue: 'hyperliquid', market: m[1], confirmed: false };
+    if (!/^\/trade(?:\/|$)/.test(pathname)) return null;
+    const seg = pathname.match(/^\/trade\/([A-Za-z0-9:_-]{1,32})\/?$/);
+    const market = hlTitleMarket(title) || (seg ? seg[1] : null);
+    if (!market) return null;
+    // Candidate only: the feed layer must confirm the market against the
+    // live perp universe before any position can reference it.
+    return { venue: 'hyperliquid', market, confirmed: false };
   }
 
   function detectJupiter(host, pathname) {
@@ -57,8 +73,8 @@
    * a guessed route is exactly the wrong-presence defect class. */
   function detectAxiomPerps() { return null; }
 
-  function detect(host, pathname) {
-    return detectHyperliquid(host, pathname)
+  function detect(host, pathname, title) {
+    return detectHyperliquid(host, pathname, title)
       || detectJupiter(host, pathname)
       || detectAxiomPerps(host, pathname);
   }
@@ -104,6 +120,7 @@
 
   const api = {
     detect,
+    hlTitleMarket,
     detectHyperliquid,
     detectJupiter,
     parseHlTitle,

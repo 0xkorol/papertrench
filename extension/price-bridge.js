@@ -990,6 +990,17 @@
    * lands arrows 150x off), a USD-quoted payload declares itself and takes
    * its own normalizer. Everything downstream — dedupe, re-snap, the
    * marks/shapes/bubbles handoff, frozen levels — is shared unchanged. */
+  /* Perps marks bypass the host's marks pipeline entirely (see
+   * ensureMarksRender), so this flag latches the moment one arrives. */
+  let perpsMarksPresent = false;
+
+  function perpShapeText(payload) {
+    const long = payload.side === 'long' || payload.side === 'buy';
+    if (payload.kind === 'liquidation') return 'PT Liquidated';
+    if (payload.kind === 'close') return 'PT Close';
+    return long ? 'PT Long' : 'PT Short';
+  }
+
   function normalizePerpMark(payload) {
     const price = numberValue(payload.priceUsd);
     if (!(price > 0)) return null;
@@ -1898,7 +1909,7 @@
           // FRESH bar time may clamp; a stale one drags the fill back.
           timeSec: capSec > 0 ? Math.min(mark.time, capSec) : mark.time,
           level,
-          text: levels.side === 'sell' ? 'PT Sell' : 'PT Buy',
+          text: levels.shapeText || (levels.side === 'sell' ? 'PT Sell' : 'PT Buy'),
         });
         if (handle) { handle.chart = chart; break; }
       }
@@ -2137,6 +2148,21 @@
    */
   function ensureMarksRender() {
     if (shapeFallbackActive) { drawShapeFallback(); return; }
+    // PERPS: draw as shapes immediately, never via the host's marks
+    // pipeline. Verified live on app.hyperliquid.xyz (2026-08-06): the
+    // datafeed HAS getMarks, so it gets patched and reports marksHooked,
+    // but the widget never calls it - and our own refreshMarks() makes the
+    // host call it just once, which sets the pipeline-seen stamp and
+    // thereby suppresses the watchdog forever. The result was a mark
+    // accepted with ok:true that never appeared on screen. Both perps
+    // venues were confirmed to support createExecutionShape, so the
+    // evidence is positive on both sides: marks do not render here,
+    // shapes do.
+    if (perpsMarksPresent) {
+      shapeFallbackActive = true;
+      drawShapeFallback();
+      return;
+    }
     if (fallbackCheckTimer) clearTimeout(fallbackCheckTimer);
     fallbackCheckTimer = setTimeout(() => {
       fallbackCheckTimer = null;
@@ -2643,12 +2669,20 @@
       const markNative = numberValue(payload.priceNative);
       const markUsd = numberValue(payload.priceUsd);
       const markMcap = numberValue(payload.mcap);
+      const isPerp = payload.quote === 'usd-abs';
+      if (isPerp) perpsMarksPresent = true;
       paperMarkLevels.set(mark.id, {
-        side: payload.side === 'sell' ? 'sell' : 'buy',
+        // A perps SHORT is an entry, not a sale: it must colour and point
+        // like the position it opened, so the side maps by direction.
+        side: isPerp
+          ? (payload.side === 'short' || payload.kind === 'liquidation' ? 'sell' : 'buy')
+          : (payload.side === 'sell' ? 'sell' : 'buy'),
         native: markNative,
         usd: markUsd,
         mcap: markMcap,
         nativeMcap: markMcap && markUsd && markNative ? markMcap * (markNative / markUsd) : null,
+        // Shapes carry the perps vocabulary rather than Buy/Sell.
+        shapeText: isPerp ? perpShapeText(payload) : null,
       });
       if (paperMarks.length > MAX_MARKS) {
         for (const dropped of paperMarks.slice(0, paperMarks.length - MAX_MARKS)) {

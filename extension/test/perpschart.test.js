@@ -162,6 +162,43 @@ test('the usd-abs basis returns the level verbatim, with no cap conversion', () 
     'shapeLevelFor must return the USD level unscaled');
 });
 
+test('perps marks draw as SHAPES, never via the host marks pipeline', () => {
+  // Verified live on app.hyperliquid.xyz (2026-08-06): the datafeed has
+  // getMarks, so the bridge patches it and reports marksHooked:true — but
+  // the widget never calls it, and the bridge's own refreshMarks() makes the
+  // host call it exactly once, which sets marksPipelineSeenAt and thereby
+  // suppresses the shape-fallback watchdog forever. A mark was accepted with
+  // ok:true and never appeared on screen. Both venues support
+  // createExecutionShape, so perps take the shape path unconditionally.
+  assert.match(bridgeSrc, /if \(isPerp\) perpsMarksPresent = true;/,
+    'a perps mark must latch the flag');
+  const start = bridgeSrc.indexOf('function ensureMarksRender()');
+  const ensureRaw = bridgeSrc.slice(start, bridgeSrc.indexOf('\n  function ', start + 10));
+  assert.ok(ensureRaw.length > 100, 'ensureMarksRender must be found');
+  assert.match(ensureRaw, /if \(perpsMarksPresent\) \{[\s\S]*?shapeFallbackActive = true;[\s\S]*?drawShapeFallback\(\);/,
+    'and force the shape path immediately, not wait on a watchdog that a '
+    + 'self-triggered getMarks call can permanently disarm');
+  // The gate must sit BEFORE the marksPipelineSeenAt check that defeated it.
+  // Comments are stripped: prose about the defect must not satisfy a test
+  // about the code that fixes it.
+  const ensure = ensureRaw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.ok(ensure.includes('marksPipelineSeenAt'), 'the heuristic still exists for spot');
+  assert.ok(ensure.indexOf('perpsMarksPresent') < ensure.indexOf('marksPipelineSeenAt'),
+    'the perps branch must precede the marks-pipeline heuristic');
+});
+
+test('a perps shape says Long/Short/Close/Liquidated, not Buy/Sell', () => {
+  assert.match(bridgeSrc, /shapeText: isPerp \? perpShapeText\(payload\) : null/);
+  assert.match(bridgeSrc, /text: levels\.shapeText \|\| \(levels\.side === 'sell' \? 'PT Sell' : 'PT Buy'\)/,
+    'and spot keeps its own wording when no shape text is supplied');
+  assert.match(bridgeSrc, /if \(payload\.kind === 'liquidation'\) return 'PT Liquidated';/);
+});
+
+test('a perps SHORT points like an entry, and a liquidation like an exit', () => {
+  assert.match(bridgeSrc, /payload\.side === 'short' \|\| payload\.kind === 'liquidation' \? 'sell' : 'buy'/,
+    'direction must follow the position, not a spot buy/sell vocabulary');
+});
+
 test('spot line labels are unchanged when a surface does not name its own', () => {
   assert.match(bridgeSrc, /typeof spec\.buyLabel === 'string' \? spec\.buyLabel : 'PAPER Avg\. Fill'/,
     'spot keeps PAPER Avg. Fill');

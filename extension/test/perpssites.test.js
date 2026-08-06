@@ -22,20 +22,47 @@ test('perps site adapters install their public API on the browser global', () =>
 
 /* --------------------------- Hyperliquid URLs --------------------------- */
 
-test('[HL-URL] app.hyperliquid.xyz/trade/<COIN> yields an UNCONFIRMED market candidate', () => {
-  const d = S.detect('app.hyperliquid.xyz', '/trade/SOL');
+test('[HL-URL] the REAL app route is a bare /trade — market comes from the title', () => {
+  // Observed live 2026-08-06 on a logged-in session: the address bar reads
+  // https://app.hyperliquid.xyz/trade with NO market segment, and the title
+  // reads "55.063 | HYPE | Hyperliquid". An earlier version required
+  // /trade/<COIN>, so detect() returned null on the actual site and the
+  // ticket could never mount at all.
+  const d = S.detect('app.hyperliquid.xyz', '/trade', '55.063 | HYPE | Hyperliquid');
+  assert.ok(d, 'a bare /trade route must be detected');
   assert.equal(d.venue, 'hyperliquid');
-  assert.equal(d.market, 'SOL');
-  assert.equal(d.confirmed, false, 'the live perp universe confirms markets, not the URL');
-  assert.equal(S.detect('app.hyperliquid.xyz', '/trade/BTC/').market, 'BTC', 'trailing slash tolerated');
+  assert.equal(d.market, 'HYPE');
+  assert.equal(d.confirmed, false, 'the live perp universe confirms markets, not the page');
+});
+
+test('[HL-URL] the title WINS over the path — the app switches market without navigating', () => {
+  // Switching instrument in the UI does not change the URL, so a stale path
+  // segment must never outrank what the page is actually showing.
+  const d = S.detect('app.hyperliquid.xyz', '/trade/SOL', '55.06 | HYPE | Hyperliquid');
+  assert.equal(d.market, 'HYPE', 'the title is authoritative');
+  assert.equal(S.hlTitleMarket('55.063 | HYPE | Hyperliquid'), 'HYPE');
+  assert.equal(S.hlTitleMarket('Hyperliquid'), null);
+});
+
+test('[HL-URL] the deep-link form still works when no title is available yet', () => {
+  const d = S.detect('app.hyperliquid.xyz', '/trade/SOL', '');
+  assert.equal(d.market, 'SOL', 'the path is the fallback, not the primary');
+  assert.equal(S.detect('app.hyperliquid.xyz', '/trade/BTC/', '').market, 'BTC', 'trailing slash tolerated');
+});
+
+test('[HL-URL] a bare /trade with an unreadable title detects nothing', () => {
+  // Better no ticket than a ticket priced against a market we cannot name.
+  assert.equal(S.detect('app.hyperliquid.xyz', '/trade', 'Hyperliquid'), null);
+  assert.equal(S.detect('app.hyperliquid.xyz', '/trade', ''), null);
 });
 
 test('[HL-URL] non-trade Hyperliquid pages and foreign hosts detect nothing', () => {
-  assert.equal(S.detect('app.hyperliquid.xyz', '/portfolio'), null);
-  assert.equal(S.detect('app.hyperliquid.xyz', '/trade/'), null);
-  assert.equal(S.detect('app.hyperliquid.xyz', '/trade/SOL/extra'), null);
-  assert.equal(S.detect('hyperliquid.xyz', '/trade/SOL'), null, 'only the app subdomain trades');
-  assert.equal(S.detect('evil-app.hyperliquid.xyz.attacker.io', '/trade/SOL'), null);
+  const T = '55.06 | HYPE | Hyperliquid';
+  assert.equal(S.detect('app.hyperliquid.xyz', '/portfolio', T), null,
+    'the portfolio page must never mount a ticket, title or not');
+  assert.equal(S.detect('app.hyperliquid.xyz', '/vaults', T), null);
+  assert.equal(S.detect('hyperliquid.xyz', '/trade', T), null, 'only the app subdomain trades');
+  assert.equal(S.detect('evil-app.hyperliquid.xyz.attacker.io', '/trade', T), null);
 });
 
 /* ----------------------------- Jupiter URLs ----------------------------- */
