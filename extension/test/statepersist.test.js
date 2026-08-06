@@ -694,8 +694,23 @@ test('O-16/O-17/O-18: both floating elements clamp on BOTH bounds and re-clamp o
     'the escape-hatch lower bound that let the grip leave the screen must be gone');
   // O-18: one resize handler re-clamps BOTH elements, and positionBar itself
   // clamps rather than re-asserting the saved coordinate.
-  assert.match(content, /const onWindowResize = \(\) => \{ positionBar\(\); reclampPanel\(\); \}/,
-    'window resize must re-clamp the bar AND the panel');
+  // Each responsibility asserted BY NAME rather than pinning the whole body,
+  // so a handler that legitimately grows keeps this contract meaningful
+  // instead of failing for the wrong reason. What O-18 guarantees is that ONE
+  // resize handler re-clamps BOTH elements — not that it does only that.
+  const onResize = content.slice(
+    content.indexOf('const onWindowResize = ()'),
+    content.indexOf("window.addEventListener('resize', onWindowResize)"));
+  assert.match(onResize, /positionBar\(\)/, 'window resize must re-clamp the BAR (O-18)');
+  assert.match(onResize, /reclampPanel\(\)/, 'window resize must re-clamp the PANEL (O-18)');
+  assert.equal(
+    (content.match(/window\.addEventListener\('resize', onWindowResize\)/g) || []).length, 1,
+    'exactly ONE resize handler owns the re-clamp — a second would race it');
+  // Added 2026-08-06 with the scrollbar cleanup: a narrower window can turn a
+  // rail that fitted into one that overflows, so the overflow fade is
+  // re-evaluated alongside the clamps rather than waiting for the next render.
+  assert.match(onResize, /syncRailFade\(\)/,
+    'window resize must also re-evaluate the positions-rail overflow fade');
   // positionBar grew an optional measured-left parameter for the O-15 settle
   // loop; the O-18 clamp contract is unchanged.
   const positionBarFn = content.slice(content.indexOf('function positionBar('), content.indexOf('function applyBarOffset'));

@@ -2797,12 +2797,29 @@
     .pt-body {
       position: relative; z-index: 2; padding: 10px 12px 11px;
       flex: 1; min-height: 0; overflow-y: auto;
-      /* Maintainer: NEVER a visible scrollbar on the panel. Wheel and touch
-         still scroll if content ever exceeds the cap; the panel is sized to
-         make that the rare case, not the normal one. */
-      scrollbar-width: none;
     }
-    .pt-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+    /* Maintainer: NEVER a visible scrollbar, anywhere in the overlay. Wheel,
+       touch and drag still scroll everything below; we sit on top of someone
+       else's product and a stray OS scrollbar reads as our chrome leaking.
+       This was per-element and drifted — the positions rail asked for a 4px
+       dark thumb and got a full-size LIGHT one across a dark bar, because
+       Chrome 121+ lets the standard scrollbar-width property SUPPRESS the
+       ::-webkit-scrollbar rules entirely. Declaring both is not belt and
+       braces; the modern one wins and the styling is silently dropped. So the
+       rule lives in one place and every scrollable surface is listed here —
+       a new one that forgets to opt in is the only way this can regress. */
+    .pt-body,
+    .pt-bar-rail,
+    .pt-flex-gallery,
+    .pt-flex-inner {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .pt-body::-webkit-scrollbar,
+    .pt-bar-rail::-webkit-scrollbar,
+    .pt-flex-gallery::-webkit-scrollbar,
+    .pt-flex-inner::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
     .pt-token-row {
       display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
@@ -3413,17 +3430,29 @@
     .pt-game-hud.pt-game-won { border-color: var(--pt-green); color: var(--pt-green); }
     .pt-game-hud.pt-game-bad { border-color: var(--pt-red); color: var(--pt-red); }
 
-    /* scrolling chip rail */
+    /* Scrolling chip rail. Scrollbar hidden by the house rule above; the
+       overflow affordance is the fade below, which only paints when there is
+       actually something past the edge — a permanent fade would dim the last
+       chip on a bar that fits, which is a lie about there being more. */
     .pt-bar-rail {
       display: flex; align-items: center; gap: 6px;
       flex: 1; min-width: 0;
       padding: 5px 10px;
       overflow-x: auto; overflow-y: hidden;
-      scrollbar-width: thin;
+      overscroll-behavior-x: contain;
     }
-    .pt-bar-rail::-webkit-scrollbar { height: 4px; }
-    .pt-bar-rail::-webkit-scrollbar-track { background: transparent; }
-    .pt-bar-rail::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 99px; }
+    .pt-bar-rail.pt-rail-more {
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
+      mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
+    }
+    .pt-bar-rail.pt-rail-more.pt-rail-start {
+      -webkit-mask-image: linear-gradient(to right, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
+      mask-image: linear-gradient(to right, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
+    }
+    .pt-bar-rail.pt-rail-end {
+      -webkit-mask-image: linear-gradient(to right, transparent 0, #000 26px);
+      mask-image: linear-gradient(to right, transparent 0, #000 26px);
+    }
 
     .pt-chip {
       display: flex; align-items: center; gap: 8px; flex: none;
@@ -3876,6 +3905,12 @@
     if (barHide) barHide.addEventListener('click', () => {
       setBarHidden(true);
     });
+    // The fade has to follow the scroll, not just the render, or it keeps
+    // promising more chips after the user has already reached the last one.
+    // Passive: this listener never calls preventDefault, and the rail is a
+    // touch-scrolled surface where a non-passive listener costs scroll latency.
+    if (els.barRail) els.barRail.addEventListener('scroll', syncRailFade, { passive: true });
+
     if (els.barTab) els.barTab.addEventListener('click', () => {
       // Same drop-vs-tap distinction as the pill: the collapsed tab is now a
       // drag handle too (O-21), and a drop must not re-expand the bar.
@@ -5011,6 +5046,38 @@
       }
     }
     if (!ordered) desired.forEach((el) => els.barRail.appendChild(el));
+    syncRailFade();
+  }
+
+  /**
+   * Which edges of the positions rail have content past them.
+   *
+   * The scrollbar is gone (house rule), so this fade IS the overflow
+   * affordance — and it has to be honest in both directions: a rail that fits
+   * gets no fade at all, and a rail scrolled to its end stops claiming there
+   * is more to the right. A permanently-faded edge would dim the last chip on
+   * a bar with nothing hidden, which reads as "there's more" when there isn't.
+   *
+   * Tolerance of 1px because scrollWidth/clientWidth are fractional under
+   * browser zoom and a strict compare leaves a hairline fade on a rail that is
+   * actually at its end.
+   */
+  function syncRailFade() {
+    const rail = els.barRail;
+    if (!rail) return;
+    let scrollLeft = 0; let scrollWidth = 0; let clientWidth = 0;
+    try {
+      scrollLeft = rail.scrollLeft; scrollWidth = rail.scrollWidth; clientWidth = rail.clientWidth;
+    } catch (_) { return; }
+    // A hidden rail measures 0 and would report "no overflow" — leave the
+    // classes alone rather than clearing a state we cannot currently see.
+    if (!(clientWidth > 0)) return;
+    const overflowing = scrollWidth - clientWidth > 1;
+    const atStart = scrollLeft <= 1;
+    const atEnd = scrollLeft >= scrollWidth - clientWidth - 1;
+    rail.classList.toggle('pt-rail-more', overflowing && !atEnd);
+    rail.classList.toggle('pt-rail-start', overflowing && !atStart && !atEnd);
+    rail.classList.toggle('pt-rail-end', overflowing && atEnd);
   }
 
   function buildChip(row) {
@@ -6516,7 +6583,9 @@
     onMountCleanup(() => { clearTimeout(barSettle.timer); restartBarSettle = null; });
     // O-18: shrinking the window re-clamps BOTH floating elements so neither
     // can be stranded off-screen. Registered per mount, torn down with it.
-    const onWindowResize = () => { positionBar(); reclampPanel(); };
+    // A narrower window can turn a rail that fitted into one that overflows
+    // (and back), so the fade is re-evaluated with the other clamps.
+    const onWindowResize = () => { positionBar(); reclampPanel(); syncRailFade(); };
     window.addEventListener('resize', onWindowResize);
     onMountCleanup(() => { try { window.removeEventListener('resize', onWindowResize); } catch (_) {} });
 
