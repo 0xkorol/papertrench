@@ -311,7 +311,7 @@
     try { closeFlexComposer(); flexEls = null; flexSource = null; flexModel = null; } catch (_) {}
     try { if (host && host.remove) host.remove(); } catch (_) {}
     host = null; shadow = null; els = {};
-    posEls = null; lastRenderedPrice = null;
+    posEls = null; alertEls = null; lastRenderedPrice = null;
     // One quiet line, not a per-tick error storm.
     try { console.info('PaperTrench: extension context ended (' + (reason || 'reloaded') + '); overlay removed.'); } catch (_) {}
   }
@@ -630,6 +630,10 @@
     // rule depends on it being the tick that first crossed the level, so this
     // sits in the tick path and nowhere else.
     evaluateChartOrders();
+    // The token ON SCREEN is excluded from the batch poller (its price comes
+    // from the page's own feed), so its alerts are judged here — otherwise
+    // the one chart you are actually watching is the one that never pings.
+    evaluateMcAlerts(token.mint, token);
     syncChartOrders();
     if (usesSvgMarkers()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
     persistSoon();
@@ -1079,6 +1083,9 @@
       if (series.length > SERIES_CAP) series.shift();
       E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
       maybeProfitAlert(token.mint);
+      // A resolver quote is the only fresh cap a brand-new pair gets before
+      // the site's feed is hookable; an alert armed on one must fire here too.
+      evaluateMcAlerts(token.mint, token);
       // C-01: an adopted resolver quote moves the price like any tick does.
       maybeRepostAverageLines();
       if (usesSvgMarkers()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
@@ -3060,6 +3067,63 @@
     .pt-box.pt-focus .pt-orders .pt-order-pcts,
     .pt-box.pt-focus .pt-orders .pt-order-hint { display: none; }
 
+    /* ---------------- market-cap alerts ---------------- */
+
+    .pt-alert-arm { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 6px; }
+    .pt-akind {
+      padding: 7px 2px; border-radius: var(--pt-r-sm);
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--pt-dim); font-size: 10px; font-weight: 800; letter-spacing: 0.6px;
+      cursor: pointer; transition: background 0.16s, color 0.16s, border-color 0.16s;
+    }
+    .pt-akind:hover { background: rgba(255, 255, 255, 0.07); color: #E6EDF3; }
+    /* Direction, not profit: an alert makes no claim about a good or bad
+       outcome, so it stays neutral blue rather than borrowing TP green and
+       SL red. A "below" alert is often the one you WANT to hit. */
+    .pt-akind-on {
+      border-color: rgba(88, 166, 255, 0.45); background: rgba(88, 166, 255, 0.16); color: #A5D6FF;
+    }
+    .pt-alert-entry { display: grid; grid-template-columns: 1fr auto; gap: 5px; margin-top: 5px; }
+    .pt-alert-input {
+      padding: 7px 8px; border-radius: var(--pt-r-sm);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.25); color: #E6EDF3;
+      font-size: 11.5px; font-weight: 700; font-family: inherit; width: 100%;
+    }
+    .pt-alert-input::placeholder { color: var(--pt-faint); font-weight: 600; }
+    .pt-alert-add {
+      padding: 7px 12px; border-radius: var(--pt-r-sm);
+      border: 1px solid rgba(88, 166, 255, 0.35);
+      background: rgba(88, 166, 255, 0.14); color: #A5D6FF;
+      font-size: 10.5px; font-weight: 800; letter-spacing: 0.5px; cursor: pointer;
+    }
+    .pt-alert-add:hover { background: rgba(88, 166, 255, 0.22); }
+    .pt-alert-hint { margin-top: 5px; font-size: 9.5px; line-height: 1.45; color: var(--pt-faint); }
+    .pt-alert-row {
+      display: flex; align-items: center; gap: 6px; margin-top: 5px;
+      padding: 5px 7px; border-radius: var(--pt-r-sm);
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .pt-atag {
+      font-size: 9px; font-weight: 900; letter-spacing: 0.7px; padding: 2px 5px; border-radius: 3px;
+      background: rgba(88, 166, 255, 0.18); color: #A5D6FF;
+    }
+    .pt-atag-fired { background: rgba(255, 255, 255, 0.10); color: var(--pt-faint); }
+    .pt-alevel { flex: 1; font-size: 11px; font-weight: 700; color: #E6EDF3; }
+    .pt-alevel-fired { color: var(--pt-faint); text-decoration: line-through; }
+    .pt-akill {
+      border: 0; background: transparent; color: var(--pt-faint);
+      font-size: 12px; cursor: pointer; padding: 0 2px; line-height: 1;
+    }
+    .pt-akill:hover { color: #FFB3AE; }
+    /* Same rule as an armed stop: focus mode hides the ladder, never the
+       levels already armed. */
+    .pt-box.pt-focus .pt-alerts .pt-alert-arm,
+    .pt-box.pt-focus .pt-alerts .pt-alert-entry,
+    .pt-box.pt-focus .pt-alerts .pt-alert-hint { display: none; }
+
     /* ---------------- sell row ---------------- */
 
     .pt-sell-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 6px; }
@@ -3676,6 +3740,10 @@
                  exit. The P&L still wears the type-scale crown; hierarchy
                  comes from size, not from moving the ground under a click. -->
             <div id="pt-position"></div>
+            <!-- Alerts sit OUTSIDE the position card on purpose: the token you
+                 most want a market-cap ping on is the one you have not bought
+                 yet, and the position card does not exist until you have. -->
+            <div id="pt-alerts"></div>
             <div id="pt-thesis"></div>
             <div id="pt-closed"></div>
           </div>
@@ -3725,6 +3793,7 @@
     els.editSlip = shadow.getElementById('pt-edit-slip');
     els.btnBuy = shadow.getElementById('pt-buy');
     els.position = shadow.getElementById('pt-position');
+    els.alerts = shadow.getElementById('pt-alerts');
     els.thesis = shadow.getElementById('pt-thesis');
     els.closed = shadow.getElementById('pt-closed');
     els.effects = shadow.getElementById('pt-effects');
@@ -4269,6 +4338,7 @@
     renderHeader();
     renderBalance();
     renderPosition();
+    renderAlerts();
     renderBuyButton();
     renderThesis();
     renderClosedPnl();
@@ -4966,6 +5036,11 @@
     return settings.postExitWatchEnabled !== false && E.postWatchMints(state).length > 0;
   }
 
+  /** True while any token is waiting on a market-cap alert. */
+  function alertsActive() {
+    return mcAlertsOn() && E.alertMints(state).length > 0;
+  }
+
   /**
    * Keep prices fresh for positions the user is NOT currently looking at.
    *
@@ -4974,7 +5049,7 @@
    * never stack, and a hidden tab backs off hard.
    */
   async function pollPositionPrices() {
-    if (settings.positionsBarEnabled === false && !postWatchActive()) return;
+    if (settings.positionsBarEnabled === false && !postWatchActive() && !alertsActive()) return;
     if (barPollInFlight) return;
 
     const positionMints = settings.positionsBarEnabled === false ? [] :
@@ -4988,7 +5063,16 @@
       E.postWatchMints(state).filter(
         (mint) => !(token && token.mint === mint) && !positionMints.includes(mint)
       );
-    const mints = positionMints.concat(watchMints);
+    // Alerts ride the SAME batch request — the reason a market-cap alert
+    // fires while you are looking at a different chart, with no background
+    // poller, no alarm and no extra network cost when the mint is already
+    // being watched for another reason.
+    const alertMints = !mcAlertsOn() ? [] :
+      E.alertMints(state).filter(
+        (mint) => !(token && token.mint === mint)
+          && !positionMints.includes(mint) && !watchMints.includes(mint)
+      );
+    const mints = positionMints.concat(watchMints, alertMints);
     if (!mints.length) {
       // Watches can expire with no fetch needed; still settle them.
       if (E.finalizePostWatches(state) > 0) persistSoon();
@@ -4999,7 +5083,11 @@
     const chains = {};
     for (const mint of mints) {
       const pos = state.positions && state.positions[mint];
-      if (pos && pos.chain && pos.chain !== 'solana') chains[mint] = pos.chain;
+      if (pos && pos.chain && pos.chain !== 'solana') { chains[mint] = pos.chain; continue; }
+      // A watched mint has no position to read the chain from; the alert
+      // recorded it at arm time precisely so this lookup has an answer.
+      const armed = E.alertsFor(state, mint)[0];
+      if (armed && armed.chain && armed.chain !== 'solana') chains[mint] = armed.chain;
     }
 
     const now = Date.now();
@@ -5011,6 +5099,10 @@
     try {
       const prices = await R.batchPrices(mints, Object.keys(chains).length ? chains : undefined);
       let changed = false;
+      // Collected rather than fired inline: triggeredAlerts is a pure read, but
+      // FIRING one goes through withState, which re-reads storage and would
+      // replace `state` mid-loop — dropping the marks set on the lines above.
+      const dueAlerts = [];
       for (const mint of Object.keys(prices)) {
         const quote = prices[mint];
         if (!quote || !(quote.priceNative > 0)) continue;
@@ -5022,13 +5114,19 @@
           changed = true;
         }
         if (E.notePostExitPrice(state, mint, quote.priceNative, now)) changed = true;
+        if (mcAlertsOn() && E.triggeredAlerts(state, mint, quote).length) dueAlerts.push([mint, quote]);
       }
       if (E.finalizePostWatches(state, now) > 0) changed = true;
       if (changed) {
-        persistSoon();
+        // A due alert flushes NOW rather than on the 800 ms debounce, so the
+        // re-read inside withState below sees this poll's marks instead of
+        // clobbering them with an older stored copy.
+        if (dueAlerts.length) await persistStateNow();
+        else persistSoon();
         renderPositionsBar();
         renderBalance();
       }
+      for (const [mint, quote] of dueAlerts) await evaluateMcAlerts(mint, quote);
     } catch (e) {
       /* offline or rate-limited: keep the last marks and flag rows stale */
     } finally {
@@ -5891,6 +5989,361 @@
     });
   }
 
+  /* -------------------- market-cap alerts -------------------- */
+
+  // Structure is built once and the list repainted, so a half-typed level
+  // survives the heartbeat's re-render.
+  let alertEls = null;
+  let alertKind = 'above';
+  // Alert ids whose fire-claim is mid-flight. In memory only and deliberately
+  // so: it guards one tab's re-entrancy, while the CROSS-tab claim is the seq
+  // protocol in storage. Two different races, two different mechanisms.
+  const alertClaimsInFlight = new Set();
+
+  function mcAlertsOn() {
+    return settings.appEnabled !== false && settings.mcAlertsEnabled !== false;
+  }
+
+  function currentAlerts() {
+    return token && token.mint ? E.alertsFor(state, token.mint) : [];
+  }
+
+  /**
+   * Read a market cap the way a trader types one: 500k, 1.2M, 850000, 2,4M.
+   *
+   * A bare number is taken at face value, so "500000" and "500k" agree. This
+   * deliberately does NOT guess at a magnitude for small bare numbers —
+   * reading "500" as 500K would silently arm a level a thousand times away
+   * from the one that was typed.
+   */
+  function parseCapInput(raw) {
+    if (typeof raw !== 'string') return null;
+    // Comma as a decimal separator (2,4M) and as a thousands separator
+    // (1,200,000) are both common; a comma followed by exactly one or two
+    // digits at the end is a decimal, otherwise it is grouping.
+    let text = raw.trim().toLowerCase().replace(/[$\s]/g, '');
+    if (!text) return null;
+    text = /,\d{1,2}[kmb]?$/.test(text) ? text.replace(',', '.') : text.replace(/,/g, '');
+
+    const match = /^(\d+(?:\.\d+)?)([kmb])?$/.exec(text);
+    if (!match) return null;
+    const value = Number(match[1]);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    const scale = match[2] === 'b' ? 1e9 : match[2] === 'm' ? 1e6 : match[2] === 'k' ? 1e3 : 1;
+    return value * scale;
+  }
+
+  /** The market cap the alert model should compare against, right now. */
+  function liveCapReference() {
+    return {
+      mcap: Number(token && token.mcap) > 0 ? Number(token.mcap) : null,
+      priceNative: Number(token && token.priceNative) > 0 ? Number(token.priceNative) : null,
+    };
+  }
+
+  function renderAlerts() {
+    if (!els.alerts) return;
+    if (!mcAlertsOn() || !token || !token.mint) {
+      els.alerts.textContent = '';
+      alertEls = null;
+      return;
+    }
+    if (!alertEls) buildAlertsSection();
+    // Repainted every render, not just at build: the hint quotes the LIVE cap
+    // ("Now $412.0K"), which is the number the user is about to type a level
+    // relative to. Painting it once would freeze it at whatever the market
+    // read when the panel mounted.
+    paintAlertHint();
+    paintAlertList();
+  }
+
+  function buildAlertsSection() {
+    els.alerts.textContent = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'pt-alerts';
+    wrap.innerHTML = `
+      <div class="pt-label" style="margin-top:10px">Market cap alert</div>
+      <div class="pt-alert-arm" data-f="kind">
+        <button class="pt-akind pt-akind-on" data-kind="above">ALERT ABOVE</button>
+        <button class="pt-akind" data-kind="below">ALERT BELOW</button>
+      </div>
+      <div class="pt-alert-entry">
+        <input class="pt-alert-input" data-f="level" type="text" inputmode="decimal"
+               placeholder="500K" aria-label="Alert market cap">
+        <button class="pt-alert-add" data-f="add">ALERT ME</button>
+      </div>
+      <div class="pt-alert-hint" data-f="hint"></div>
+      <div data-f="list"></div>
+    `;
+    els.alerts.appendChild(wrap);
+
+    const kindRow = wrap.querySelector('[data-f="kind"]');
+    kindRow.querySelectorAll('.pt-akind').forEach((b) => {
+      b.addEventListener('click', () => {
+        alertKind = b.dataset.kind;
+        kindRow.querySelectorAll('.pt-akind').forEach((x) =>
+          x.classList.toggle('pt-akind-on', x === b));
+        paintAlertHint();
+      });
+    });
+
+    const input = wrap.querySelector('[data-f="level"]');
+    const add = wrap.querySelector('[data-f="add"]');
+    add.addEventListener('click', () => armMcAlertFromInput(input));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); armMcAlertFromInput(input); }
+    });
+
+    alertEls = {
+      wrap,
+      kindRow,
+      input,
+      hint: wrap.querySelector('[data-f="hint"]'),
+      list: wrap.querySelector('[data-f="list"]'),
+    };
+    // The stored preference survives a rebuild (nav, position open/close).
+    kindRow.querySelectorAll('.pt-akind').forEach((x) =>
+      x.classList.toggle('pt-akind-on', x.dataset.kind === alertKind));
+    paintAlertHint();
+  }
+
+  /**
+   * Say plainly where the ping will land, and — when the host page has no
+   * notification permission to lend — say that too, BEFORE an alert is armed
+   * rather than after one silently fails to arrive.
+   */
+  function paintAlertHint() {
+    if (!alertEls || !alertEls.hint) return;
+    const cap = Number(token && token.mcap) > 0 ? fmtMoney(token.mcap) : null;
+    const where = cap ? `Now ${cap}. ` : '';
+    alertEls.hint.textContent = where + (desktopAlertState() === 'denied'
+      ? 'This site blocked notifications — alerts will show in the panel instead.'
+      : 'Fires once, from any open terminal tab, whatever chart you are on.');
+  }
+
+  function paintAlertList() {
+    if (!alertEls || !alertEls.list) return;
+    const alerts = currentAlerts();
+    alertEls.list.textContent = '';
+    if (!alerts.length) return;
+
+    alerts.forEach((a) => {
+      const row = document.createElement('div');
+      row.className = 'pt-alert-row';
+
+      const tag = document.createElement('span');
+      tag.className = 'pt-atag' + (a.firedAt ? ' pt-atag-fired' : '');
+      tag.textContent = a.kind === 'above' ? '▲' : '▼';
+
+      const level = document.createElement('span');
+      level.className = 'pt-alevel' + (a.firedAt ? ' pt-alevel-fired' : '');
+      // A fired alert reports the cap that actually tripped it beside the one
+      // asked for — the same both-numbers rule a gapped stop follows.
+      level.textContent = a.firedAt && a.firedAtMcap && a.firedAtMcap !== a.mcap
+        ? `${fmtMoney(a.mcap)} → hit ${fmtMoney(a.firedAtMcap)}`
+        : fmtMoney(a.mcap);
+
+      const kill = document.createElement('button');
+      kill.className = 'pt-akill';
+      kill.textContent = '✕';
+      kill.title = a.firedAt ? 'Clear this alert' : 'Cancel this alert';
+      kill.addEventListener('click', () => cancelMcAlert(a.id));
+
+      row.append(tag, level, kill);
+      alertEls.list.appendChild(row);
+    });
+  }
+
+  async function armMcAlertFromInput(input) {
+    if (!token || !token.mint) return toast('No token detected on this page');
+    const mcap = parseCapInput(input.value);
+    if (!mcap) return toast('Type a market cap like 500K, 1.2M or 850000');
+
+    // This click is the gesture that lets the chime play later; Web Audio
+    // stays suspended until a user interaction unlocks it.
+    primeAudio();
+
+    // Ask for notification permission on the CLICK that arms the alert: this
+    // is the only user gesture the flow has, and the browser requires one.
+    // Declining is not an error — the panel toast is a working fallback.
+    requestDesktopAlerts();
+
+    try {
+      const alert = await withState(async () => {
+        const armed = E.addAlert(state, token.mint, {
+          kind: alertKind,
+          mcap,
+          symbol: token.symbol,
+          chain: token.chain || 'solana',
+        }, liveCapReference(), Date.now());
+        await persistStateNow();
+        return armed;
+      });
+      input.value = '';
+      renderAlerts();
+      toast(`Alert armed — ${alertKind === 'above' ? 'above' : 'below'} ${fmtMoney(alert.mcap)} MC`);
+    } catch (err) {
+      toast(err.message || 'That alert could not be armed');
+    }
+  }
+
+  async function cancelMcAlert(id) {
+    if (!token || !token.mint) return;
+    await withState(async () => {
+      if (!E.removeAlert(state, token.mint, id)) return;
+      await persistStateNow();
+    });
+    renderAlerts();
+  }
+
+  /**
+   * The host page's own notification permission is the delivery channel.
+   *
+   * This is how the terminals' own alerts reach you, and using the same road
+   * is what lets PaperTrench ping a trader who has wandered off to another
+   * chart WITHOUT asking for the `notifications` extension permission — the
+   * Web Store listing's justification is unchanged by this whole feature.
+   *
+   * The trade-off is stated rather than hidden: the grant belongs to the
+   * SITE, so a trader who has blocked notifications on that terminal gets
+   * the in-panel toast instead, and the hint above the button says so before
+   * an alert is ever armed.
+   */
+  function notificationCtor() {
+    try {
+      const N = window.Notification;
+      // F-39 again: presence is not capability. Some hardened pages replace
+      // the constructor with a stub that throws on construction, so anything
+      // that is not a callable function is treated as absent HERE, rather
+      // than trusted and thrown from in the middle of firing an alert.
+      return typeof N === 'function' ? N : null;
+    } catch (_) {
+      return null;   // a page that traps property access on window
+    }
+  }
+
+  function desktopAlertState() {
+    const N = notificationCtor();
+    if (!N) return 'unavailable';
+    try {
+      const p = N.permission;
+      return p === 'granted' || p === 'denied' ? p : 'default';
+    } catch (_) {
+      return 'unavailable';
+    }
+  }
+
+  /** Ask the page for notification rights. Must be called from a gesture. */
+  function requestDesktopAlerts() {
+    if (settings.mcAlertDesktopEnabled === false) return;
+    const N = notificationCtor();
+    if (!N || desktopAlertState() !== 'default') return;
+    try {
+      const result = N.requestPermission();
+      if (result && typeof result.then === 'function') {
+        result.then(() => paintAlertHint()).catch(() => {});
+      }
+    } catch (_) {
+      /* callback-only legacy form, or a page that refuses: the toast covers it */
+    }
+  }
+
+  /**
+   * Hand the ping to the browser. Returns true ONLY when that succeeded, so
+   * the caller never assumes a notification the trader could not have seen.
+   */
+  function postDesktopAlert(alert, body) {
+    if (settings.mcAlertDesktopEnabled === false) return false;
+    const N = notificationCtor();
+    if (!N || desktopAlertState() !== 'granted') return false;
+    const name = alert.symbol || E.short(alert.mint || '');
+    try {
+      new N(`${name} ${alert.kind === 'above' ? 'above' : 'below'} ${fmtMoney(alert.mcap)} MC`, {
+        body,
+        // Every open terminal tab runs this same watcher. The state claim
+        // below settles which tab OWNS the fire, but two tabs can still read
+        // "not yet fired" in the same instant; same-tag notifications REPLACE
+        // each other, so that residual race can never show a trader two
+        // pings for one level.
+        tag: `pt-mc-${alert.id}`,
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** A rising two-note, deliberately unlike the falling profit bell. */
+  function playAlertChime() {
+    if (!audioPrimed) return;
+    const ctx = primeAudio();
+    if (!ctx) return;
+    const now = ctx.currentTime + 0.01;
+    playTone(ctx, 880, now, 0.24, 'sine', 0.07);
+    playTone(ctx, 1318.51, now + 0.19, 0.36, 'sine', 0.08);
+  }
+
+  /**
+   * Fire every alert this observation has tripped.
+   *
+   * Called from the two places a fresh cap can arrive: the tick path for the
+   * token on screen (whose cap comes from the page's own feed) and the batch
+   * poller for every other watched mint. That second path is what makes an
+   * alert work while you are looking at a different chart entirely.
+   */
+  async function evaluateMcAlerts(mint, observed) {
+    if (!mcAlertsOn() || !mint) return;
+    // An alert stays "due" until markAlertFired reaches STORAGE, and every
+    // tick inside that window would queue another withState — each of which
+    // opens with a full state read. Crossing a level during a fast move is
+    // precisely when the tab can least afford a burst of megabyte-scale
+    // reads, so a claim already in flight is skipped rather than re-queued.
+    //
+    // Keyed by alert id rather than the single orderFireInFlight latch
+    // evaluateChartOrders uses: the batch poller walks several mints in one
+    // pass, and one global flag would stall a second coin's level behind the
+    // first coin's storage round trip.
+    const due = E.triggeredAlerts(state, mint, observed)
+      .filter((a) => !alertClaimsInFlight.has(a.id));
+    if (!due.length) return;
+
+    for (const alert of due) {
+      alertClaimsInFlight.add(alert.id);
+      try {
+        // withState re-reads storage before running, so a level another tab
+        // already claimed reads as fired here and stays silent. markAlertFired
+        // returning false IS the claim being lost.
+        const won = await withState(async () => {
+          if (!E.markAlertFired(state, mint, alert.id, Date.now(), observed)) return null;
+          await persistStateNow();
+          return E.alertsFor(state, mint).find((a) => a.id === alert.id) || null;
+        });
+        if (won) announceMcAlert(won, observed);
+      } finally {
+        // Released even when the write threw, so a transient storage failure
+        // leaves the level armed and retryable instead of permanently stuck
+        // behind a flag nothing will ever clear.
+        alertClaimsInFlight.delete(alert.id);
+      }
+    }
+    renderAlerts();
+  }
+
+  function announceMcAlert(alert, observed) {
+    const name = alert.symbol || E.short(alert.mint || '');
+    const hit = Number(observed && observed.mcap) > 0 ? fmtMoney(observed.mcap) : null;
+    const armed = alert.armedAtMcap ? ` · armed at ${fmtMoney(alert.armedAtMcap)}` : '';
+
+    postDesktopAlert(alert, hit ? `Now ${hit}${armed}` : `Level reached${armed}`);
+    playAlertChime();
+    // The panel says it too, ALWAYS — not only when the desktop notification
+    // failed. A notification can be posted straight into a Do-Not-Disturb and
+    // never seen, and the trader who armed the level is owed the answer on
+    // the surface they armed it from.
+    toast(`${name} ${alert.kind === 'above' ? 'above' : 'below'} ${fmtMoney(alert.mcap)} MC 🔔`
+      + (hit ? ` — now ${hit}` : ''));
+  }
+
   /* Toasts (DEFECT O-28). The old stack sat at top:74 — ON the panel header
    * (top:84) at the same z — and cycled 4 slots by modulo, so a 5th toast
    * within ~4 s overprinted the 1st. Now:
@@ -6121,6 +6574,10 @@
     // while the live card sits empty — reported as "sell button disappearing"
     // after toggling the overlay or switching sites.
     posEls = null;
+    // Same reason, same failure: a stale alertEls would let a re-enabled
+    // overlay skip buildAlertsSection and then paint armed levels into a
+    // detached node, leaving the live panel's alert list permanently empty.
+    alertEls = null;
     lastRenderedPrice = null;
   }
 

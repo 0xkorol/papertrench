@@ -67,6 +67,8 @@ const DEFAULTS = {
   tradeSoundsEnabled: true,
   profitAlertsEnabled: false,
   profitAlertPct: 10,
+  mcAlertsEnabled: true,
+  mcAlertDesktopEnabled: true,
   averagePriceLinesEnabled: true,
   positionsBarEnabled: true,
   positionsBarHidden: false,

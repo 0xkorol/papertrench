@@ -3820,6 +3820,8 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-sounds" ${settings.tradeSoundsEnabled ? 'checked' : ''}> Trade sounds</label><small>Synthesized locally — no audio files, no network calls.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-profit-alerts" ${settings.profitAlertsEnabled ? 'checked' : ''}> Profit sound when the tab is hidden</label><small>Rings once per new profit threshold while the tab is in the background.</small></div>
         <div class="field"><label for="set-profit-alert-pct">Profit bell interval (%)</label><input id="set-profit-alert-pct" type="number" min="1" max="1000" step="1" value="${settings.profitAlertPct || 10}"><small>10 rings at +10%, +20%, +30%. Crossed levels never repeat.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-mc-alerts" ${settings.mcAlertsEnabled !== false ? 'checked' : ''}> Market cap alerts</label><small>Arm “alert above / alert below” on any token from the panel — including ones you do not hold. Watched from whichever trading tab you have open, so a level still fires while you are looking at a different chart.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-mc-alert-desktop" ${settings.mcAlertDesktopEnabled !== false ? 'checked' : ''}> Desktop notification when one fires</label><small>Posted through the trading site's own notification permission, exactly as its built-in alerts are — PaperTrench asks for no notification permission of its own. If a site has notifications blocked, the alert still appears in the panel.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-avg-lines" ${settings.averagePriceLinesEnabled ? 'checked' : ''}> Average entry/exit lines on the chart</label><small>Native “Avg. Fill Price” and “Avg. Exit Price” lines from your paper fills.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-positions-bar" ${settings.positionsBarEnabled !== false ? 'checked' : ''}> Positions bar</label><small>A top rail on every trading page showing all open paper positions and their live P&amp;L. Click a position to jump to its chart.</small></div>
       </div>
@@ -4119,6 +4121,8 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     tradeSoundsEnabled: document.getElementById('set-sounds').checked,
     profitAlertsEnabled: document.getElementById('set-profit-alerts').checked,
     profitAlertPct: Math.max(1, Number(document.getElementById('set-profit-alert-pct').value) || 10),
+    mcAlertsEnabled: document.getElementById('set-mc-alerts').checked,
+    mcAlertDesktopEnabled: document.getElementById('set-mc-alert-desktop').checked,
     averagePriceLinesEnabled: document.getElementById('set-avg-lines').checked,
     positionsBarEnabled: document.getElementById('set-positions-bar').checked,
     appEnabled: document.getElementById('set-app-enabled').checked,

@@ -5,6 +5,29 @@ details live in the commit messages.
 
 ## Unreleased
 
+**Market cap alerts — "tell me when it hits 500K."** Requested by
+meestershrek. Arm an alert above or below any market cap from the panel and
+get pinged when the market gets there. Type it the way you say it — `500K`,
+`1.2M`, `850000` — and it fires once.
+
+- **You do not have to own it.** An alert needs no position, which is the
+  point: the coin you most want a ping on is the one you have not bought yet.
+  This is the watchlist PaperTrench never had.
+- **It fires while you are looking at something else.** Armed levels ride the
+  same price request the positions bar already sends, so an alert on one coin
+  still lands while you are deep in another chart on any open terminal tab.
+- **The ping is a real desktop notification** — posted through the trading
+  site's own notification permission, exactly the way its built-in alerts
+  work. PaperTrench asks for no new browser permission to do this. If a site
+  has notifications switched off, the alert still appears in the panel, and
+  the panel says so *before* you arm one rather than after one fails to
+  arrive.
+- **One level, one ping.** Three terminals open is still one notification.
+- **It reports what actually happened.** Memecoins do not stop politely at
+  your level, so a fired alert shows the cap it *hit* beside the one you
+  asked for — `500K → hit 1.18M` — the same both-numbers rule a gapped stop
+  follows.
+
 **Take profits and stops you drag on the chart.** The exit half of paper
 trading, with a real terminal's ergonomics: arm a take profit or a stop and it
 draws as a line you can grab and drop where you want out. They are the site's
