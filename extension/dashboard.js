@@ -3179,8 +3179,18 @@ function renderLeaderboard(el) {
         <h3>Identity</h3>
         ${identity ? `
           <div class="stat"><span>Linked account</span><span style="font-weight:750">@${esc(identity.handle)}
-            <span class="lb-x ${identity.verified ? 'verified' : ''}">${identity.verified ? 'verified' : 'unverified'}</span></span></div>
+            <span class="lb-x ${identity.verified ? 'verified' : ''}">${identity.verified ? 'verified' : 'not verified yet'}</span></span></div>
           <div class="stat"><span>Linked at</span><span class="dim">${formatDateTime(identity.linkedAt)}</span></div>
+          ${identity.verified ? '' : `
+          <p class="dim" style="font-size:12px;line-height:1.55;margin:12px 0 0">
+            Verification happens on papertrench.com, not here: sign in with X there and
+            your submissions rank as verified. This chip stays gray on purpose — the
+            extension never phones the server to ask, so it only vouches for what
+            happened locally. The board goes by the site's word, not this chip.
+          </p>
+          <a class="btn" href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener"
+             style="margin-top:10px;display:inline-block">Sign in on papertrench.com →</a>
+          `}
           <p class="dim" style="font-size:12px;line-height:1.55;margin:12px 0 0">
             Ranking is bound to this account, so competing under many identities costs
             a real, publicly visible X account each time.
