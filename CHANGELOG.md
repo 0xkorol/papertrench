@@ -21,7 +21,9 @@ details live in the commit messages.
   used to ride a cross-domain cookie that Safari blocks, Firefox partitions,
   and Brave/private-mode Chrome drops — so sign-in completed and the site
   still showed you signed out. The sign-in now hands the session token to
-  the page directly (needs the updated worker deployed).
+  the page directly. Worker and site both deployed 2026-08-06.
+
+## v3.0.0 — 2026-08-06
 
 A major version because the product gained a second asset class. Perps can
 take your whole position in a single move, which is a different lesson from

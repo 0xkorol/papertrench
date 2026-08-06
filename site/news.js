@@ -28,6 +28,23 @@
 
   const RELEASES = [
     {
+      v: '3.0.0', date: 'Aug 6, 2026', iso: '2026-08-06',
+      tags: ['feature', 'fix'],
+      major: true,
+      title: 'Paper perps on Hyperliquid and Jupiter — a second asset class',
+      blurb: 'Leverage on the venues you actually use, with the venue’s own fees, funding and liquidation math. A major version because a liquidation can take your whole position — a different lesson from spot, announced as one.',
+      article: 'news-perps.html',
+      points: [
+        '<b>Four numbers before every entry.</b> Position size, the fee to open, your liquidation price with how far away it is, and what the position costs per hour to hold. On Hyperliquid the liquidation distance is also shown in ATRs — “1.3 ATR away on the 5m” says whether ordinary noise reaches it.',
+        '<b>Real venue costs, not a house average.</b> Hyperliquid’s own taker/maker fees and hourly funding at the live rate; Jupiter’s 6 bps base fee, its price-impact fee, and hourly borrow. If the venue’s live rate can’t be read, the ticket won’t open — a perp without funding is a fantasy where leverage is free.',
+        '<b>Liquidation is modelled, not simulated loosely.</b> Isolated margin; Hyperliquid liquidations fill at the trigger and return what survives, Jupiter forfeits remaining collateral, as each venue does it. Away from the tab, funding accrues and gaps settle against the venue’s own history — reconstructed rounds say so, unobserved time is never invented.',
+        '<b>Kept apart from your spot record on purpose.</b> A perps dashboard tab with its own balance and rounds; nothing leveraged ever flatters (or damages) the spot record you graduate against. The release notes lead with what perps do <em>not</em> model yet — seven named limits.',
+        '<b>Market cap alerts.</b> “Tell me when it hits 500K” — armed from the panel, fires once as a real desktop notification, no position needed, and it reports the cap it actually saw.',
+        '<b>Take profits and stops you drag on the chart.</b> The level means the same thing on every axis, and a stop that gaps fills where the market actually was.',
+        '<b>Forge and Turbo II ride along</b>, with the fomo honesty pass and fixes: updates no longer half-kill open tabs, Birdeye works again, the entry line stopped teleporting, the Game tab shows up.',
+      ],
+    },
+    {
       site: true, date: 'Aug 6, 2026', iso: '2026-08-06',
       tags: ['feature', 'security'],
       major: true,

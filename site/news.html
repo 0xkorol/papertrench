@@ -58,8 +58,8 @@
            reads "0 NUMBERS INVENTED" cannot carry a stale one, so
            scripts/preflight.sh now recomputes both and fails the release if
            either disagrees. Update them together with that check, never alone.
-           1284 = 1168 extension + 116 server. -->
-      <div><div class="num g" style="color:var(--green)" data-check="tests">1284</div><div class="lbl">TESTS PASSING</div></div>
+           1450 = 1332 extension + 118 server. -->
+      <div><div class="num g" style="color:var(--green)" data-check="tests">1450</div><div class="lbl">TESTS PASSING</div></div>
       <div><div class="num b" style="color:var(--blue)" data-check="defects">131</div><div class="lbl">AUDITED DEFECTS CLOSED</div></div>
       <div><div class="num o" style="color:var(--violet)">0</div><div class="lbl">NUMBERS INVENTED</div></div>
     </div>
@@ -75,7 +75,18 @@
 
     <div class="feat-grid">
 
-      <a class="feat-card lead a-green reveal" href="news-chain.html">
+      <a class="feat-card lead a-violet reveal" href="news-perps.html">
+        <div class="feat-meta">
+          <span class="ver-chip major">v3.0.0</span>
+          <span class="tag feature">Feature</span>
+          <time class="feat-date" datetime="2026-08-06">Aug 6, 2026</time>
+        </div>
+        <h3>Perps arrive — with the honest list of what they don't model</h3>
+        <p>Leveraged paper trading on Hyperliquid and Jupiter, priced with the venue's own fees, funding and liquidation math — four numbers before every entry, and a ticket that refuses to open when the live funding rate can't be read. A liquidation can take your whole position, which is a different lesson from spot, so the notes lead with the seven things perps do <em>not</em> model yet. Plus market-cap alerts, chart take-profit/stop orders, Forge, and Turbo II.</p>
+        <span class="go">Read the full story <span class="arr" aria-hidden="true">→</span></span>
+      </a>
+
+      <a class="feat-card a-green reveal" href="news-chain.html">
         <div class="feat-meta">
           <span class="ver-chip">v2.8.1</span>
           <span class="tag fix">Fix</span>
