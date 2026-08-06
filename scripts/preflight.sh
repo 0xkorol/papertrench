@@ -35,12 +35,21 @@ NAV_MISSING=""
 for page in site/*.html; do
   # Article pages and the Arena family all carry the same nav block.
   grep -q 'class="nav-links"' "$page" || continue
+  # Match inside <nav>…</nav> ONLY. Grepping the whole file passed vacuously on
+  # every page that links these destinations from body copy — which is all six
+  # Arena pages, since they cross-link each other (duel.html alone has seven
+  # body links to duels.html). A page could lose two nav entries and still
+  # report OK. The 15 legacy pages happened to be protected because they carry
+  # no such body links, which is also why a mutation test against news.html
+  # could not tell the two implementations apart.
+  nav=$(sed -n '/<nav>/,/<\/nav>/p' "$page")
   for dest in $NAV_DESTS; do
-    grep -q "href=\"$dest\"" "$page" || NAV_MISSING="$NAV_MISSING $(basename "$page"):$dest"
+    printf '%s' "$nav" | grep -q "href=\"$dest\"" \
+      || NAV_MISSING="$NAV_MISSING $(basename "$page"):$dest"
   done
 done
 [ -z "$NAV_MISSING" ] || fail "nav is missing destinations —$NAV_MISSING"
-echo "nav OK ($(ls site/*.html | wc -l) pages reach leaderboard, sprint and duels)"
+echo "nav OK ($(grep -lc 'class="nav-links"' site/*.html | wc -l) pages reach leaderboard, sprint and duels)"
 
 # The manifest must never regress to <all_urls> content scripts (DEFECT O-09).
 if grep -q '"<all_urls>"' extension/manifest.json; then
