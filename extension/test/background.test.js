@@ -580,6 +580,80 @@ test('pt_site_identity refuses foreign senders and malformed handles', async () 
     'nothing may be stored on a refused link');
 });
 
+/* ---------------- pt_state_commit: the wallet single-writer ----------------
+ *
+ * Before this existed every context wrote pt_state with a bare storage.set:
+ * two writers reading the same base both stamped seq N+1 and the second
+ * silently ate the first. In live use that was one tab's ~800ms heartbeat
+ * eating a fill just made in another — "I placed several buys and the
+ * position vanished, then came back with false P&L" (LYAR field report,
+ * twice). The worker now serializes every write and refuses a stale base.
+ */
+
+test('pt_state_commit: a matching base lands verbatim, a stale base is refused with current', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_state = { seq: 5, positions: {}, journal: [] };
+  const landed = await sendFrom(worker.listener, {
+    type: 'pt_state_commit',
+    state: { seq: 6, updatedAt: 1, positions: {}, journal: [{ id: 'f1', side: 'buy' }] },
+    expectedSeq: 5,
+  }, RELAY_SENDER);
+  assert.equal(landed.ok, true);
+  assert.equal(worker.values.pt_state.seq, 6, 'the committed seq is the writer\'s stamp, not a re-bump');
+  const stale = await sendFrom(worker.listener, {
+    type: 'pt_state_commit',
+    state: { seq: 6, updatedAt: 2, positions: {}, journal: [] },
+    expectedSeq: 5,
+  }, RELAY_SENDER);
+  assert.equal(stale.ok, false);
+  assert.equal(stale.reason, 'stale');
+  assert.equal(stale.current.journal[0].id, 'f1',
+    'the refused writer is handed the truth it must adopt');
+});
+
+test('pt_state_commit: the LYAR race — a stale heartbeat can no longer eat a fill', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_state = { seq: 10, positions: {}, journal: [] };
+  // Tab A lands a fill off base 10.
+  const fill = await sendFrom(worker.listener, {
+    type: 'pt_state_commit',
+    state: {
+      seq: 11, updatedAt: 100,
+      positions: { MintA: { qty: 1000, costSol: 1 } },
+      journal: [{ id: 'fill-1', side: 'buy', mint: 'MintA' }],
+    },
+    expectedSeq: 10,
+  }, RELAY_SENDER);
+  assert.equal(fill.ok, true);
+  // Tab B's heartbeat, still holding base 10 (it read before A wrote — the
+  // exact interleaving that used to erase the position from the wallet).
+  const heartbeat = await sendFrom(worker.listener, {
+    type: 'pt_state_commit',
+    state: { seq: 11, updatedAt: 101, positions: {}, journal: [] },
+    expectedSeq: 10,
+  }, RELAY_SENDER);
+  assert.equal(heartbeat.ok, false, 'the blind overwrite must be refused');
+  assert.ok(worker.values.pt_state.positions.MintA,
+    'the position survives in storage');
+  assert.equal(worker.values.pt_state.journal[0].id, 'fill-1',
+    'the fill survives in storage');
+  assert.ok(heartbeat.current.positions.MintA,
+    'the refused heartbeat is handed the state WITH the fill to adopt');
+});
+
+test('pt_state_commit: force lands regardless — a reset or restore is the new truth', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_state = { seq: 42, positions: { MintA: { qty: 1 } }, journal: [{ id: 'old' }] };
+  const reset = await sendFrom(worker.listener, {
+    type: 'pt_state_commit',
+    state: { seq: 43, updatedAt: 7, positions: {}, journal: [] },
+    force: true,
+    expectedSeq: 0,
+  }, RELAY_SENDER);
+  assert.equal(reset.ok, true);
+  assert.deepEqual(worker.values.pt_state.journal, [], 'the reset wallet stands');
+});
+
 test('relayed bridge requests honor the origin gate and the Site-sync toggle', async () => {
   const worker = serviceWorker();
   const foreignPing = await sendFrom(worker.listener, { type: 'pt_bridge_ping' }, FOREIGN_SENDER);

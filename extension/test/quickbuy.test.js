@@ -77,7 +77,7 @@ test('a fill made off-chart appears when the chart is entered — and never draw
   const restoreBlock = content.slice(restoreAt, content.indexOf('\n  }', restoreAt) + 4);
   assert.match(restoreBlock, /if \(f\.id && drawnFillIds\.has\(f\.id\)\) continue;/,
     'replay must skip fills already on this chart');
-  const liveNotes = content.match(/drawnFillIds\.add\(trade\.id\);/g) || [];
+  const liveNotes = content.match(/drawnFillIds\.add\((?:filled\.)?trade\.id\);/g) || [];
   assert.ok(liveNotes.length >= 2,
     'live buy AND sell paths must register their fills with the replay ledger');
   const clears = content.match(/drawnFillIds\.clear\(\);/g) || [];
@@ -170,13 +170,13 @@ test('row buys run the full fill pipeline and never navigate the row', () => {
   // The tap must not trigger the row's own navigation or click handlers.
   assert.match(bridge, /ev\.preventDefault\(\);\s*\n\s*ev\.stopPropagation\(\);\s*\n\s*ev\.stopImmediatePropagation\(\);/);
   // The fill goes through the engine and the attestation chain, like any buy.
-  assert.match(content, /doRowBuy[\s\S]{0,1600}E\.buy\(state, settings/);
-  assert.match(content, /doRowBuy[\s\S]{0,2400}commitFill\(trade\)/);
+  assert.match(content, /doRowBuy[\s\S]{0,2600}E\.buy\(state, settings/);
+  assert.match(content, /doRowBuy[\s\S]{0,3400}commitFill\(filled\.trade\)/);
   // The screener's own realtime price is preferred when fresh.
   assert.match(content, /recentRowPrices/);
   // The new position surfaces immediately in the rail. (Window widened when
   // the F-04 freshness fix added its rationale comment to doRowBuy.)
-  assert.match(content, /doRowBuy[\s\S]{0,2800}renderPositionsBar\(\)/);
+  assert.match(content, /doRowBuy[\s\S]{0,3800}renderPositionsBar\(\)/);
   // The scanner runs on the positions-bar cadence, which works on pages with
   // no detected token — exactly the screener situation.
   assert.match(content, /renderPositionsBar\(\);\s*\n\s*\/\/ Screener rows render continuously; catch new ones on this cadence\.\s*\n\s*scanRowBuys\(\);/);

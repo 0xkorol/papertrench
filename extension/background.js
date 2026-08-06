@@ -2464,6 +2464,10 @@ function isValidTokenForRefresh(t) {
   return true;
 }
 
+// pt_state_commit serialization: one write finishes (read + compare + set)
+// before the next begins, whatever context it came from.
+let stateCommitQueue = Promise.resolve();
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return;
 
@@ -2533,6 +2537,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await instantSitesReconcile();
         sendResponse({ ok: true });
         break;
+
+      // ------------------------- wallet commit (single writer) ------------
+      // Every pt_state write flows through here, strictly serialized, with a
+      // seq compare-and-swap. Before this existed, each context wrote the
+      // whole state blob with chrome.storage.local.set directly, and two
+      // writers reading the same base clobbered each other — the ~800ms
+      // heartbeat in one tab could overwrite a fill just made in another,
+      // which is exactly "I placed several buys and the position vanished,
+      // then came back with false P&L" (LYAR field report, twice). A stale
+      // writer now gets {stale, current} back and must adopt-and-reapply
+      // instead of clobbering; `force` is for the user-singular writers that
+      // ARE the new truth (wallet reset, backup restore).
+      case 'pt_state_commit': {
+        const job = async () => {
+          const incoming = message.state;
+          if (!incoming || typeof incoming !== 'object') return { ok: false, reason: 'bad-state' };
+          const stored = await getState();
+          if (!message.force) {
+            const baseSeq = Number(message.expectedSeq) || 0;
+            const storedSeq = stored ? (Number(stored.seq) || 0) : 0;
+            if (stored && storedSeq !== baseSeq) {
+              return { ok: false, reason: 'stale', current: stored };
+            }
+          }
+          // NOT setState(): that helper bumps seq itself, and the committing
+          // tab has already stamped seq/updatedAt — its own-write suppression
+          // (F-41 stamp) depends on what lands being byte-identical.
+          await new Promise((resolve) =>
+            chrome.storage.local.set({ pt_state: incoming }, () => resolve()));
+          return { ok: true, seq: Number(incoming.seq) || 0 };
+        };
+        // Strict serialization: a commit never reads while another writes.
+        const run = stateCommitQueue.then(job, job);
+        stateCommitQueue = run.catch(() => {});
+        sendResponse(await run);
+        break;
+      }
 
       // ------------------------- site relay (site-bridge.js) --------------
       // The papertrench.com content script carries the same two requests the

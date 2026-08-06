@@ -891,7 +891,29 @@ function mutateHarness(initialState) {
   };
   // D-40 wired mutateState to invalidate the replay-view memo on adoption;
   // the harness only needs it to exist.
-  const sandbox = { store, invalidateReplayView: () => {} };
+  // The worker's serialized CAS commit (pt_state_commit), faked with the
+  // same semantics: refuse a stale base with the current state, otherwise
+  // land the write. Structured-clone at both edges like real Chrome — a
+  // reference-sharing fake is how storage bugs hide from tests.
+  const sandbox = {
+    store,
+    invalidateReplayView: () => {},
+    chrome: {
+      runtime: {
+        sendMessage: async (msg) => {
+          if (!msg || msg.type !== 'pt_state_commit') return {};
+          calls.commits = (calls.commits || 0) + 1;
+          const cur = stored.pt_state;
+          const curSeq = cur ? (Number(cur.seq) || 0) : 0;
+          if (!msg.force && cur && curSeq !== (Number(msg.expectedSeq) || 0)) {
+            return { ok: false, reason: 'stale', current: JSON.parse(JSON.stringify(cur)) };
+          }
+          stored.pt_state = JSON.parse(JSON.stringify(msg.state));
+          return { ok: true, seq: Number(msg.state.seq) || 0 };
+        },
+      },
+    },
+  };
   vm.createContext(sandbox);
   vm.runInContext(
     `let storageReadFailed = false; let state = null;\n${src}\nthis.mutateState = mutateState; this.adopted = () => state;`,

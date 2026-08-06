@@ -512,7 +512,15 @@ async function restoreWallet(ev) {
   const liveSeq = Number(current.pt_state && current.pt_state.seq) || 0;
   const backupSeq = Number(write.pt_state.seq) || 0;
   write.pt_state.seq = Math.max(liveSeq, backupSeq) + 1;
-  await chrome.storage.local.set(write);
+  // The wallet goes through the worker's serialized commit queue (forced —
+  // a restore is the new truth by user intent) so it cannot interleave with
+  // a tab's heartbeat commit; the other keys have no concurrent writers.
+  const restored = await chrome.runtime.sendMessage({
+    type: 'pt_state_commit', state: write.pt_state, force: true,
+  }).catch(() => null);
+  const rest = { ...write };
+  if (restored && restored.ok) delete rest.pt_state;
+  await chrome.storage.local.set(rest);
   chrome.runtime.sendMessage({ type: 'pt_settings_changed' }).catch(() => {});
   $('status').textContent = 'Backup restored.';
   load();

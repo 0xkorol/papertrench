@@ -1610,24 +1610,61 @@
   }
 
   /**
-   * Stamp the current state as the newest version and write it.
+   * Stamp the current state as the newest version and COMMIT it through the
+   * background's serialized compare-and-swap (pt_state_commit).
    *
-   * `seq` is a monotonic write counter: every writer bumps it, and a writer
-   * holding an older base can tell it has been overtaken (see persistSoon).
-   * That is what stops a tab whose adoption lagged from blindly clobbering a
-   * fresher wallet — the failure that made open positions, and therefore the
-   * quick-sell buttons, disappear.
+   * `seq` is a monotonic write counter, and it used to be advisory: every
+   * writer wrote the whole blob with a bare storage.set, so two writers
+   * reading the same base both stamped seq N+1 and the second silently ate
+   * the first — an ~800ms heartbeat in one tab could eat a fill just made
+   * in another, which is exactly "several buys and the position vanished,
+   * then came back with false P&L" (LYAR field report, twice). The worker
+   * now refuses a write whose base is stale and hands back the current
+   * state; this loop adopts it, re-applies what this tab genuinely owns —
+   * its live marks, and the caller's own mutation via `remutate` — and
+   * commits again. Nothing is ever overwritten unseen.
+   *
+   * `remutate` re-applies THIS call's state mutation onto the adopted base
+   * (a fill, an order change). The heartbeat passes none: its marks are
+   * re-applied here and there is nothing else it owns.
    */
-  function persistStateNow() {
-    state.seq = (Number(state.seq) || 0) + 1;
-    state.updatedAt = Date.now();
-    lastWrittenState = state;
-    // F-41: chrome.storage.onChanged delivers a STRUCTURED CLONE, so the
-    // identity check below can never recognize our own write — every local
-    // fill was being re-adopted (and, since F-40, replayed) as if another
-    // tab had made it. The write STAMP survives cloning and does.
-    lastWrittenStamp = `${state.seq}:${state.updatedAt}`;
-    return store.set({ [E.STORAGE_KEYS.state]: state });
+  async function persistStateNow(remutate) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      state.seq = (Number(state.seq) || 0) + 1;
+      state.updatedAt = Date.now();
+      lastWrittenState = state;
+      // F-41: chrome.storage.onChanged delivers a STRUCTURED CLONE, so an
+      // identity check can never recognize our own write — every local
+      // fill was being re-adopted (and, since F-40, replayed) as if another
+      // tab had made it. The write STAMP survives cloning and does.
+      lastWrittenStamp = `${state.seq}:${state.updatedAt}`;
+      const reply = await sendMessage({
+        type: 'pt_state_commit', state, expectedSeq: state.seq - 1,
+      }).catch(() => null);
+      if (reply && reply.ok) return;
+      if (!reply || reply.reason !== 'stale' || !reply.current) {
+        // The worker is unreachable (dying update, cold start failure). A
+        // fill MUST NOT be droppable on availability grounds — fall back to
+        // the direct write this function always did. The clobber window this
+        // reopens is the width of a worker outage, not of every heartbeat.
+        await store.set({ [E.STORAGE_KEYS.state]: state });
+        return;
+      }
+      // Overtaken: someone landed between our base and our commit. Adopt
+      // their truth, put back what is genuinely ours, try again.
+      adoptState(reply.current);
+      if (token && token.mint && Number(token.priceNative) > 0) {
+        E.markPosition(state, token.mint, token.priceNative, token.priceUsd);
+      }
+      for (const mint of Object.keys(livePositionPrices)) {
+        const p = livePositionPrices[mint];
+        if (p && Number(p.priceNative) > 0) E.markPosition(state, mint, p.priceNative, p.priceUsd);
+      }
+      if (remutate) await remutate();
+    }
+    // Four consecutive losses means writers are landing every few ms —
+    // something is wrong enough that pretending to have persisted is worse.
+    throw new Error('The wallet kept changing under this write — please retry');
   }
 
   /**
@@ -1871,20 +1908,33 @@
     const mcap = mcapAtPrice(observedPrice);
     try {
       const result = await withState(async () => {
-        if (!state.positions[mint]) return null;
-        const { trade, position, round } = E.sell(state, settings, {
-          ts: Date.now(), mint, site: site && site.id,
-          qtyFraction: order.sizePct / 100,
-          priceNative: observedPrice,
-          priceUsd,
-          mcap,
-          order,
-        });
-        // The order is spent whether or not it closed the round.
-        E.removeOrder(state, mint, order.id);
-        drawnFillIds.add(trade.id);
+        // Re-runnable mutation — see doBuy: a lost CAS race re-applies this
+        // order fire on the adopted base. The position re-check runs every
+        // attempt: the race that was lost may have been the user's own
+        // manual close in another tab.
+        let filled = null;
+        const mutate = () => {
+          filled = null;
+          if (!state.positions[mint]) return;
+          filled = E.sell(state, settings, {
+            ts: Date.now(), mint, site: site && site.id,
+            qtyFraction: order.sizePct / 100,
+            priceNative: observedPrice,
+            priceUsd,
+            mcap,
+            order,
+          });
+          // The order is spent whether or not it closed the round.
+          E.removeOrder(state, mint, order.id);
+          drawnFillIds.add(filled.trade.id);
+        };
+        mutate();
+        if (!filled) return null;
+        await persistStateNow(mutate);
+        if (!filled) return null; // a retry found the position already gone
+        const { trade, position, round } = filled;
+        // Chain append after the wallet commit — see doBuy for the ordering.
         await commitFill(trade);
-        await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'sell' });
         drawFillOnChart({
@@ -1942,13 +1992,17 @@
   async function armChartOrder(kind, triggerPrice, sizePct) {
     if (!token || !token.mint) throw new Error('No token detected on this page');
     const order = await withState(async () => {
-      const made = E.addOrder(state, token.mint, {
-        kind,
-        triggerPrice,
-        triggerMcap: mcapAtPrice(triggerPrice),
-        sizePct,
-      }, Number(token.priceNative), Date.now());
-      await persistStateNow();
+      let made = null;
+      const mutate = () => {
+        made = E.addOrder(state, token.mint, {
+          kind,
+          triggerPrice,
+          triggerMcap: mcapAtPrice(triggerPrice),
+          sizePct,
+        }, Number(token.priceNative), Date.now());
+      };
+      mutate();
+      await persistStateNow(mutate);
       return made;
     });
     syncChartOrders(true);
@@ -1959,8 +2013,9 @@
   async function cancelChartOrder(id) {
     if (!token || !token.mint) return;
     await withState(async () => {
-      E.removeOrder(state, token.mint, id);
-      await persistStateNow();
+      const mutate = () => E.removeOrder(state, token.mint, id);
+      mutate();
+      await persistStateNow(mutate);
     });
     syncChartOrders(true);
     renderAll();
@@ -1970,8 +2025,9 @@
   async function adoptDraggedOrder(id, triggerPrice) {
     if (!token || !token.mint) return;
     await withState(async () => {
-      E.moveOrder(state, token.mint, id, triggerPrice, mcapAtPrice(triggerPrice));
-      await persistStateNow();
+      const mutate = () => E.moveOrder(state, token.mint, id, triggerPrice, mcapAtPrice(triggerPrice));
+      mutate();
+      await persistStateNow(mutate);
     });
     // Force a repost: the label carries the level and the % from entry, both
     // of which the drag just changed.
@@ -2201,29 +2257,43 @@
     const tQuoted = perfNow();
     try {
       const result = await withState(async () => {
-        if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper buy could be filled');
-        const hadPosition = Boolean(state.positions[token.mint]);
-        const { trade, position } = E.buy(state, settings, {
-          ts: Date.now(), mint: token.mint, pairAddress: token.pairAddress,
-          symbol: token.symbol, name: token.name, site: site.id,
-          priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
-          chain: token.chain || 'solana',
-          solAmount,
-          // The dollar amount the trader actually tapped on a foreign-chain
-          // panel — recorded so receipts echo the order as it was placed.
-          quotedUsd: quotedUsd || undefined,
-        });
-        // F-41: claim the fill in the replay ledger BEFORE anything can
-        // observe it. E.buy has already put the trade in state.journal, and
-        // persistStateNow below fires the storage listener synchronously —
-        // so an unclaimed fill gets replayed by adoptState and then drawn
-        // AGAIN here, as two markers with different mcap inputs (the
-        // maintainer's "a bubble above and below").
-        drawnFillIds.add(trade.id);
-        // Commit the fill to the evidence chain before persisting the wallet,
-        // so the committed record never lags the balance a crash would leave.
+        // The mutation, re-runnable: a commit that loses the CAS race adopts
+        // the winning state and applies this fill AGAIN on that fresh base —
+        // same quote, new trade object; only the attempt that actually lands
+        // is ever chained, drawn, or announced.
+        let filled = null;
+        const mutate = () => {
+          if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper buy could be filled');
+          const hadPosition = Boolean(state.positions[token.mint]);
+          filled = E.buy(state, settings, {
+            ts: Date.now(), mint: token.mint, pairAddress: token.pairAddress,
+            symbol: token.symbol, name: token.name, site: site.id,
+            priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
+            chain: token.chain || 'solana',
+            solAmount,
+            // The dollar amount the trader actually tapped on a foreign-chain
+            // panel — recorded so receipts echo the order as it was placed.
+            quotedUsd: quotedUsd || undefined,
+          });
+          filled.opened = !hadPosition;
+          // F-41: claim the fill in the replay ledger BEFORE anything can
+          // observe it. E.buy has already put the trade in state.journal, and
+          // the commit below fires the storage listener synchronously — so an
+          // unclaimed fill gets replayed by adoptState and then drawn AGAIN
+          // here, as two markers with different mcap inputs (the maintainer's
+          // "a bubble above and below"). A retried attempt claims its new id
+          // the same way; a superseded id in the set is inert.
+          drawnFillIds.add(filled.trade.id);
+        };
+        mutate();
+        await persistStateNow(mutate);
+        const { trade, position, opened } = filled;
+        // The evidence chain is appended AFTER the wallet commit: a chained
+        // link for a fill the CAS could still reject would be a permanent
+        // book/chain divergence, whereas a crash in the gap here leaves a
+        // wallet fill whose link is missing — the exact class commitFill
+        // already tolerates and reports (F-28's tell-the-user-once).
         await commitFill(trade);
-        await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'buy' });
         drawFillOnChart({
@@ -2236,8 +2306,8 @@
           solAmount,
         });
         syncAveragePriceLines();
-        if (!hadPosition) profitAlertLevels.set(token.mint, 0);
-        return { trade, position, opened: !hadPosition };
+        if (opened) profitAlertLevels.set(token.mint, 0);
+        return { trade, position, opened };
       });
       const tCommitted = perfNow();
       if (result) {
@@ -2391,15 +2461,23 @@
     const tQuoted = perfNow();
     try {
       const result = await withState(async () => {
-        if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper sell could be filled');
-        const { trade, position, round } = E.sell(state, settings, {
-          ts: Date.now(), mint: token.mint, site: site.id,
-          qtyFraction: fraction, priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
-        });
-        // F-41: claimed before the journal can be observed (see doBuy).
-        drawnFillIds.add(trade.id);
+        // Re-runnable mutation — see doBuy: a lost CAS race re-applies this
+        // sell on the adopted base; only the landing attempt is chained.
+        let filled = null;
+        const mutate = () => {
+          if (!token || token.mint !== fillQuote.mint) throw new Error('Token changed before the paper sell could be filled');
+          filled = E.sell(state, settings, {
+            ts: Date.now(), mint: token.mint, site: site.id,
+            qtyFraction: fraction, priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
+          });
+          // F-41: claimed before the journal can be observed (see doBuy).
+          drawnFillIds.add(filled.trade.id);
+        };
+        mutate();
+        await persistStateNow(mutate);
+        const { trade, position, round } = filled;
+        // Chain append after the wallet commit — see doBuy for the ordering.
         await commitFill(trade);
-        await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'sell' });
         drawFillOnChart({
@@ -4497,8 +4575,16 @@
     state = fresh;
     livePositionPrices = {};
     posEls = null;
+    // Forced commit: the reset IS the new truth by user intent, but it still
+    // goes through the worker's write queue so it can never interleave with
+    // a heartbeat commit and be half-resurrected. Stamp it as our own write
+    // so the storage echo is not re-adopted (F-41).
+    lastWrittenState = state;
+    lastWrittenStamp = `${state.seq}:${state.updatedAt}`;
+    const committed = await sendMessage({ type: 'pt_state_commit', state: fresh, force: true })
+      .catch(() => null);
+    if (!committed || !committed.ok) await store.set({ [E.STORAGE_KEYS.state]: fresh });
     await store.set({
-      [E.STORAGE_KEYS.state]: fresh,
       [E.STORAGE_KEYS.frames]: [],
       [E.STORAGE_KEYS.replays]: [],
     });
@@ -4727,8 +4813,9 @@
       };
       try {
         await withState(async () => {
-          E.setThesis(state, token.mint, payload, Date.now());
-          await persistStateNow();
+          const mutate = () => E.setThesis(state, token.mint, payload, Date.now());
+          mutate();
+          await persistStateNow(mutate);
         });
       } catch (err) {
         toast((err && err.message) || 'Could not save the thesis');
@@ -4947,16 +5034,24 @@
       }
 
       const result = await withState(async () => {
-        const opened = !state.positions[data.mint];
-        const { trade, position } = E.buy(state, settings, {
-          ts: Date.now(), mint: data.mint, pairAddress: data.pairAddress,
-          symbol: data.symbol, name: data.name, site: site.id,
-          solAmount: amount,
-          priceNative: data.priceNative, priceUsd: data.priceUsd, mcap: data.mcap,
-        });
-        await commitFill(trade);
-        await persistStateNow();
-        return { trade, position, opened };
+        // Re-runnable mutation — see doBuy: a lost CAS race re-applies this
+        // row buy on the adopted base; only the landing attempt is chained.
+        let filled = null;
+        const mutate = () => {
+          const opened = !state.positions[data.mint];
+          filled = E.buy(state, settings, {
+            ts: Date.now(), mint: data.mint, pairAddress: data.pairAddress,
+            symbol: data.symbol, name: data.name, site: site.id,
+            solAmount: amount,
+            priceNative: data.priceNative, priceUsd: data.priceUsd, mcap: data.mcap,
+          });
+          filled.opened = opened;
+        };
+        mutate();
+        await persistStateNow(mutate);
+        // Chain append after the wallet commit — see doBuy for the ordering.
+        await commitFill(filled.trade);
+        return { trade: filled.trade, position: filled.position, opened: filled.opened };
       });
       if (!result) return;
       sendMessage({
@@ -6296,13 +6391,17 @@
 
     try {
       const alert = await withState(async () => {
-        const armed = E.addAlert(state, token.mint, {
-          kind: alertKind,
-          mcap,
-          symbol: token.symbol,
-          chain: token.chain || 'solana',
-        }, liveCapReference(), Date.now());
-        await persistStateNow();
+        let armed = null;
+        const mutate = () => {
+          armed = E.addAlert(state, token.mint, {
+            kind: alertKind,
+            mcap,
+            symbol: token.symbol,
+            chain: token.chain || 'solana',
+          }, liveCapReference(), Date.now());
+        };
+        mutate();
+        await persistStateNow(mutate);
         return armed;
       });
       input.value = '';
@@ -6317,7 +6416,7 @@
     if (!token || !token.mint) return;
     await withState(async () => {
       if (!E.removeAlert(state, token.mint, id)) return;
-      await persistStateNow();
+      await persistStateNow(() => E.removeAlert(state, token.mint, id));
     });
     renderAlerts();
   }
@@ -6441,7 +6540,10 @@
         // returning false IS the claim being lost.
         const won = await withState(async () => {
           if (!E.markAlertFired(state, mint, alert.id, Date.now(), observed)) return null;
-          await persistStateNow();
+          // Re-claim on a lost race: if the adopted state shows another tab
+          // already fired this level, the re-claim returns false and the
+          // adopted truth stands — one level, one ping, whoever wins.
+          await persistStateNow(() => E.markAlertFired(state, mint, alert.id, Date.now(), observed));
           return E.alertsFor(state, mint).find((a) => a.id === alert.id) || null;
         });
         if (won) announceMcAlert(won, observed);

@@ -456,6 +456,42 @@ reject it as `hash-mismatch`. The new server code verifies BOTH versions, so it
 is backward compatible — **redeploy the worker before any extension build that
 writes v2 links reaches a user.**
 
+**F-46 · S1 · pt_state had no atomic commit — one tab's heartbeat could eat another tab's fill, then half-resurrect it**
+every `pt_state` writer (content persistStateNow/persistSoon, dashboard
+mutateState, popup restore, content quickResetWallet) · LYAR, X DM field
+report, TWICE ("place several buys, suddenly the position vanish from the
+overlay… then there is a difference between cash and equity"; after a first
+"should be fixed": "the issue is still here… most of the time it goes back
+in the green and the pnl is false then, it goes both ways") · **fixed
+(unreleased)**.
+Every context wrote the whole state blob with a bare
+`chrome.storage.local.set`. `seq` was advisory: two writers reading the same
+base both stamped N+1 and the second silently destroyed the first. The
+~800ms mark heartbeat in any open tab made the interleaving routine — read
+before another tab's fill lands, write after it, and the fill is gone from
+storage while the filling tab still renders it; the next adoption event then
+tears it off that tab's overlay too (position vanishes mid-session), and
+later heartbeats from tabs holding other bases partially resurrect older
+copies (cash/equity mismatch, "false pnl, both ways"). persistSoon's
+read-first guard only caught writes that landed BEFORE its read — the
+TOCTOU window between read and write stayed open.
+Fix: `pt_state_commit` in the worker — every write serialized through one
+queue with a seq compare-and-swap. A stale base is refused and handed the
+current state; the writer adopts it, re-applies what it genuinely owns (its
+live marks, and its own mutation via the new `remutate` argument to
+persistStateNow), and commits again. Fill/order/alert/thesis mutations all
+pass remutate; resets and restores commit with `force` (user-singular
+truth) but still ride the queue so they cannot interleave. Chain append
+moved AFTER the wallet commit: a chained link for a CAS-rejected fill would
+be permanent book/chain divergence, while a crash in the new gap leaves a
+wallet fill with a missing link — the exact class commitFill already
+tolerates and reports once (F-28). Residual accepted: the worker-unreachable
+fallback is a direct write (availability over the rare race), and
+mark-only/postexit flushes without remutate self-heal on the next poll.
+CAS guard mutation-verified: disabling the seq comparison fails four
+assertions including the named LYAR-race lock in
+`test/background.test.js`.
+
 **F-45 · S3 · Padre's URL slot is a MARKET address and we label it `kind: 'mint'` — a mislabel that has only ever been survivable by luck**
 `sites.js` padre adapter · found by reading Padre's own shipped bundle
 (`trade.padre.gg/assets/index-*.js`, logged-out, 2026-08-06) while scoping

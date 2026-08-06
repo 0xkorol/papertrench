@@ -668,7 +668,15 @@ async function mutateState(mutate, retries = 3) {
     if (check === null) throw unreadable();
     const checkSeq = Number(check.pt_state && check.pt_state.seq) || 0;
     if (checkSeq !== baseSeq) continue;
-    await store.set({ pt_state: fresh });
+    // The check above narrows the race; the worker's serialized CAS commit
+    // CLOSES it — a base that went stale between check and write comes back
+    // {stale} instead of clobbering, and the loop re-applies on the newer
+    // state like it already knows how to.
+    const committed = await chrome.runtime.sendMessage({
+      type: 'pt_state_commit', state: fresh, expectedSeq: baseSeq,
+    }).catch(() => null);
+    if (!committed) { await store.set({ pt_state: fresh }); } // worker unreachable
+    else if (!committed.ok) continue;
     state = fresh;
     // D-40: the adopted state carries new journal/rounds — replay views
     // built from the old one are stale.
