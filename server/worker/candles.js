@@ -13,7 +13,36 @@
  */
 'use strict';
 
-const GT = 'https://api.geckoterminal.com/api/v2';
+/**
+ * Two hosts serve the same on-chain candle data, and only one of them can be
+ * given a quota.
+ *
+ * api.geckoterminal.com is keyless and rate-limits by IP — which is fatal
+ * here, because Cloudflare Workers egress from addresses shared with every
+ * other Worker on the platform, so the quota is already spent by strangers
+ * and it answers 429 more or less permanently. Verified: it also returns 200
+ * for a request carrying a deliberately bogus API key, i.e. it ignores keys
+ * entirely, so no header can rescue it.
+ *
+ * The identical dataset is exposed under CoinGecko's keyed API at
+ * /api/v3/onchain, which 401s without a key — proof the key is actually read
+ * there. A free Demo key therefore moves the quota from "whoever shares this
+ * IP" to this account, which is the whole fix.
+ */
+const GT_KEYLESS = 'https://api.geckoterminal.com/api/v2';
+const GT_DEMO = 'https://api.coingecko.com/api/v3/onchain';
+const GT_PRO = 'https://pro-api.coingecko.com/api/v3/onchain';
+
+/** Base URL and auth header for whatever credentials this deploy has. */
+function endpoint(env) {
+  if (env && env.GECKO_PRO_KEY) {
+    return { base: GT_PRO, header: 'x-cg-pro-api-key', key: env.GECKO_PRO_KEY };
+  }
+  if (env && env.GECKO_API_KEY) {
+    return { base: GT_DEMO, header: 'x-cg-demo-api-key', key: env.GECKO_API_KEY };
+  }
+  return { base: GT_KEYLESS, header: null, key: null };
+}
 // Raydium SOL/USDC — the deepest, oldest SOL pool; used for SOL/USD minutes.
 const SOL_USD_POOL = '58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2';
 const SOL_KEY = '__SOL_USD__';
@@ -21,23 +50,18 @@ const NO_DATA_RETRY_MS = 6 * 60 * 60 * 1000;
 const POOL_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * GeckoTerminal's free tier rate-limits by IP, and Cloudflare Workers egress
- * from a pool of addresses shared with every other Worker on the platform. In
- * practice that quota is already spent by someone else, so the keyless API
- * answers 429 more or less permanently and re-pricing never completes — the
- * records sit at `pending` forever, which is honest but useless.
- *
- * A CoinGecko Demo key (free) moves the quota from "whoever shares this IP" to
- * "this account". When GECKO_API_KEY is set it is sent on every call; without
- * it the code still works exactly as before, so a deploy without the secret
- * degrades rather than breaks.
+ * Fetch a PATH, resolved against whichever host this deploy has credentials
+ * for. Without a key that is the keyless GeckoTerminal host, which works but
+ * shares an IP quota with every other Cloudflare Worker; with one it is
+ * CoinGecko's keyed mirror of the same data.
  */
-async function gtJson(env, url) {
+async function gtJson(env, path) {
+  const { base, header, key } = endpoint(env);
   const headers = { Accept: 'application/json' };
-  if (env && env.GECKO_API_KEY) headers['x-cg-demo-api-key'] = env.GECKO_API_KEY;
-  const res = await fetch(url, { headers });
+  if (header && key) headers[header] = key;
+  const res = await fetch(base + path, { headers });
   if (res.status === 429) {
-    const err = new Error('geckoterminal-rate-limited');
+    const err = new Error('candle-source-rate-limited');
     err.rateLimited = true;
     throw err;
   }
@@ -53,7 +77,7 @@ async function poolFor(env, mint) {
   if (cached && (cached.pool_id || now - cached.fetched_at < POOL_TTL_MS)) {
     return cached.pool_id || null;
   }
-  const data = await gtJson(env, `${GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`);
+  const data = await gtJson(env, `/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`);
   const pool = data && Array.isArray(data.data) && data.data[0]
     ? String(data.data[0].attributes.address) : null;
   await env.DB.prepare(`
@@ -87,7 +111,7 @@ async function ohlcvWindow(env, pool, minuteTs) {
   // candle in the range — which covers a record moving forward in time.
   const beforeSec = Math.floor(minuteTs / 1000) + OHLCV_WINDOW * 60;
   const data = await gtJson(env,
-    `${GT}/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/minute` +
+    `/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/minute` +
     `?aggregate=1&before_timestamp=${beforeSec}&limit=${OHLCV_WINDOW}&currency=usd`);
   const rows = data && data.data && data.data.attributes && data.data.attributes.ohlcv_list;
   if (!Array.isArray(rows)) return null;
