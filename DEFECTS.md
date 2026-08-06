@@ -456,6 +456,36 @@ reject it as `hash-mismatch`. The new server code verifies BOTH versions, so it
 is backward compatible — **redeploy the worker before any extension build that
 writes v2 links reaches a user.**
 
+**F-47 · S1 · a fill could execute at a resurrected dead price — a loss rendered as +167%**
+content.js quoteForTrade / quote.js · chatcabal, Twitch + Matt Buitrago's
+Discord screenshots, 2026-08-06 (Axiom, migrated Pump-AMM coin "fork",
+871M supply) · **fixed (unreleased)**.
+The market crashed ~$30K → ~$8K market cap inside a minute. His DCA buy
+filled honestly at the crashed level ($6.8K MC — proof the pipeline HAD the
+truth), and the SELL sixty seconds later filled at the pre-crash level
+($30.0K MC, ≈ the header's ATH): 8.09 SOL returned on 3 SOL in, a real loss
+shown as +167%. The screenshots cannot pin WHICH source served the dead
+price — the action-resolver refresh is adopted with no agreement check, an
+on-chain quote is unchecked whenever the screen is >600ms quiet
+(ONCHAIN_SCREEN_CHECK_MAX_AGE_MS), and a poisoned snapshot re-stamped
+"fresh" passes the age bounds — but all three share one shape: the chosen
+candidate contradicted market evidence the same tab had JUST accepted as
+money.
+Fix is the shape, not the source: the fill witness. Every fill-time
+candidate is judged against the freshest ACCEPTED evidence (validated ticks
+and committed fills — deliberately never token.priceNative, which requote()
+overwrites with resolver prices). Divergence beyond FILL_WITNESS_RATIO (2x)
+within FILL_WITNESS_WINDOW_MS (120s) demands an INDEPENDENT second source;
+a dissenting or missing witness refuses the fill with both numbers named. A
+real 4x pump is confirmed by any fresh witness and fills normally; ordinary
+moves never pay the witness round trip. Both guards mutation-verified
+(`test/fillwitness.test.js`, the report's own numbers as the named
+regression). Residual, named honestly: a witness that lags in the same
+direction as the candidate (aggregator still serving the pre-crash price
+within seconds of the crash) can still confirm it — two lagging sources
+agreeing is indistinguishable from truth without a chain read; the on-chain
+witness path covers venues the feed can watch.
+
 **F-46 · S1 · pt_state had no atomic commit — one tab's heartbeat could eat another tab's fill, then half-resurrect it**
 every `pt_state` writer (content persistStateNow/persistSoon, dashboard
 mutateState, popup restore, content quickResetWallet) · LYAR, X DM field

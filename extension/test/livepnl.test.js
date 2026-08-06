@@ -570,3 +570,17 @@ test('a falling tick while the position is still up stays entirely green', async
   assert.equal(classes.has('pt-flash-down'), false,
     'tick direction must not create a red flash while total P&L is positive');
 });
+
+test('the quick-sell row never moves when the P&L wraps (gibsonandjustin)', () => {
+  // "When i buy, the bottom click to sell keeps moving when i am in profit
+  // or not" — the 21px P&L line wraps to two lines as the number grows (a
+  // sign flip, an extra digit, the USD part) and un-wraps as it shrinks,
+  // and the sell buttons sit directly below it. The card must reserve the
+  // two-line space permanently so the row is a stable click target.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const pnlBlock = src.slice(src.indexOf('.pt-pos .pnl {'), src.indexOf('.pt-pos .pnl .usd-part'));
+  assert.match(pnlBlock, /min-height: calc\(2 \* 1\.25em \+ 10px\);/,
+    'the P&L block must reserve its wrapped height, or the sell row shifts under the cursor');
+});

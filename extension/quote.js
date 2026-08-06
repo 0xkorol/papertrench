@@ -841,6 +841,50 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * 4b. Fill witness — no single source may resurrect a dead price
+   * ------------------------------------------------------------------ */
+
+  // Field report (chatcabal, Axiom, a migrated Pump-AMM coin): the market
+  // crashed ~30K -> ~8K, his DCA buy filled honestly at the crashed price,
+  // and the SELL one minute later filled at the pre-crash level — a loss
+  // rendered as +167%. Whichever source served that number (a lagging
+  // aggregator refresh, a frozen feed's last accepted tick, a wrong pool
+  // read), the corruption shares one shape: the chosen fill price
+  // contradicted market evidence this same tab had JUST accepted as money.
+  // The discipline: a fill-time candidate that diverges from recent
+  // evidence by more than FILL_WITNESS_RATIO must be confirmed by an
+  // INDEPENDENT second source before it can price a fill. No witness, or a
+  // dissenting witness, refuses the fill — an honest refusal beats a 2.7x
+  // phantom win, and a refused click can be re-clicked two seconds later.
+  //
+  // The window is generous (memecoins genuinely 4x in a minute — a REAL
+  // move is confirmed by any fresh witness and fills normally); the ratio
+  // is what a 1s chart cannot do between two consecutive honest reads.
+  var FILL_WITNESS_WINDOW_MS = 120000;
+  var FILL_WITNESS_RATIO = 2;
+  var FILL_WITNESS_AGREE_RATIO = 1.6;
+
+  /** Does this candidate need a second, independent source to vouch for it? */
+  function needsFillWitness(candidateNative, evidenceNative, evidenceAgeMs) {
+    if (!(candidateNative > 0) || !(evidenceNative > 0)) return false;
+    if (!(evidenceAgeMs >= 0) || evidenceAgeMs > FILL_WITNESS_WINDOW_MS) return false;
+    var ratio = candidateNative > evidenceNative
+      ? candidateNative / evidenceNative
+      : evidenceNative / candidateNative;
+    return ratio > FILL_WITNESS_RATIO;
+  }
+
+  /** A missing witness never confirms: a violent divergence that no second
+   * source can corroborate is exactly a guess, and a guess must not fill. */
+  function witnessAgrees(candidateNative, witnessNative) {
+    if (!(candidateNative > 0) || !(witnessNative > 0)) return false;
+    var ratio = candidateNative > witnessNative
+      ? candidateNative / witnessNative
+      : witnessNative / candidateNative;
+    return ratio <= FILL_WITNESS_AGREE_RATIO;
+  }
+
+  /* ------------------------------------------------------------------ *
    * 5. Live position mark
    * ------------------------------------------------------------------ */
 
@@ -1139,6 +1183,11 @@
     shouldRequote,
     isPriceStale,
     fillSourcesAgree,
+    needsFillWitness,
+    witnessAgrees,
+    FILL_WITNESS_WINDOW_MS,
+    FILL_WITNESS_RATIO,
+    FILL_WITNESS_AGREE_RATIO,
     isPumpFamily,
     bootstrapSupply,
     rugVerdict,

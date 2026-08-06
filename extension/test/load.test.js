@@ -327,7 +327,7 @@ test('quoteForTrade fills honestly: fresh sources first, stale snapshots bounded
   // pending window for unresolved launches → one resolver refresh → 3 s last
   // resort for every source alike → refuse with a visible reason.
   const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
-  const fnStart = contentSrc.indexOf('async function quoteForTrade()');
+  const fnStart = contentSrc.indexOf('async function pickQuoteForTrade()');
   assert.ok(fnStart !== -1, 'quoteForTrade must exist');
   const block = contentSrc.slice(fnStart, contentSrc.indexOf('\n  }', fnStart) + 4);
 
@@ -680,7 +680,7 @@ test('quoteForTrade reconciles the chain authority with the price on screen (F-3
   // takes the price the trader actually clicked on, with a console.debug
   // trail so the report carries evidence.
   const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
-  const fnStart = contentSrc.indexOf('async function quoteForTrade()');
+  const fnStart = contentSrc.indexOf('async function pickQuoteForTrade()');
   const block = contentSrc.slice(fnStart, contentSrc.indexOf('\n  }', fnStart) + 4);
 
   assert.match(block, /fillSourcesAgree\(onchain\.priceNative, atClick\.priceNative\)/,

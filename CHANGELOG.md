@@ -5,6 +5,29 @@ details live in the commit messages.
 
 ## Unreleased
 
+- **A fill can no longer execute at a resurrected dead price.** Field
+  report with screenshots: a coin crashed ~30K → ~8K, the DCA buy filled
+  honestly at the crashed price, and the sell a minute later filled at the
+  pre-crash level — a loss shown as +167%. Any fill price that contradicts
+  what your own screen just accepted as market truth now needs a second,
+  independent source to vouch for it; if none does, the fill is refused
+  out loud with both numbers named, and you click again two seconds later.
+  A real 4x pump is confirmed by any fresh source and fills normally.
+
+- **Rapid buys can no longer vanish and come back wrong.** Field report,
+  twice: several quick buys, the position disappears from the overlay,
+  then returns "in the green" with false P&L and a cash/equity mismatch.
+  Root cause: two parts of the extension writing the wallet at the same
+  moment could silently overwrite each other. Every wallet write now goes
+  through one strictly-ordered commit with conflict detection — a write
+  that lost the race adopts the winner and re-applies itself instead of
+  destroying anything.
+
+- **The sell buttons stopped moving.** The P&L number above them wraps to
+  a second line as it grows and un-wraps as it shrinks, which shoved the
+  quick-sell row up and down under your cursor mid-aim. The card now
+  reserves that space permanently.
+
 - **Brand-new coins are tradeable the moment you land on them — whatever
   launchpad they came from.** The instant path used to exist only for
   pump.fun coins. Now every pending address is probed on-chain once: a pool

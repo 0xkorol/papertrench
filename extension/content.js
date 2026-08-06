@@ -610,6 +610,10 @@
     if (verdict.priceUsd) token.priceUsd = verdict.priceUsd;
     if (verdict.mcap) token.mcap = verdict.mcap;
     token.priceSource = payload.source || 'page-feed';
+    // Market evidence for the fill witness (F-47): only prices the validator
+    // actually ACCEPTED count — never a resolver adoption, which is exactly
+    // the source class that once resurrected a pre-crash price.
+    lastAcceptedMarket = { priceNative: verdict.priceNative, at: Date.now() };
 
     // For a brand-new coin, the first accepted on-screen tick becomes the
     // anchor until the resolver catches up. For resolved coins the anchor is
@@ -1462,7 +1466,59 @@
     };
   }
 
+  // The freshest price this tab accepted as MARKET truth (a validated tick,
+  // or its own committed fill) — the evidence a fill-time candidate is
+  // judged against (F-47). Deliberately NOT token.priceNative: requote()
+  // writes resolver prices there, and a lagging aggregator is precisely the
+  // witness problem, not its solution.
+  let lastAcceptedMarket = null;
+  let lastQuoteRefusal = null;
+
+  /**
+   * F-47 (chatcabal): the market crashed ~30K -> ~8K, the DCA buy filled
+   * honestly at the crashed price, and the sell sixty seconds later filled
+   * at the PRE-crash level — a loss rendered as +167%. Whatever source
+   * served it, the shape is one: a fill candidate that contradicts market
+   * evidence this tab just accepted as money. Such a candidate needs an
+   * independent second source to vouch for it; no witness, or a dissenting
+   * one, refuses the fill out loud. A real 4x move is confirmed by any
+   * fresh witness and fills normally.
+   */
+  async function corroborateForFill(chosen) {
+    lastQuoteRefusal = null;
+    if (!chosen) return null;
+    const evidence = lastAcceptedMarket;
+    const evidenceAge = evidence ? Date.now() - evidence.at : Infinity;
+    if (!Q.needsFillWitness(chosen.priceNative, evidence && evidence.priceNative, evidenceAge)) {
+      return chosen;
+    }
+    // The witness must be INDEPENDENT of the candidate's own source.
+    let witnessNative = null;
+    if (chosen.source === 'action-resolver') {
+      const obs = await R.onchainQuote(token && token.mint).catch(() => null);
+      if (obs && obs.priceNative > 0) witnessNative = obs.priceNative;
+    } else {
+      const fresh = await R.refresh(token).catch(() => null);
+      if (fresh && Number(fresh.priceNative) > 0) witnessNative = Number(fresh.priceNative);
+    }
+    if (Q.witnessAgrees(chosen.priceNative, witnessNative)) return chosen;
+    lastQuoteRefusal = 'Price sources disagree ('
+      + E.fmt(chosen.priceNative) + ' vs recent ' + E.fmt(evidence.priceNative)
+      + (witnessNative ? ', witness ' + E.fmt(witnessNative) : ', no second source')
+      + ') — paper fill refused. Try again in a moment.';
+    console.debug('PaperTrench: fill witness refused', {
+      candidate: chosen.priceNative, source: chosen.source,
+      evidence: evidence.priceNative, evidenceAgeMs: evidenceAge,
+      witness: witnessNative,
+    });
+    return null;
+  }
+
   async function quoteForTrade() {
+    return corroborateForFill(await pickQuoteForTrade());
+  }
+
+  async function pickQuoteForTrade() {
     const startMint = token && token.mint;
     if (!startMint) return null;
 
@@ -2253,7 +2309,7 @@
     if (rugRefusal) return toast(rugRefusal);
     const tClick = perfNow();
     const fillQuote = await quoteForTrade();
-    if (!fillQuote) return toast('Could not obtain a fresh price — paper buy not filled.');
+    if (!fillQuote) return toast(lastQuoteRefusal || 'Could not obtain a fresh price — paper buy not filled.');
     const tQuoted = perfNow();
     try {
       const result = await withState(async () => {
@@ -2311,6 +2367,8 @@
       });
       const tCommitted = perfNow();
       if (result) {
+        // A committed fill is money evidence for the witness (F-47).
+        lastAcceptedMarket = { priceNative: result.trade.priceNative, at: Date.now() };
         sendMessage({
           type: 'pt_trade_event',
           kind: 'buy',
@@ -2457,7 +2515,7 @@
   async function doSellInner(fraction) {
     const tClick = perfNow();
     const fillQuote = await quoteForTrade();
-    if (!fillQuote) return toast('Could not obtain a fresh price — paper sell not filled.');
+    if (!fillQuote) return toast(lastQuoteRefusal || 'Could not obtain a fresh price — paper sell not filled.');
     const tQuoted = perfNow();
     try {
       const result = await withState(async () => {
@@ -2495,6 +2553,8 @@
       });
       const tCommitted = perfNow();
       if (result) {
+        // A committed fill is money evidence for the witness (F-47).
+        lastAcceptedMarket = { priceNative: result.trade.priceNative, at: Date.now() };
         sendMessage({
           type: 'pt_trade_event',
           kind: 'sell',
@@ -3133,6 +3193,14 @@
       font-size: 21px; font-weight: 850; letter-spacing: -0.5px;
       text-align: left; white-space: normal; overflow: visible;
       line-height: 1.25; font-feature-settings: "tnum";
+      /* The number wraps to a second line whenever it grows (a sign flip, an
+         extra digit, the USD part) and un-wraps when it shrinks — and the
+         quick-sell row sits directly below, so every wrap change moved the
+         buttons UNDER THE CURSOR mid-aim ("the bottom click to sell keeps
+         moving when i am in profit or not" — gibsonandjustin, Twitch). The
+         two-line space is reserved permanently: a stable target beats a
+         compact card for the row the trader is actively clicking. */
+      min-height: calc(2 * 1.25em + 10px);
     }
     /* USD sits on its own line at narrow widths rather than being truncated. */
     .pt-pos .pnl .usd-part { opacity: 0.85; }
