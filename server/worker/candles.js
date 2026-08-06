@@ -20,9 +20,27 @@ const SOL_KEY = '__SOL_USD__';
 const NO_DATA_RETRY_MS = 6 * 60 * 60 * 1000;
 const POOL_TTL_MS = 24 * 60 * 60 * 1000;
 
-async function gtJson(url) {
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (res.status === 429) throw new Error('geckoterminal-rate-limited');
+/**
+ * GeckoTerminal's free tier rate-limits by IP, and Cloudflare Workers egress
+ * from a pool of addresses shared with every other Worker on the platform. In
+ * practice that quota is already spent by someone else, so the keyless API
+ * answers 429 more or less permanently and re-pricing never completes — the
+ * records sit at `pending` forever, which is honest but useless.
+ *
+ * A CoinGecko Demo key (free) moves the quota from "whoever shares this IP" to
+ * "this account". When GECKO_API_KEY is set it is sent on every call; without
+ * it the code still works exactly as before, so a deploy without the secret
+ * degrades rather than breaks.
+ */
+async function gtJson(env, url) {
+  const headers = { Accept: 'application/json' };
+  if (env && env.GECKO_API_KEY) headers['x-cg-demo-api-key'] = env.GECKO_API_KEY;
+  const res = await fetch(url, { headers });
+  if (res.status === 429) {
+    const err = new Error('geckoterminal-rate-limited');
+    err.rateLimited = true;
+    throw err;
+  }
   if (!res.ok) return null;
   return res.json();
 }
@@ -35,7 +53,7 @@ async function poolFor(env, mint) {
   if (cached && (cached.pool_id || now - cached.fetched_at < POOL_TTL_MS)) {
     return cached.pool_id || null;
   }
-  const data = await gtJson(`${GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`);
+  const data = await gtJson(env, `${GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`);
   const pool = data && Array.isArray(data.data) && data.data[0]
     ? String(data.data[0].attributes.address) : null;
   await env.DB.prepare(`
@@ -46,9 +64,9 @@ async function poolFor(env, mint) {
 }
 
 /** {low, high} in USD for the minute containing minuteTs, or null. */
-async function ohlcvMinute(pool, minuteTs) {
+async function ohlcvMinute(env, pool, minuteTs) {
   const beforeSec = Math.floor(minuteTs / 1000) + 120;
-  const data = await gtJson(
+  const data = await gtJson(env,
     `${GT}/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/minute` +
     `?aggregate=1&before_timestamp=${beforeSec}&limit=5&currency=usd`);
   const rows = data && data.data && data.data.attributes && data.data.attributes.ohlcv_list;
@@ -98,13 +116,13 @@ function makeGetCandles(env, budget) {
     };
 
     const sol = await cachedCandle(env, SOL_KEY, minuteTs, () =>
-      spend(() => ohlcvMinute(SOL_USD_POOL, minuteTs)));
+      spend(() => ohlcvMinute(env, SOL_USD_POOL, minuteTs)));
     if (!sol.fromCache) budget.used++;
 
     const token = await cachedCandle(env, mint, minuteTs, async () => {
       const pool = await spend(() => poolFor(env, mint));
       if (!pool) return null;
-      return spend(() => ohlcvMinute(pool, minuteTs));
+      return spend(() => ohlcvMinute(env, pool, minuteTs));
     });
     if (!token.fromCache) budget.used++;
 
