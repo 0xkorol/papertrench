@@ -541,6 +541,36 @@ test('the mottos a red team could break all pass', () => {
     'free text is where an over-eager rule does the most damage');
 });
 
+test('leet folding never runs across the COLLAPSED key', () => {
+  // The regression that reached production. The substring tier used to read
+  // leet variants of nameKey(), which strips separators — so "moon 1664 soon"
+  // collapsed to "moon1664soon", the digits folded 1->i 6->g 4->a, and a slur
+  // appeared across the junction of two innocent words. Fourteen out of
+  // fourteen ordinary price lines were refused.
+  //
+  // The tier now sees the collapsed key LITERALLY (which still catches a term
+  // split across a space) and the leet readings of each TOKEN separately
+  // (which still catches a digit inside one word) — never both powers at once.
+  const PRICE_TALK = [
+    'moon 1664 soon', 'green 1664', 'position 1664', 'when 1664x',
+    'been 1664 since open', 'run 1664 up', 'burn 1664 supply',
+    'turn 1664 into 5k', 'sol on 1664', 'in 1664 out at 2x', 'on 1.664 avg',
+    'clean 1664 fill', 'token 1664 avg', 'filled 1337 sold 4200',
+  ];
+  const refused = PRICE_TALK.filter((line) => C.mottoProblem(line) !== null);
+  assert.deepEqual(refused, [],
+    'digit-heavy price talk is the native register here and must never be refused');
+});
+
+test('splitting a term across a space is still caught', () => {
+  // The other half of the same rule: the LITERAL collapsed key is what makes
+  // these fail, so the fix above must not have bought its false positives back
+  // by dropping the collapsed key entirely.
+  for (const name of ['Nig Gas', 'Ni Gga Boys', 'N I G G E R']) {
+    assert.equal(C.nameProblem(name), 'name-blocked', name + ' must be refused');
+  }
+});
+
 test('the hate code is a word, not a price', () => {
   assert.equal(C.nameProblem('1488 gang'), 'name-blocked');
   assert.equal(C.tagProblem('1488'), 'tag-blocked');

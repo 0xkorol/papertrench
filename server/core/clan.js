@@ -351,11 +351,30 @@ function blockedContent(raw) {
     if (word === HATE_CODE) return true;
   }
 
-  const key = nameKey(raw);
-  for (const reading of tokenReadings(key)) {
+  // The substring tier sees TWO things, and the split between them is the whole
+  // point:
+  //
+  //   1. The collapsed key, read LITERALLY. Collapsing joins words, which is
+  //      what catches a term split across a space ("Nig Gas" -> "niggas").
+  //   2. Each token's leet readings, which catch a digit hidden inside one word
+  //      ("Ni0gger" -> "nigger").
+  //
+  // What it must NEVER see is leet readings OF the collapsed key. That combines
+  // both powers and invents terms nobody typed: "moon 1664 soon" collapses to
+  // "moon1664soon", the digits fold 1->i 6->g 4->a, and a slur appears across a
+  // junction between two innocent words. It refused fourteen out of fourteen
+  // ordinary price lines in production before this was caught — "green 1664",
+  // "run 1664 up", "turn 1664 into 5k". The module header above makes exactly
+  // this argument for the token tier; the substring tier had quietly broken it.
+  const literalKey = nameKey(raw);
+  const candidates = [literalKey];
+  for (const token of tokenize(raw)) {
+    for (const reading of tokenReadings(token)) candidates.push(reading);
+  }
+  for (const candidate of candidates) {
     // Strip the known innocent hosts first. Removing them leaves any genuine
     // occurrence behind, so this cannot be used as cover.
-    let scrubbed = reading;
+    let scrubbed = candidate;
     for (const host of ALLOWED_SUBSTRINGS) scrubbed = scrubbed.split(host).join('');
     for (const bad of BLOCKED_SUBSTRINGS) if (scrubbed.includes(bad)) return true;
   }
