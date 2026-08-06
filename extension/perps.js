@@ -36,6 +36,52 @@
     perpsStartUsd: 1000,
   };
 
+  /* Retention. The book is persisted whole on every operation, so an
+   * unbounded journal makes every later fill cost more than the last.
+   *
+   * What may be dropped is decided by what the product promises. ROUNDS are
+   * the track record — graduation asks for 50+, the mastery stats read the
+   * most recent 30 — so the cap is far above anything those consume, and
+   * the count dropped is recorded so a "over N rounds" claim can never be
+   * quietly computed over a truncated sample. JOURNAL entries are per-fill
+   * detail; dropping them must not lose money, so the cash each dropped
+   * entry moved is accumulated into `archived`. The invariant a trimmed
+   * book still satisfies, exactly:
+   *
+   *   startUsd + archived.journalCashUsd + sum(journal cashDeltaUsd) == cashUsd
+   *
+   * Trimming may drop detail. It may never drop dollars. */
+  const JOURNAL_CAP = 400;
+  const ROUNDS_CAP = 1000;
+
+  function freshArchive() {
+    return { journalCount: 0, journalCashUsd: 0, roundsCount: 0 };
+  }
+
+  /* The ONE way a fill reaches the book: every write is capped at the point
+   * of writing, so a new operation cannot forget to bound the thing it
+   * grows. Locked by a source contract in perps.test.js. */
+  function noteJournal(state, entry) {
+    state.journal.push(entry);
+    trimBook(state);
+  }
+
+  function trimBook(state) {
+    if (!state.archived) state.archived = freshArchive();
+    const a = state.archived;
+    if (state.journal.length > JOURNAL_CAP) {
+      const dropped = state.journal.splice(0, state.journal.length - JOURNAL_CAP);
+      for (const e of dropped) {
+        a.journalCount += 1;
+        a.journalCashUsd += isNum(e && e.cashDeltaUsd) ? e.cashDeltaUsd : 0;
+      }
+    }
+    if (state.rounds.length > ROUNDS_CAP) {
+      a.roundsCount += state.rounds.length - ROUNDS_CAP;
+      state.rounds.splice(0, state.rounds.length - ROUNDS_CAP);
+    }
+  }
+
   function defaultPerpsState(settings) {
     const s = Object.assign({}, DEFAULT_PERPS_SETTINGS, settings || {});
     return {
@@ -44,6 +90,7 @@
       nextId: 1,
       journal: [],
       rounds: [],
+      archived: freshArchive(),
       totals: { feesUsd: 0, fundingPaidUsd: 0, borrowPaidUsd: 0, realizedUsd: 0 },
     };
   }
@@ -205,7 +252,7 @@
     state.nextId += 1;
     state.positions[pos.id] = pos;
     state.totals.feesUsd += openFeeUsd;
-    state.journal.push({
+    noteJournal(state, {
       type: 'open', t: o.t, id: pos.id, venue: o.venue, market: o.market,
       side: side === 1 ? 'long' : 'short', price: o.price,
       marginUsd: o.marginUsd, leverage: o.leverage,
@@ -344,6 +391,7 @@
       carryUsd: pos.venue === 'hyperliquid' ? pos.fundingPaidUsd : pos.borrowUsd,
       cause: o.cause,
     });
+    trimBook(state);
   }
 
   function closePerp(state, id, o) {
@@ -392,7 +440,7 @@
     state.totals.realizedUsd += pnlUsd;
     pos.payoutAccumUsd += payoutUsd;
     pos.feesUsd += feeUsd;
-    state.journal.push({
+    noteJournal(state, {
       type: 'close', t: o.t, id, venue: pos.venue, market: pos.market,
       price: o.price, fraction, pnlUsd, feeUsd,
       cashDeltaUsd: payoutUsd, clampedUsd,
@@ -453,7 +501,7 @@
       netUsd = pos.payoutAccumUsd - pos.marginUsd0;
       state.totals.feesUsd += feeUsd;
       state.cashUsd += payoutUsd;
-      state.journal.push({
+      noteJournal(state, {
         type: 'liquidation', t: o.t, id, venue: pos.venue, market: pos.market,
         price: fillPx, feeUsd, cashDeltaUsd: payoutUsd,
       });
@@ -461,7 +509,7 @@
     } else {
       // Jupiter: everything remaining goes to the JLP. Zero back.
       netUsd = pos.payoutAccumUsd - pos.marginUsd0;
-      state.journal.push({
+      noteJournal(state, {
         type: 'liquidation', t: o.t, id, venue: pos.venue, market: pos.market,
         price: pos.liqPx, feeUsd: 0, cashDeltaUsd: 0,
       });

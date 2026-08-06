@@ -9,6 +9,8 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 global.window = global.window || {};
 require('../perps-venues.js');
@@ -21,8 +23,13 @@ const JUP = { impactScalarAdjUsd: 125000000000 };
 
 function fresh() { return P.defaultPerpsState({ perpsStartUsd: 1000 }); }
 
+/* Cash truth over a book that may have been TRIMMED: the dollars a dropped
+ * journal entry moved are carried in `archived`, so the reconciliation is
+ * exact whether or not anything was ever dropped. Trimming may drop detail;
+ * it may never drop dollars. */
 function journalCashSum(state) {
-  return state.journal.reduce((a, e) => a + e.cashDeltaUsd, 0);
+  const archived = (state.archived && state.archived.journalCashUsd) || 0;
+  return archived + state.journal.reduce((a, e) => a + e.cashDeltaUsd, 0);
 }
 
 test('perps engine installs its public API on the browser global', () => {
@@ -30,6 +37,91 @@ test('perps engine installs its public API on the browser global', () => {
     'accrueJupBorrow', 'closePerp', 'liquidatePerp']) {
     assert.equal(typeof P[fn], 'function', `${fn} must be exported`);
   }
+});
+
+/* ------------------------------ retention ------------------------------ */
+
+test('the book is capped, and trimming drops detail without dropping dollars', () => {
+  // Funded through the opening balance so cash truth holds, and kept at a
+  // realistic magnitude: a reconciliation asserted at 1e9 measures double
+  // precision, not the engine.
+  const START = 1000;
+  const s = P.defaultPerpsState({ perpsStartUsd: START });
+  let t = 1000;
+  // Enough round trips to blow past the journal cap several times over.
+  for (let i = 0; i < 600; i++) {
+    t += 60;
+    const r = P.openPerp(s, {
+      venue: 'hyperliquid', market: 'SOL', side: i % 2 ? 'short' : 'long',
+      marginUsd: 10, leverage: 5, price: 100, t, params: HL,
+    });
+    P.closePerp(s, r.id, { price: 100.5, t: t + 30 });
+  }
+  assert.ok(s.journal.length <= 400, `journal must stay capped, saw ${s.journal.length}`);
+  assert.ok(s.archived.journalCount > 0, 'and must record what it dropped');
+  assert.equal(s.archived.journalCount + s.journal.length, 1200,
+    'every fill is either present or counted — never simply gone');
+
+  // The whole point: the wallet still reconciles exactly.
+  assert.ok(Math.abs(START + journalCashSum(s) - s.cashUsd) < 1e-6,
+    'a trimmed book must still reconcile to the cent');
+});
+
+test('rounds — the track record — outlive the journal by a wide margin', () => {
+  const s = P.defaultPerpsState({ perpsStartUsd: 1000 });
+  let t = 1000;
+  for (let i = 0; i < 600; i++) {
+    t += 60;
+    const r = P.openPerp(s, {
+      venue: 'hyperliquid', market: 'SOL', side: 'long',
+      marginUsd: 10, leverage: 5, price: 100, t, params: HL,
+    });
+    P.closePerp(s, r.id, { price: 101, t: t + 30 });
+  }
+  // Graduation asks for 50+ closed round trips and the mastery stats read the
+  // most recent 30. A cap that could bite either would make the product lie
+  // about its own sample.
+  assert.equal(s.rounds.length, 600, 'no round is dropped anywhere near the sizes the product reads');
+  assert.equal(s.archived.roundsCount, 0);
+  assert.ok(s.journal.length < s.rounds.length,
+    'per-fill detail is the cheap thing to drop; the record is not');
+});
+
+test('when the rounds cap DOES bite, every dropped round is counted', () => {
+  // The cap sits far above what the product reads, but "far above" is not
+  // "never" — a heavy account reaches it eventually, and a sample size that
+  // silently shrinks is the product lying about its own track record.
+  const s = P.defaultPerpsState({ perpsStartUsd: 1000 });
+  let t = 1000;
+  const TRIPS = 1100;
+  for (let i = 0; i < TRIPS; i++) {
+    t += 60;
+    const r = P.openPerp(s, {
+      venue: 'hyperliquid', market: 'SOL', side: 'long',
+      marginUsd: 10, leverage: 5, price: 100, t, params: HL,
+    });
+    P.closePerp(s, r.id, { price: 100.2, t: t + 30 });
+  }
+  assert.equal(s.rounds.length, 1000, 'the rounds ring must actually cap');
+  assert.equal(s.archived.roundsCount, TRIPS - 1000, 'and must count exactly what it dropped');
+  assert.equal(s.rounds.length + s.archived.roundsCount, TRIPS,
+    'every closed round is either kept or counted — a shrinking sample must never be silent');
+  // The oldest survivor is the (TRIPS-1000)th round, not the first.
+  assert.equal(s.rounds[0].openT, 1000 + (TRIPS - 1000 + 1) * 60,
+    'the ring drops from the front, keeping the most recent record');
+});
+
+test('every journal write goes through the capping helper', () => {
+  // A source contract: a new operation that pushes directly would grow the
+  // book without bound, and the defect would only show up months later as a
+  // slow account.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'perps.js'), 'utf8');
+  const body = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const direct = body.match(/state\.journal\.push\(/g) || [];
+  assert.equal(direct.length, 1,
+    'state.journal.push may appear ONLY inside noteJournal, which caps as it writes');
+  assert.match(body, /function noteJournal\(state, entry\) \{\s*state\.journal\.push\(entry\);\s*trimBook\(state\);/,
+    'noteJournal must push and then trim');
 });
 
 /* ------------------- the pure mark and its committing twin -------------------
