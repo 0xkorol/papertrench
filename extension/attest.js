@@ -119,13 +119,27 @@
     const problems = [];
     let previous = GENESIS;
 
+    // Every digest is INDEPENDENT: the preimage is built from the link's own
+    // stored `prev`, never from the running `previous` below. So the hashes are
+    // computed in one parallel pass instead of one awaited digest per link,
+    // which is what made verification O(chain) round trips through WebCrypto
+    // and left "Checking your trade chain…" on screen after every fill. The
+    // loop that follows is unchanged and still strictly sequential, so the
+    // chaining check, the timestamp check and the ORDER problems are reported
+    // in are all exactly as before.
+    const expectedHashes = await Promise.all(
+      list.map((entry) => {
+        const link = entry || {};
+        return sha256(fillPreimage(link, link.prev || GENESIS));
+      }),
+    );
+
     for (let i = 0; i < list.length; i++) {
       const link = list[i] || {};
       if (link.prev !== previous) {
         problems.push({ index: i, id: link.id, reason: 'broken-link' });
       }
-      const expected = await sha256(fillPreimage(link, link.prev || GENESIS));
-      if (expected !== link.hash) {
+      if (expectedHashes[i] !== link.hash) {
         problems.push({ index: i, id: link.id, reason: 'hash-mismatch' });
       }
       // Time must move forward; a backdated fill is the classic cheat.

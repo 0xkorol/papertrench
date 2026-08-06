@@ -518,8 +518,8 @@ test('the card says exactly what each number is (source contract)', () => {
 });
 
 test('the dashboard reads pt_turbo_stats and repaints when it changes (source contract)', () => {
-  const load = dashJs.slice(dashJs.indexOf('async function loadAll()'), dashJs.indexOf('let lastRecordingsFingerprint'));
+  const load = dashJs.slice(dashJs.indexOf('async function loadAll(changedKeys)'), dashJs.indexOf('let lastRecordingsFingerprint'));
   assert.match(load, /'pt_turbo_stats'/, 'loadAll fetches the stats key');
-  const watch = dashJs.slice(dashJs.indexOf('function watchDashboardStorage()'), dashJs.indexOf('async function loadAll()'));
+  const watch = dashJs.slice(dashJs.indexOf('function watchDashboardStorage()'), dashJs.indexOf('async function loadAll(changedKeys)'));
   assert.match(watch, /'pt_turbo_stats'/, 'a receipt landing while the dashboard is open refreshes it');
 });

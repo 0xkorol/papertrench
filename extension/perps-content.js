@@ -280,8 +280,16 @@
     if (!adapter || !state || !(lastPx > 0)) return;
     for (const pos of Object.values(state.positions)) {
       if (pos.venue !== adapter.venue || pos.market !== adapter.market) continue;
-      const clone = JSON.parse(JSON.stringify(state));
-      const m = P.markPerp(clone, pos.id, { price: lastPx });
+      // markPerp reads and writes ONLY state.positions[id] (perps.js:196-212),
+      // so the probe needs exactly that one position — not a JSON round trip of
+      // the entire book. The old whole-state clone ran once PER POSITION PER
+      // TICK and grew with the journal and closed-round history, so the cost of
+      // asking "am I liquidated?" scaled with how long the account had existed.
+      // This is flat regardless of book size, and the clone still keeps the
+      // probe non-destructive: the real position is never marked here, only the
+      // committed applyOp path below may mutate it.
+      const probe = { positions: { [pos.id]: JSON.parse(JSON.stringify(pos)) } };
+      const m = P.markPerp(probe, pos.id, { price: lastPx });
       if (m.ok && m.liquidatable) {
         applyOp((st) => {
           if (!st.positions[pos.id]) return { ok: true };

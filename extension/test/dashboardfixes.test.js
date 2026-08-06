@@ -382,7 +382,7 @@ test('D-15: dashboard storage reads fail soft and failed reads block writes', ()
   assert.match(storeBlock, /chrome\.runtime\.lastError\) \{ resolve\(null\); return; \}/,
     'store.get must resolve null on lastError — a failed read is NOT empty storage');
 
-  const load = fnBlock(dashJs, 'async function loadAll()');
+  const load = fnBlock(dashJs, 'async function loadAll(changedKeys)');
   assert.match(load, /if \(s === null\) \{/,
     'loadAll must branch on the failed-read sentinel instead of fabricating a fresh wallet');
   assert.match(load, /storageReadFailed = true;/, 'the failure must latch a module flag');
@@ -1340,7 +1340,7 @@ test('D-40: the D-26 degraded empty view survives and is never cached', () => {
 });
 
 test('D-40: every data-refresh path invalidates the memo', () => {
-  const load = fnBlock(dashJs, 'async function loadAll()');
+  const load = fnBlock(dashJs, 'async function loadAll(changedKeys)');
   assert.match(load, /invalidateReplayView\(\);/, 'loadAll replaces state/frames/replays');
   const mutate = fnBlock(dashJs, 'async function mutateState(');
   assert.match(mutate, /invalidateReplayView\(\);/, 'mutateState adopts a fresh state');
@@ -1441,7 +1441,7 @@ test('D-43: the poll is a 30s hidden-gated safety net; storage events stay prima
 });
 
 test('D-39: recordings reload only when the replay list changes, plus on Replay entry', () => {
-  const loadAllFn = fnBlock(dashJs, 'async function loadAll()');
+  const loadAllFn = fnBlock(dashJs, 'async function loadAll(changedKeys)');
   assert.match(loadAllFn, /replayFingerprint !== lastRecordingsFingerprint/,
     'an unchanged replay list must not reopen IndexedDB');
   const nav = fnBlock(dashJs, 'function bindNav()');

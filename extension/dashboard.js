@@ -167,6 +167,7 @@ let lbVerifyInFlightKey = null;
 // here; renderLeaderboard/bindLeaderboard consume this array in exactly the
 // format buildSubmission has always taken.
 let attestChain = [];
+let attestChainLoaded = false; // false until a chain read has actually succeeded
 let attestMigrateNudged = false;
 /**
  * Storage access that fails soft — same contract as content.js's store helper:
@@ -341,11 +342,17 @@ function dataFingerprint() {
   ].join('|');
 }
 
-/** Re-render only when something the user can see has actually changed. */
-async function refreshIfChanged() {
+/** Re-render only when something the user can see has actually changed.
+ *
+ * changedKeys (optional) is the key set from a storage.onChanged echo. It is
+ * passed straight through to loadAll, which uses it to skip re-reading the
+ * megabyte-scale records that demonstrably did not change. Omit it — as the
+ * first paint, the visibility return and the 30 s safety net all do — for a
+ * full read. */
+async function refreshIfChanged(changedKeys) {
   // Never yank the ground out from under an interaction.
   if (isUserBusy()) return;
-  await loadAll();
+  await loadAll(changedKeys);
   const next = dataFingerprint();
   if (next === lastFingerprint) return;
   lastFingerprint = next;
@@ -444,13 +451,39 @@ function watchDashboardStorage() {
     const relevant = ['pt_state', 'pt_settings', 'pt_frames', 'pt_turbo_stats', RP.STORAGE_KEY, AT.CHAIN_META_KEY]
       .some((key) => key in changes);
     if (!relevant) return;
+    // A HIDDEN dashboard paints nothing, so re-reading the world to repaint it
+    // is pure cost — and the trading tab writes the wallet on an ~800 ms
+    // heartbeat while a position is open, so this listener fired ~75x a minute
+    // into a tab nobody was looking at, each time deserializing the wallet, the
+    // frame ring and the whole attestation chain. Nothing is missed by
+    // returning: the visibilitychange handler does a FULL refresh on the way
+    // back in, and the 30 s net covers a missed event.
+    if (document.hidden) return;
     // D-28: heartbeat writes carry fresh live marks; paint them in place.
-    refreshIfChanged().then(refreshLiveDerived).catch(() => {});
+    // Only the keys that actually changed are re-read — see loadAll.
+    refreshIfChanged(new Set(Object.keys(changes))).then(refreshLiveDerived).catch(() => {});
   });
 }
 
-async function loadAll() {
-  const s = await store.get(['pt_state', 'pt_settings', 'pt_frames', 'pt_turbo_stats', RP.STORAGE_KEY]);
+/**
+ * Load what the dashboard renders from.
+ *
+ * changedKeys is the key set from a storage.onChanged echo, or undefined for a
+ * full read. Two records here are megabyte-scale and change far more rarely
+ * than the wallet does — the capture-frame ring (up to 80 base64 JPEGs) and the
+ * segmented attestation chain — yet every wallet heartbeat used to re-read and
+ * re-deserialize both to repaint a journal row. When the echo proves they did
+ * not change, they are not re-read; the in-memory copies are already correct.
+ *
+ * The D-15 discipline is unchanged: a FAILED read (null) still keeps whatever
+ * is in memory and raises the banner. Skipping a read is not a failed read —
+ * it is knowing the answer already.
+ */
+async function loadAll(changedKeys) {
+  const wantFrames = !changedKeys || changedKeys.has('pt_frames');
+  const keys = ['pt_state', 'pt_settings', 'pt_turbo_stats', RP.STORAGE_KEY];
+  if (wantFrames) keys.push('pt_frames');
+  const s = await store.get(keys);
   if (s === null) {
     // D-15: the read FAILED — this is not "empty storage". Keep whatever is
     // already in memory, show a banner, and block writes until a read
@@ -464,7 +497,7 @@ async function loadAll() {
   renderStorageErrorBanner();
   settings = E.mergeSettings(s.pt_settings);
   state = s.pt_state || E.defaultState(settings);
-  frames = s.pt_frames || [];
+  if (wantFrames) frames = s.pt_frames || [];
   turboStats = s.pt_turbo_stats || {};
   replays = RP.normalizeReplayList(s[RP.STORAGE_KEY]);
 
@@ -473,16 +506,23 @@ async function loadAll() {
   // unreadable record must never repaint as "no trades committed yet". A
   // state that still carries a legacy in-state chain (the worker has not
   // migrated yet) is readable as-is; the nudge asks the worker to move it.
-  try {
-    const { meta, chain } = await AT.readChainStore(async (keys) => {
-      const value = await store.get(keys);
-      if (value === null) throw new Error('attest store unreadable');
-      return value;
-    });
-    attestChain = !meta.length && Array.isArray(state.attestChain) && state.attestChain.length
-      ? state.attestChain
-      : chain;
-  } catch (_) { /* keep the previous chain */ }
+  // The chain is re-read when its own meta key changed, when a legacy in-state
+  // chain is present (the worker has not migrated it yet, so state IS the
+  // chain), or when nothing has been loaded yet. A wallet heartbeat that did
+  // not touch the chain cannot have changed it.
+  const legacyInState = Array.isArray(state.attestChain) && state.attestChain.length > 0;
+  const wantChain = !changedKeys || changedKeys.has(AT.CHAIN_META_KEY) || legacyInState || !attestChainLoaded;
+  if (wantChain) {
+    try {
+      const { meta, chain } = await AT.readChainStore(async (keys) => {
+        const value = await store.get(keys);
+        if (value === null) throw new Error('attest store unreadable');
+        return value;
+      });
+      attestChain = !meta.length && legacyInState ? state.attestChain : chain;
+      attestChainLoaded = true;
+    } catch (_) { /* keep the previous chain */ }
+  }
   if (!attestMigrateNudged && Array.isArray(state.attestChain) && state.attestChain.length) {
     attestMigrateNudged = true;
     chrome.runtime.sendMessage({ type: 'pt_attest_migrate' }).catch(() => {});
