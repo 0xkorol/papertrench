@@ -62,6 +62,10 @@
   let posEls = null;            // cached position-card nodes, updated in place
   let thesisEls = null;         // cached thesis card state
   let thesisEditing = false;
+  // Wave 2 (F-B12, maintainer: "too big and clunky"): with no thesis yet the
+  // panel shows ONE slim prompt line, not a full editor — the composer opens
+  // on demand and closes back to the line on save or token change.
+  let thesisComposerOpen = false;
   // A buy requested before the first quote existed, to be executed on arrival.
   let armedBuy = null;
   const ARMED_BUY_TTL_MS = 60_000;
@@ -2409,17 +2413,18 @@
     /* ---------------- body ---------------- */
 
     .pt-body {
-      position: relative; z-index: 2; padding: 13px 12px 14px;
+      position: relative; z-index: 2; padding: 10px 12px 11px;
       flex: 1; min-height: 0; overflow-y: auto;
-      scrollbar-width: thin;
+      /* Maintainer: NEVER a visible scrollbar on the panel. Wheel and touch
+         still scroll if content ever exceeds the cap; the panel is sized to
+         make that the rare case, not the normal one. */
+      scrollbar-width: none;
     }
-    .pt-body::-webkit-scrollbar { width: 4px; }
-    .pt-body::-webkit-scrollbar-track { background: transparent; }
-    .pt-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 99px; }
+    .pt-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
     .pt-token-row {
       display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
-      margin-bottom: 11px;
+      margin-bottom: 8px;
     }
     .pt-token { flex: 1; min-width: 0; }
     .pt-token > div:first-child {
@@ -2464,7 +2469,7 @@
 
     .pt-label {
       display: flex; align-items: center; justify-content: space-between;
-      margin: 12px 0 7px;
+      margin: 8px 0 5px;
       font-size: 9.5px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase;
       color: var(--pt-faint);
     }
@@ -2553,7 +2558,7 @@
 
     .pt-buy {
       position: relative; overflow: hidden;
-      width: 100%; margin-top: 9px; padding: 13px;
+      width: 100%; margin-top: 7px; padding: 11px;
       border: none; border-radius: var(--pt-r-md);
       background: linear-gradient(180deg, #3FE49B, #22B573);
       color: #032B1B; font-size: 14.5px; font-weight: 850; letter-spacing: 0.4px;
@@ -2585,7 +2590,7 @@
     /* ---------------- position card ---------------- */
 
     .pt-pos {
-      margin-top: 13px; padding: 12px 13px;
+      margin-top: 8px; padding: 9px 11px;
       background: linear-gradient(135deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
       border: 1px solid var(--pt-line); border-radius: var(--pt-r-md);
       animation: pt-rise 0.32s var(--pt-ease) both;
@@ -2627,7 +2632,7 @@
     /* ---------------- closed P&L ---------------- */
 
     .pt-closed {
-      margin-top: 11px; padding: 11px 13px;
+      margin-top: 8px; padding: 9px 11px;
       background: linear-gradient(135deg, rgba(255, 157, 69, 0.11), rgba(11, 14, 20, 0.9));
       border: 1px solid rgba(255, 157, 69, 0.4); border-radius: var(--pt-r-md);
       animation: pt-rise 0.34s var(--pt-ease) both;
@@ -2762,10 +2767,19 @@
 
     /* ---------------- trade thesis ---------------- */
     .pt-thesis {
-      margin-top: 11px; padding: 11px 12px;
+      margin-top: 8px; padding: 9px 11px;
       background: rgba(255, 255, 255, 0.035);
       border: 1px solid var(--pt-line); border-radius: var(--pt-r-md);
     }
+    /* The collapsed thesis line: one slim, full-width, honest prompt. */
+    .pt-thesis-prompt {
+      display: block; width: 100%; margin-top: 8px; padding: 7px 11px;
+      background: transparent; border: 1px dashed var(--pt-line-2);
+      border-radius: var(--pt-r-md); cursor: pointer;
+      font: inherit; font-size: 11.5px; font-weight: 650; text-align: left;
+      color: var(--pt-dim);
+    }
+    .pt-thesis-prompt:hover { color: var(--pt-amber); border-color: var(--pt-amber); }
     .pt-thesis-head {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       margin-bottom: 8px;
@@ -3973,13 +3987,32 @@
       return;
     }
 
+    if (thesisEls && thesisEls.mint !== token.mint) thesisComposerOpen = false;
     const saved = pos.thesis;
-    // Rebuild only when switching between the saved and editing views, so
-    // typing is never interrupted by the heartbeat.
-    const wantEditor = !saved || thesisEditing;
-    if (thesisEls && thesisEls.editing === wantEditor && thesisEls.mint === token.mint) return;
+    // Rebuild only when switching between the saved, editing, and prompt
+    // views, so typing is never interrupted by the heartbeat.
+    const wantEditor = thesisEditing || (!saved && thesisComposerOpen);
+    const wantPrompt = !saved && !wantEditor;
+    if (thesisEls && thesisEls.editing === wantEditor && thesisEls.prompt === wantPrompt
+      && thesisEls.mint === token.mint) return;
 
     els.thesis.textContent = '';
+
+    if (wantPrompt) {
+      const prompt = document.createElement('button');
+      prompt.className = 'pt-thesis-prompt';
+      prompt.textContent = '＋ Why this trade?';
+      prompt.title = 'Write the setup before you know how it ends';
+      prompt.addEventListener('click', () => {
+        thesisComposerOpen = true;
+        thesisEls = null;
+        renderThesis();
+      });
+      els.thesis.appendChild(prompt);
+      thesisEls = { editing: false, prompt: true, mint: token.mint };
+      return;
+    }
+
     const card = document.createElement('div');
     card.className = 'pt-thesis';
 
@@ -4013,7 +4046,7 @@
         thesisEls = null;
         renderThesis();
       });
-      thesisEls = { editing: false, mint: token.mint };
+      thesisEls = { editing: false, prompt: false, mint: token.mint };
       return;
     }
 
@@ -4069,12 +4102,13 @@
         return;
       }
       thesisEditing = false;
+      thesisComposerOpen = false;
       thesisEls = null;
       renderThesis();
       toast('Thesis saved');
     });
 
-    thesisEls = { editing: true, mint: token.mint };
+    thesisEls = { editing: true, prompt: false, mint: token.mint };
   }
 
 
