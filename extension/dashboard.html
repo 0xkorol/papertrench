@@ -308,6 +308,28 @@
     .tag.badge.earned { opacity: 1; border-color: var(--amber); color: var(--text); }
     .cal-grade { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; }
 
+    /* Game tab — the "off-white" pass (maintainer): PAPER as the off-white
+       element, industrial tape + quoted labels, used as accent, not wallpaper. */
+    .paper-tape {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+      margin: 0 0 14px; padding: 10px 40px;
+      background: #F4F1EA; color: #0A0D13;
+      font-weight: 900; letter-spacing: 2.5px; font-size: 12.5px; text-transform: uppercase;
+      border-radius: 3px; transform: rotate(-0.6deg);
+      box-shadow: 0 3px 16px rgba(0,0,0,0.45);
+      position: relative; overflow: hidden;
+    }
+    .paper-tape::before, .paper-tape::after {
+      content: ''; position: absolute; top: 0; bottom: 0; width: 26px;
+      background: repeating-linear-gradient(45deg, #0A0D13 0 7px, transparent 7px 14px);
+      opacity: 0.85;
+    }
+    .paper-tape::before { left: 0; }
+    .paper-tape::after { right: 0; }
+    .paper-tape .sub { font-size: 9px; letter-spacing: 1.8px; font-weight: 800; color: #55504a; }
+    .game-lab::before { content: '“'; margin-right: 2px; color: #F4F1EA; }
+    .game-lab::after { content: '”'; margin-left: 2px; color: #F4F1EA; }
+
     /* Game tab */
     .game-ladder { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
     .game-tier {
@@ -330,7 +352,15 @@
       letter-spacing: 1.1px; text-transform: uppercase; color: var(--faint);
     }
     .game-card h3 { margin-bottom: 4px; }
-    .game-session { border-color: var(--amber); }
+    /* Equal-height game cards: the grid stretches, the card is a column,
+       the start button pins to the bottom — "not the same size" fixed
+       structurally, not by eyeballing content. */
+    #game .grid3 { align-items: stretch; }
+    .game-card { display: flex; flex-direction: column; }
+    .game-card .stat { font-size: 12px; padding: 6px 0; }
+    .game-card .stat:last-of-type { margin-bottom: 12px; }
+    .game-card > button { margin-top: auto; }
+    .game-session { border-color: #F4F1EA; }
     .game-grade { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
     .game-grade .rank-bar { flex: 1; }
 

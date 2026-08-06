@@ -2152,7 +2152,10 @@
       position: fixed; top: 84px; right: 18px; z-index: 2147483647;
       width: 336px;
       min-width: 260px; max-width: 560px;
-      min-height: 320px; max-height: 820px;
+      /* Content-sized by design (maintainer + F-C8): a saved resize acts as
+         a CAP, never a stretch — no dead space, no forced scroll on a panel
+         that would have fit. The viewport is always a hard ceiling. */
+      max-height: min(820px, 88vh);
       color: var(--pt-text);
       background:
         radial-gradient(120% 90% at 50% -10%, rgba(255, 157, 69, 0.10), transparent 62%),
@@ -2408,7 +2411,11 @@
     .pt-body {
       position: relative; z-index: 2; padding: 13px 12px 14px;
       flex: 1; min-height: 0; overflow-y: auto;
+      scrollbar-width: thin;
     }
+    .pt-body::-webkit-scrollbar { width: 4px; }
+    .pt-body::-webkit-scrollbar-track { background: transparent; }
+    .pt-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 99px; }
 
     .pt-token-row {
       display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
@@ -3224,7 +3231,6 @@
               <div class="pt-token"><div id="pt-token-name">—</div><div class="pt-mint" id="pt-token-mint">waiting for token</div></div>
               <div class="pt-price"><span class="pt-dot" id="pt-live-dot"></span><div class="num ${!token || (!token.priceNative && !token.priceUsd) ? 'pt-price-stale' : ''}" id="pt-price">—</div><div class="usd" id="pt-price-usd"></div></div>
             </div>
-            <div id="pt-position"></div>
             <div class="pt-label" id="pt-buy-label">Quick buy (SOL)</div>
             <div class="pt-presets" id="pt-buy-presets"></div>
             <div class="pt-costs" id="pt-costs" title="Your simulated costs — click to edit"></div>
@@ -3244,6 +3250,12 @@
             </div>
             <input class="pt-custom" id="pt-custom" type="number" min="0" step="0.01" placeholder="Or type a custom SOL amount…" />
             <button class="pt-buy" id="pt-buy">BUY</button>
+            <!-- Position sits BELOW the buy cluster on purpose (maintainer):
+                 inserting it above shifted the panel so sell buttons landed
+                 where BUY had been — a double-click away from an accidental
+                 exit. The P&L still wears the type-scale crown; hierarchy
+                 comes from size, not from moving the ground under a click. -->
+            <div id="pt-position"></div>
             <div id="pt-thesis"></div>
             <div id="pt-closed"></div>
           </div>
@@ -3602,7 +3614,11 @@
     const w = settings.overlayWidth;
     const h = settings.overlayHeight;
     els.box.style.width = (w && Number(w) > 0) ? `${w}px` : '';
-    els.box.style.height = (h && Number(h) > 0) ? `${h}px` : '';
+    // The saved height is a CAP, not a command: a panel with less content
+    // stays content-sized (no dead space), a panel with more scrolls inside
+    // it. "It even lets you size it wrong" — not anymore.
+    els.box.style.height = '';
+    els.box.style.maxHeight = (h && Number(h) > 0) ? `min(${h}px, 88vh)` : '';
   }
 
   const OVERLAY_MIN_W = 260;

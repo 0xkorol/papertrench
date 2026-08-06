@@ -375,6 +375,19 @@ end-to-end feed prewatch test (bare curve address → watched mint → primed
 quote → reserve account remembered), bootstrap acceptance/ambiguity tests,
 and the existing armed-buy suite.
 
+**F-36 · S1 · OPEN — paper fills are "occasionally, on some charts, just not perfectly accurate" (maintainer, repeated report, 2026-08-05)**
+Fill price vs the chart's own price at fill time drifts on some site/chart
+combinations. Third report of this class after F-33 (vault-leg starvation)
+and F-35 (unit-blind closes) — whatever remains needs FIELD data, not more
+static analysis: the maintainer has offered a logged-in Claude-in-Chrome
+session. Plan: live probe on the exact sites where it drifts — capture the
+site feed, the collector's tick, the validated quote, and the recorded fill
+for the same instant; diff each hop to find which link lies. Suspects to
+check live, not guess: quote-validation band acceptance under fast moves,
+feed latency between site stream and chart paint on fomo/GMGN, mcap-mode
+bootstrap on non-pump tokens. This entry stays OPEN until reproduced and
+fixed with a lock.
+
 **F-35 · S1 · The average line landed a supply-factor off whenever the SAME token streamed in two chart units at once — the token gate can't see units**
 `price-bridge.js` lastBarClose (single global), lineLevelFor mcap branches,
 shapeLevelFor ratio fallback, syncLineSlot async-create closure · Padre/Axiom

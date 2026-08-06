@@ -1152,7 +1152,7 @@ function renderGame(el) {
         <h3>${esc(g.label)}</h3>
         <div class="dim" style="font-size:11.5px;margin-bottom:8px">${esc(g.detail)}</div>
         ${status}
-        <button class="btn ${isRunning ? 'btn-sec' : ''}" data-game-start="${esc(g.id)}" style="margin-top:10px;width:100%" ${isRunning ? 'disabled' : ''}>
+        <button class="btn ${isRunning ? 'btn-sec' : ''}" data-game-start="${esc(g.id)}" style="width:100%" ${isRunning ? 'disabled' : ''}>
           ${isRunning ? 'Running…' : session ? 'Switch to this' : 'Start game'}
         </button>
       </div>`;
@@ -1170,6 +1170,7 @@ function renderGame(el) {
   }).join('');
 
   el.innerHTML = `
+    <div class="paper-tape"><span>“PAPER TRENCH”</span><span class="sub">Simulated funds · real discipline</span></div>
     ${sessionPanel}
     <div class="card"${session ? ' style="margin-top:16px"' : ''}>
       <h3>Trench profile
