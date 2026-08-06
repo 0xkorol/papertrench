@@ -363,7 +363,11 @@
       <div class="gcard reveal d1"><div class="gi">🚀</div><h3>Trades launches seconds old</h3><p>Jupiter is queried in parallel with Dexscreener, so a coin that just hit the curve is tradeable before indexers even see it.</p></div>
       <div class="gcard reveal d2"><div class="gi">📌</div><h3>Positions bar</h3><p>Every open position pinned to the top of the page with live P&amp;L. Click one to jump straight to its chart.</p></div>
       <div class="gcard reveal"><div class="gi">🖼️</div><h3>Shareable P&amp;L cards</h3><p>Turn any closed round into a 1200×675 image with your own picture or GIF behind it — permanently watermarked PAPER, so it can never pass as a real trade.</p></div>
-      <div class="gcard reveal d1"><div class="gi">🧪</div><h3>600+ tests. Mutation-tested.</h3><p>The decision logic is pure functions exercised directly by the suite — the same code that runs in the page.</p></div>
+      <!-- Deliberately carries no figure. The hero stat above is the one test
+           count on this site, and preflight polices it; this card said "600+"
+           while the suites were past 1300 because nothing was watching it. A
+           second, ungated number is just a slower lie. -->
+      <div class="gcard reveal d1"><div class="gi">🧪</div><h3>Mutation-tested, not just covered</h3><p>The decision logic is pure functions exercised directly by the suite — the same code that runs in the page — and each guard has to fail against the exact change it protects against.</p></div>
       <div class="gcard reveal d2"><div class="gi">🕵️</div><h3>Zero telemetry</h3><p>No account, no signup, nothing phoned home. The only network calls are the public price APIs — and your own AI endpoint, only if you configure one.</p></div>
       <a class="gcard live-banner reveal" href="streams.html">
         <span class="live-chip"><span class="dot"></span>LIVE</span>
