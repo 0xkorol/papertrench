@@ -6,10 +6,11 @@ details live in the commit messages.
 ## Unreleased
 
 **Paper perps on Hyperliquid and Jupiter.** Leverage, on the venues you
-actually use, with the venue's own costs. This is the first instrument in
-PaperTrench that can take your entire position in a single move: perps are
-not spot with a bigger number, and the notes below say plainly what is and
-isn't modelled yet. Open a paper long or short from a ticket that sits on the
+actually use, with the venue's own costs. This is the first release with an
+instrument that can take your entire position in a single move, so it ships
+as a major version: perps are not spot with a bigger number, and the notes
+below say plainly what is and isn't modelled yet. Open a paper long or short
+from a ticket that sits on the
 venue's own page, priced off the venue's own feed. $10 at 20x and $5 at 100x
 are both one slider away — and the ticket shows you what each actually costs
 before you click.
