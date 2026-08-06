@@ -111,6 +111,84 @@ test('funding is applied with an explicit mark, never a stale stored one', () =>
   }
 });
 
+/* ---------------- entry: a blocked venue must not die silently ---------- */
+
+test('an entry blocked on the venue API is actually retried, not abandoned', () => {
+  // The location poll consumes the href BEFORE entry runs, so an entry that
+  // bailed waiting on the venue was never retried — one slow or blocked API
+  // call at load meant the ticket never appeared at all, forever. That is a
+  // silent death, not a slow start.
+  const enter = contentSrc.slice(
+    contentSrc.indexOf('async function enterPage()'),
+    contentSrc.indexOf('function leavePage()'),
+  );
+  assert.ok(enter, 'enterPage must exist');
+  assert.match(enter, /venueParamsPending = true;/,
+    'a bail waiting on the venue must mark itself retryable');
+  assert.match(enter, /adapter = null;\s*\n\s*venueParamsPending = true;/,
+    'and must clear the adapter, or the retry early-returns on the stale one');
+
+  const poll = contentSrc.slice(
+    contentSrc.indexOf('function pollLocation()'),
+    contentSrc.indexOf('chrome.storage.onChanged.addListener'),
+  );
+  assert.match(poll, /venueParamsPending && now - lastEntryAt >= ENTRY_RETRY_MS/,
+    'the poll must retry a pending entry on its own cadence');
+  assert.match(poll, /ENTRY_ATTEMPTS_BEFORE_NOTICE/,
+    'and after a fair chance, say so rather than stay blank');
+});
+
+test('a venue that never answers produces a visible reason, not an empty page', () => {
+  assert.match(contentSrc, /venueUnreachable = true/,
+    'the unreachable state must be recorded');
+  assert.match(contentSrc, /not answering from this network/,
+    'and rendered as a calm, specific message the user can act on');
+  // It must still refuse to trade — an unreachable venue cannot price a fill.
+  const block = contentSrc.slice(contentSrc.indexOf('if (venueUnreachable'));
+  assert.match(block.slice(0, 700), /openBtn\.disabled = true/,
+    'an unreachable venue must not leave the open button live');
+});
+
+/* ---------------- fill feedback: confirmation, not decoration ---------- */
+
+test('effects fire on the FILL, never on the click', () => {
+  const onOpen = contentSrc.slice(
+    contentSrc.indexOf('function onOpen()'),
+    contentSrc.indexOf('function onClose('),
+  );
+  assert.ok(onOpen, 'onOpen must exist');
+  // The effect must sit inside the applyOp callback, after the ok check —
+  // celebrating a click that storage then refused would assert a position
+  // the user does not have.
+  const afterApply = onOpen.slice(onOpen.indexOf('applyOp('));
+  assert.match(afterApply, /if \(r && !r\.ok\) \{[^}]*return; \}/,
+    'a refused open must bail before any confirmation');
+  assert.ok(afterApply.indexOf('runPerpEffect') > afterApply.indexOf('!r.ok'),
+    'the effect must come after the refusal check, not before');
+  assert.ok(!/runPerpEffect/.test(onOpen.slice(0, onOpen.indexOf('applyOp('))),
+    'nothing may fire before the write is attempted');
+});
+
+test('a liquidation never celebrates', () => {
+  // Confetti for a margin call is the product congratulating a user for
+  // losing everything.
+  const watch = contentSrc.slice(
+    contentSrc.indexOf('function watchLiquidations()'),
+    contentSrc.indexOf('/* ---------------------------- fill feedback'),
+  );
+  assert.ok(watch, 'watchLiquidations must exist');
+  assert.match(watch, /playPerpSound\('liquidation'\)/, 'it is announced');
+  assert.ok(!/runPerpEffect/.test(watch),
+    'but never with the celebration burst');
+});
+
+test('fill feedback obeys the same two settings as the spot overlay', () => {
+  assert.match(contentSrc, /tradeEffectsEnabled/, 'effects share the spot toggle');
+  assert.match(contentSrc, /tradeSoundsEnabled/, 'sounds share the spot toggle');
+  assert.match(contentSrc, /changes\.pt_settings\) loadUiSettings\(\)/,
+    'and a toggle change must take effect without a reload');
+});
+
 test('the content script honors the orphaned-script doctrine', () => {
   assert.match(contentSrc, /chrome\.runtime\.id/, 'context-invalidation guard');
   assert.match(contentSrc, /visibilityState/, 'intervals defer while hidden');

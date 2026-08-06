@@ -37,6 +37,8 @@
   const PARAMS_REFRESH_MS = 30000;
   const LOCATION_POLL_MS = 1000;
   const CARRY_TICK_MS = 60000;
+  const ENTRY_RETRY_MS = 5000;
+  const ENTRY_ATTEMPTS_BEFORE_NOTICE = 6; // ~30s of the venue not answering
   const ACCEPT_RATIO = 20; // same magnitude gate doctrine as quote.js
   const BARS_REFRESH_MS = 60000;
   const BARS_LOOKBACK_MS = 12 * 3600 * 1000; // ~144 5m bars: emaSlow warms honestly
@@ -85,6 +87,9 @@
   let reconciled = false;
   let barStore = null;       // TA bar ring for the current HL market
   let taReads = null;        // assembleReads() context pack, or null
+  let venueParamsPending = false; // entry is waiting on the venue's own API
+  let entryAttempts = 0;
+  let venueUnreachable = false;   // said out loud rather than left blank
 
   function anchorPx() {
     if (adapter && adapter.venue === 'hyperliquid' && hlAssets && hlAssets[adapter.market]) {
@@ -339,10 +344,117 @@
           if (!st.positions[pos.id]) return { ok: true };
           return P.liquidatePerp(st, pos.id, { price: lastPx, t: Math.floor(Date.now() / 1000) });
         }).then((r) => {
-          if (r && r.ok) flashNotice('Liquidated at ' + T.fmtPx(lastPx) + ' — margin lost.');
+          if (r && r.ok) {
+            flashNotice('Liquidated at ' + T.fmtPx(lastPx) + ' — margin lost.');
+            playPerpSound('liquidation'); // no particles: this is not a win
+          }
         });
       }
     }
+  }
+
+  /* ---------------------------- fill feedback ----------------------------
+   * A fill you cannot feel is a fill you are not sure happened. This mirrors
+   * the spot overlay exactly — same tones, same particle burst, same two
+   * settings keys — so one toggle governs both surfaces.
+   *
+   * Deliberate asymmetry: a LIQUIDATION never celebrates. It gets a low,
+   * flat two-tone and no particles. Confetti for a margin call would be the
+   * product congratulating a user for losing everything. */
+
+  let uiSettings = { tradeEffectsEnabled: true, tradeSoundsEnabled: true };
+
+  function loadUiSettings() {
+    try {
+      chrome.storage.local.get(['pt_settings'], (o) => {
+        const s = o && o.pt_settings;
+        if (!s || typeof s !== 'object') return;
+        if (typeof s.tradeEffectsEnabled === 'boolean') uiSettings.tradeEffectsEnabled = s.tradeEffectsEnabled;
+        if (typeof s.tradeSoundsEnabled === 'boolean') uiSettings.tradeSoundsEnabled = s.tradeSoundsEnabled;
+      });
+    } catch (e) { /* defaults stand */ }
+  }
+
+  let audioCtx = null;
+  function primeAudio() {
+    try {
+      if (!audioCtx) {
+        const Ctor = window.AudioContext || window.webkitAudioContext;
+        if (!Ctor) return null;
+        audioCtx = new Ctor();
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+
+  function playTone(ctx, frequency, start, duration, type, volume) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.setValueAtTime(frequency, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, volume || 0.06), start + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + duration + 0.02);
+  }
+
+  function playPerpSound(kind) {
+    if (!uiSettings.tradeSoundsEnabled) return;
+    const ctx = primeAudio();
+    if (!ctx) return;
+    const t = ctx.currentTime + 0.01;
+    if (kind === 'long') {
+      playTone(ctx, 523.25, t, 0.11, 'triangle', 0.055);
+      playTone(ctx, 659.25, t + 0.07, 0.12, 'triangle', 0.06);
+      playTone(ctx, 783.99, t + 0.14, 0.16, 'sine', 0.07);
+    } else if (kind === 'short') {
+      // Same shape inverted: a short is an entry too, just the other way up.
+      playTone(ctx, 783.99, t, 0.11, 'triangle', 0.055);
+      playTone(ctx, 659.25, t + 0.07, 0.12, 'triangle', 0.06);
+      playTone(ctx, 523.25, t + 0.14, 0.16, 'sine', 0.07);
+    } else if (kind === 'close') {
+      playTone(ctx, 880, t, 0.10, 'triangle', 0.055);
+      playTone(ctx, 659.25, t + 0.075, 0.14, 'sine', 0.065);
+      playTone(ctx, 1046.5, t + 0.14, 0.10, 'sine', 0.04);
+    } else if (kind === 'liquidation') {
+      // Low, flat, unmistakable. Nothing celebratory.
+      playTone(ctx, 174.61, t, 0.34, 'sawtooth', 0.05);
+      playTone(ctx, 138.59, t + 0.16, 0.44, 'sine', 0.055);
+    }
+  }
+
+  let effectRunId = 0;
+  function runPerpEffect(side) {
+    if (!uiSettings.tradeEffectsEnabled || !els || !els.effects) return;
+    const layer = els.effects;
+    const runId = ++effectRunId;
+    layer.textContent = '';
+
+    const flash = document.createElement('div');
+    flash.className = 'pt-fx-flash ' + (side === 'short' ? 'short' : 'long');
+    layer.appendChild(flash);
+
+    const colors = side === 'short'
+      ? ['#f85149', '#ff7b72', '#f0883e', '#ffffff', '#d29922']
+      : ['#3fb950', '#58d68d', '#f0883e', '#ffd166', '#ffffff'];
+    for (let i = 0; i < 42; i++) {
+      const p = document.createElement('i');
+      p.className = 'pt-fx-particle';
+      p.style.left = (15 + Math.random() * 70) + '%';
+      p.style.top = (25 + Math.random() * 35) + '%';
+      p.style.background = colors[i % colors.length];
+      p.style.setProperty('--dx', ((Math.random() - 0.5) * 360) + 'px');
+      p.style.setProperty('--dy', (80 + Math.random() * 260) + 'px');
+      p.style.setProperty('--rot', (Math.random() * 900 - 450) + 'deg');
+      p.style.setProperty('--delay', (Math.random() * 120) + 'ms');
+      p.style.setProperty('--dur', (650 + Math.random() * 450) + 'ms');
+      layer.appendChild(p);
+    }
+    setTimeout(() => { if (runId === effectRunId && els && els.effects) els.effects.textContent = ''; }, 1300);
   }
 
   /* ------------------------------- UI ------------------------------- */
@@ -402,6 +514,26 @@
     .notice { color: #e5484d; font-weight: 600; margin-top: 6px; }
     .foot { color: #4d5761; font-size: 10px; margin-top: 8px; }
     .collapsed .body { display: none; }
+
+    /* Fill feedback — the same language as the spot overlay (content.js
+       "celebration effects"), restated here because a shadow root does not
+       inherit the page-level stylesheet. Same timings, same palette, so a
+       paper perp entry feels like a paper spot entry. */
+    .pt-effects { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; overflow: hidden; }
+    .pt-fx-flash { position: absolute; inset: 0; animation: pt-fx-flash 0.48s ease-out forwards; }
+    .pt-fx-flash.long { background: radial-gradient(circle at 50% 45%, rgba(52, 211, 153, 0.24), rgba(255, 157, 69, 0.09) 35%, transparent 72%); }
+    .pt-fx-flash.short { background: radial-gradient(circle at 50% 45%, rgba(255, 95, 86, 0.22), rgba(255, 157, 69, 0.07) 35%, transparent 72%); }
+    .pt-fx-particle {
+      position: absolute; width: 8px; height: 12px; border-radius: 2px;
+      opacity: 0; animation: pt-fx-particle var(--dur) cubic-bezier(0.18, 0.72, 0.35, 1) var(--delay) forwards;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+    }
+    @keyframes pt-fx-flash { 0% { opacity: 0; } 18% { opacity: 1; } 100% { opacity: 0; } }
+    @keyframes pt-fx-particle {
+      0% { opacity: 0; transform: translate(0, -20px) rotate(0deg) scale(0.7); }
+      12% { opacity: 1; }
+      100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(1); }
+    }
   `;
 
   function el(tag, cls, text) {
@@ -453,10 +585,11 @@
 
     body.append(ta, sideRow, marginLbl, margin, levLbl, lev, preview, openBtn, positions, bal, notice, foot);
     card.append(hdr, body);
-    shadow.appendChild(card);
+    const effects = el('div', 'pt-effects');
+    shadow.append(card, effects);
     document.documentElement.appendChild(root);
 
-    els = { card, hdr, px: hdr.children[2], tgl, longBtn, shortBtn, margin, lev, levVal: levLbl.children[1], ta, preview, openBtn, positions, bal, notice };
+    els = { card, hdr, px: hdr.children[2], tgl, longBtn, shortBtn, margin, lev, levVal: levLbl.children[1], ta, preview, openBtn, positions, bal, notice, effects };
 
     longBtn.addEventListener('click', () => { inputs.side = 'long'; scheduleRender(); });
     shortBtn.addEventListener('click', () => { inputs.side = 'short'; scheduleRender(); });
@@ -572,6 +705,18 @@
     }
 
     const atr = adapter.venue === 'hyperliquid' && taReads ? taReads.atr : null;
+    if (venueUnreachable && !(hlAssets && hlAssets[adapter.market])) {
+      els.ta.style.display = 'none';
+      els.preview.replaceChildren(el('div', 'refuse',
+        'Hyperliquid’s public API is not answering from this network, so the '
+        + 'leverage tiers and funding rate this ticket needs are unavailable. '
+        + 'Paper perps stay closed rather than guess them. Retrying.'));
+      els.openBtn.disabled = true;
+      els.positions.style.display = 'none';
+      els.bal.replaceChildren(el('span', '', 'Paper balance'), el('span', '', T.fmtUsd(state.cashUsd)));
+      return;
+    }
+
     const marketConfirmed = adapter.venue !== 'hyperliquid'
       ? true : Boolean(hlAssets && hlAssets[adapter.market]);
     const pv = T.buildPreview({
@@ -637,7 +782,12 @@
     const gate = T.buildPreview(Object.assign({ cashUsd: state.cashUsd, carry, marketConfirmed: true }, args));
     if (!gate.ok) { flashNotice(gate.text); return; }
     applyOp((st) => P.openPerp(st, args)).then((r) => {
-      if (r && !r.ok) flashNotice(T.REASON_TEXT[r.reason] || r.reason);
+      if (r && !r.ok) { flashNotice(T.REASON_TEXT[r.reason] || r.reason); return; }
+      // Confirmation belongs to the FILL, never to the click: this only runs
+      // once the write actually won, so an effect can never imply a position
+      // that storage refused.
+      runPerpEffect(inputs.side);
+      playPerpSound(inputs.side);
     });
   }
 
@@ -645,8 +795,12 @@
     if (!(lastPx > 0)) return;
     applyOp((st) => P.closePerp(st, id, { price: lastPx, t: Math.floor(Date.now() / 1000), fraction }))
       .then((r) => {
-        if (r && !r.ok) flashNotice(T.REASON_TEXT[r.reason] || r.reason);
-        else if (r && r.ok && r.fullyClosed) flashNotice('Closed: ' + T.fmtUsd(r.pnlUsd - r.feeUsd, { signed: true }) + ' net of fees.');
+        if (r && !r.ok) { flashNotice(T.REASON_TEXT[r.reason] || r.reason); return; }
+        if (!r || !r.ok) return;
+        const net = r.pnlUsd - r.feeUsd;
+        runPerpEffect(net >= 0 ? 'long' : 'short');
+        playPerpSound('close');
+        if (r.fullyClosed) flashNotice('Closed: ' + T.fmtUsd(net, { signed: true }) + ' net of fees.');
       });
   }
 
@@ -685,9 +839,23 @@
     await refreshParams();
     // Hyperliquid: mount only once the market is confirmed a real perp.
     if (adapter.venue === 'hyperliquid' && !(hlAssets && hlAssets[adapter.market])) {
-      if (!hlAssets) return;      // API unreachable — try again on next poll
-      adapter = null; return;     // confirmed NOT a perp market: stay away
+      if (!hlAssets) {
+        // The venue's public API has not answered yet. This is RETRYABLE and
+        // must actually be retried: an earlier version returned here while
+        // the location poll had ALREADY consumed this href, so the page was
+        // never looked at again and the ticket never appeared at all. A slow
+        // or blocked API turned into permanent silence, which is worse than
+        // a slow start. Clearing the adapter lets the retry re-enter.
+        adapter = null;
+        venueParamsPending = true;
+        return;
+      }
+      // Answered, and this market is not in the live perp universe.
+      adapter = null;
+      venueParamsPending = false;
+      return;
     }
+    venueParamsPending = false;
     mountTicket();
     watchTitle();
     if (adapter.venue === 'hyperliquid') {
@@ -704,13 +872,43 @@
     adapter = null;
     barStore = null;
     taReads = null;
+    venueUnreachable = false;
+    entryAttempts = 0;
   }
 
   let lastHref = '';
+  let lastEntryAt = 0;
+
+  /* The location poll owns two jobs: noticing navigation, and retrying an
+   * entry that could not complete because the venue had not answered yet.
+   * The retry is rate-limited so a blocked venue costs one request every few
+   * seconds rather than one per tick, and it stops the moment entry
+   * succeeds or the market is positively ruled out. */
   function pollLocation() {
-    if (location.href === lastHref) return;
-    lastHref = location.href;
-    enterPage();
+    const now = Date.now();
+    if (location.href !== lastHref) {
+      lastHref = location.href;
+      lastEntryAt = now;
+      enterPage();
+      return;
+    }
+    if (venueParamsPending && now - lastEntryAt >= ENTRY_RETRY_MS) {
+      lastEntryAt = now;
+      entryAttempts += 1;
+      enterPage();
+      // Nothing may die quietly. Once the venue has had a fair chance to
+      // answer and has not, the page says so instead of staying blank —
+      // the user cannot tell "no perps here" from "we are broken" otherwise.
+      if (entryAttempts >= ENTRY_ATTEMPTS_BEFORE_NOTICE && !root) {
+        const found = S.detect(location.hostname, location.pathname);
+        if (found && found.venue === 'hyperliquid') {
+          adapter = found;
+          mountTicket();
+          venueUnreachable = true;
+          scheduleRender();
+        }
+      }
+    }
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -721,8 +919,11 @@
       if (rec && Number.isInteger(rec.rev) && rec.rev === stateRev) return;
       if (usableBook(rec && rec.state)) { state = rec.state; stateRev = rec.rev || 0; scheduleRender(); }
     }
+    // One Settings toggle governs both surfaces; pick up changes live.
+    if (area === 'local' && changes.pt_settings) loadUiSettings();
   });
 
+  loadUiSettings();
   managedInterval(pollLocation, LOCATION_POLL_MS);
   managedInterval(refreshParams, PARAMS_REFRESH_MS);
   managedInterval(refreshBars, BARS_REFRESH_MS);
