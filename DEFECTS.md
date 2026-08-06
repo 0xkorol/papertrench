@@ -415,6 +415,47 @@ reports `off-range` instead of `ok:true`. The drawing code itself was proven
 correct on the live chart first — canvas pixels showed the dashed line on the
 exact expected row — which is what ruled it out and pointed upstream.
 
+**F-44 · S1 · The attestation recorded a fill's CHAIN but never hashed it — the label was editable while every digest still verified**
+`attest.js` fillPreimage / chainOf · `server/core/chain.js` ·
+`test/chaincommit.test.js` · found by a community probe (amogus0471, via the
+Discord, 2026-08-06) asking what the chain actually protects ·
+**fixed (unreleased)**.
+`appendFill` stored `chain` on every link, but `fillPreimage` committed ten
+fields and none of them was it. The comment justified this with the solNet
+precedent — except solNet is safe for the OPPOSITE reason: `committedAmount()`
+refuses to read it, so nothing downstream trusts it. `chain` exists, by its own
+comment, so "a verifier prices the fill against the RIGHT chain's history" — a
+field the verifier is MEANT to consume. Recorded-but-unhashed meant a Base fill
+could be relabelled Solana, steering re-pricing toward whichever network's
+candles made a fabricated price plausible, with every hash still verifying.
+Not exploitable on the day it was found — nothing server-side read `link.chain`
+yet, and the candle path is Solana-hardcoded — so the accurate charge is a hole
+**scheduled to open**, on the release that makes the verifier chain-aware. The
+rule taken from it: *the commit precedes the consumer, or the consumer does not
+ship.*
+Fix: `VERSION` → 2, and `fillPreimage` now DISPATCHES on each link's own
+version instead of hardcoding `'v' + VERSION`. That ordering is the whole
+difficulty — a naive bump would have invalidated every chain in existence,
+including the one verified record in production, because a real wallet SPANS
+the upgrade (v1 links beside v2 links in one chain). v1's preimage is
+byte-identical forever; v2 APPENDS chain after `ts` rather than inserting it.
+`chainOf(link)` is the only sanctioned reader: a v1 link is Solana **by
+definition**, never by consulting its unhashed label — miss that and every
+historical link silently keeps the hole the bump was meant to close while the
+new ones look correct.
+Mutation-verified four ways, each killing exactly its own test and nothing
+else: un-commit the chain, hardcode the version again, trust the v1 label, and
+insert-instead-of-append. The fourth SURVIVED the first pass and exposed a real
+gap — nothing pinned v2's byte format — so a byte-exact v2 preimage test was
+added, which would have caught a future reorder orphaning v2 chains the same
+way. Suite 1305 extension + 118 server.
+**DEPLOY ORDER IS LOAD-BEARING**: `server/core/chain.js` re-exports this exact
+file and `server/core/submission.js:52` verifies every submitted chain, so a
+worker still running v1 logic would compute a v1 preimage for a v2 link and
+reject it as `hash-mismatch`. The new server code verifies BOTH versions, so it
+is backward compatible — **redeploy the worker before any extension build that
+writes v2 links reaches a user.**
+
 **F-43 · S1 · A basis RECLASSIFICATION teleported the entry line and every fill bubble — and the test written for that exact field report could not fail for it**
 `price-bridge.js` sameBasisFamily / paper-lines intake ·
 `test/basisflap.test.js` · fomo.family, maintainer field report 2026-08-06

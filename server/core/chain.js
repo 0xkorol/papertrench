@@ -14,6 +14,10 @@ module.exports = {
   GENESIS: AT.GENESIS,
   sha256: AT.sha256,
   fillPreimage: AT.fillPreimage,
+  // The ONLY sanctioned way to ask which chain a link belongs to: on a v1 link
+  // the stored label is unhashed and therefore not evidence, so it resolves to
+  // Solana by definition. Never read `link.chain` directly server-side.
+  chainOf: AT.chainOf,
   appendFill: AT.appendFill,
   verifyChain: AT.verifyChain,
   replayChain: AT.replayChain,

@@ -25,7 +25,10 @@
 (() => {
   'use strict';
 
-  const VERSION = 1;
+  // v2 (F-44) commits the fill's CHAIN. v1 did not, which left the label
+  // recorded-but-unhashed: editable while every digest still verified. See
+  // fillPreimage for why the bump is safe for chains already in the wild.
+  const VERSION = 2;
   const GENESIS = 'papertrench-genesis-v1';
   // How many independent link digests verifyChain may have in flight at once.
   // Bounds both concurrency and peak preimage memory on the shared server path
@@ -58,9 +61,36 @@
    * string from the public fill record alone, so field order and formatting are
    * part of the contract rather than an implementation detail.
    */
+  /**
+   * The chain a link belongs to, decided by its VERSION rather than by reading
+   * its label.
+   *
+   * A v1 link predates the committed field, so its `chain` property is
+   * unhashed — editable without breaking a single digest. It is therefore not
+   * evidence, and must never be consulted. Every v1 fill was written by a
+   * Solana-only build, so v1 IS Solana, by definition and not by inspection.
+   *
+   * This is the rule that stops the bump from being cosmetic: real chains SPAN
+   * the upgrade — v1 links sitting beside v2 links in one wallet — and a
+   * consumer that reads `link.chain` uniformly would inherit the exact hole the
+   * bump closes, on every historical link, while the new ones looked correct.
+   */
+  function chainOf(link) {
+    const version = Number(link && link.version) || 1;
+    if (version < 2) return 'solana';
+    const value = link && link.chain;
+    return typeof value === 'string' && value ? value : 'solana';
+  }
+
   function fillPreimage(fill, previousHash) {
-    return [
-      'v' + VERSION,
+    // Version DISPATCH, never a constant. A wallet that traded before v2 and
+    // after it holds both formats, so each link must be re-hashed under the
+    // rules it was WRITTEN with; `'v' + VERSION` here would invalidate every
+    // chain in existence the moment VERSION moved — including the ones already
+    // submitted to the leaderboard. Absent field means the original format.
+    const version = Number(fill && fill.version) || 1;
+    const fields = [
+      'v' + version,
       previousHash,
       String(fill.id || ''),
       String(fill.sessionId || ''),
@@ -75,13 +105,21 @@
         : (fill.solNet !== undefined ? fill.solNet : fill.solGross)
       ).toFixed(12),
       String(Math.trunc(Number(fill.ts) || 0)),
-    ].join('|');
+    ];
+    // APPENDED, not inserted: a v1 preimage must stay byte-identical forever or
+    // every chain written before today stops verifying. v2 adds one field at
+    // the end and changes nothing before it.
+    if (version >= 2) fields.push(chainOf(fill));
+    return fields.join('|');
   }
 
   /** Append one fill to the chain, returning its link. */
   async function appendFill(previousHash, fill) {
     const prev = previousHash || GENESIS;
-    const preimage = fillPreimage(fill, prev);
+    // Stamp the version onto the object the preimage is built from, so the
+    // digest and the stored link can never disagree about which format this
+    // link is in.
+    const preimage = fillPreimage({ ...fill, version: VERSION }, prev);
     const hash = await sha256(preimage);
     return {
       version: VERSION,
@@ -98,10 +136,13 @@
       // uncommitted but replayed — so the chain-derived P&L keeps agreeing
       // with an honest wallet when cost emulation is on.
       txCostSol: Number(fill.txCostSol) || 0,
-      // Multichain: which chain the fill's token lives on. Uncommitted-but-
-      // stored (the solNet pattern — the frozen preimage is untouched) so a
-      // verifier prices the fill against the RIGHT chain's history.
-      chain: typeof fill.chain === 'string' && fill.chain ? fill.chain : 'solana',
+      // Multichain: which chain the fill's token lives on. COMMITTED as of v2
+      // (F-44) — a verifier prices the fill against the right chain's history,
+      // so the label decides which candles judge it and must not be editable.
+      // It was previously stored under the solNet pattern, but that precedent
+      // is safe for the opposite reason: committedAmount() refuses to read
+      // solNet. A field the verifier is MEANT to consume has to be hashed.
+      chain: chainOf({ ...fill, version: VERSION }),
       amount: Number(fill.side === 'buy'
         ? (fill.solGross !== undefined ? fill.solGross : fill.solNet)
         : (fill.solNet !== undefined ? fill.solNet : fill.solGross)
@@ -418,7 +459,7 @@
 
   const api = {
     VERSION, GENESIS,
-    sha256, fillPreimage, appendFill, verifyChain,
+    sha256, fillPreimage, appendFill, verifyChain, chainOf,
     buildSubmission, replayChain, claimMatchesChain,
     CHAIN_META_KEY, CHAIN_SEG_PREFIX, CHAIN_SEG_SIZE,
     chainSegKey, normalizeChainMeta, chainStorageKeys,
