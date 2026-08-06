@@ -1,11 +1,14 @@
 # PaperTrench Perps + The TA Guide — scoping spec
 
-> **Status: DRAFT for maintainer alignment (2026-08-05).** Nothing here is
-> committed work. This document scopes the two coupled expansions requested by
-> the maintainer: a leveraged perps/futures paper book, and a minimal
-> technical-analysis guide layer with AI narration. Open questions for the
-> maintainer are collected in §10 — the build passes in §9 start only after
-> those are answered.
+> **Status: IN EXECUTION (2026-08-05).** Maintainer alignment received:
+> **first-wave venues are Axiom (perps), Hyperliquid, and Jupiter Perps**
+> ("focus right now on Axiom, Hyperliquid, and Jupiter Perps, and then we'll
+> go from there"); CEX perps named as later candidates (MEXC, Blofin,
+> Bitfinex, …). The remaining §10 recommendations are adopted as defaults
+> pending objection: TA-first landing order (C→A→B→D→E), separate perps book
+> + rank track, venue-mirrored leverage tiers with guardrail nudges,
+> venue-native margin currency, synthetic drills deferred. Pass C is
+> underway.
 
 ---
 
@@ -116,11 +119,15 @@ lucky 50x win — same doctrine as today, sharper teeth.
 
 **Venue adapters.** Perps venues are chart SPAs like the current seven sites;
 the adapter registry pattern in `sites.js` extends naturally (URL → market
-identity, market → URL). Recommended order (§10 Q1): **Hyperliquid first** —
-it is where this audience's leverage actually lives, its public info API is
-keyless (mark, oracle, funding, candles, leverage tiers), and Axiom's perps
-tab is Hyperliquid under the hood, so venue #2 lands on an adapter and a fee
-model we already ship.
+identity, market → URL). **First wave (maintainer, 2026-08-05): Axiom perps,
+Hyperliquid, Jupiter Perps.** Build order within the wave: Hyperliquid's
+keyless public info API (mark, oracle, funding, candles, leverage tiers) is
+the anchor layer, and Axiom's perps tab is Hyperliquid under the hood — so
+the Hyperliquid data plumbing lands once and serves both venues, while Jupiter
+Perps gets its own adapter + API anchor (oracle-priced, pool-based — different
+funding/borrow mechanics, verified during build, never assumed). Later
+candidates, explicitly named by the maintainer: MEXC, Blofin, Bitfinex and
+other CEX perps — different auth/data posture, own alignment pass first.
 
 **Feeds, two-source like spot.** A `price-bridge`-style MAIN-world hook on the
 venue chart (TradingView `subscribeBars` where present) for live refinement;
@@ -270,8 +277,10 @@ before the fix/feature → full green suite → changelog. No drip-feeding.
 
 ## 10. Open questions for the maintainer
 
-1. **Venue order.** Recommend Hyperliquid → Axiom Perps (same backend,
-   existing adapter) → then evaluate Jupiter Perps/Drift. Agree?
+1. **Venue order.** ✅ **Answered 2026-08-05:** first wave is Axiom,
+   Hyperliquid, and Jupiter Perps; CEX perps (MEXC, Blofin, Bitfinex, …)
+   later. Q2–Q6 recommendations below stand as adopted defaults pending
+   objection.
 2. **Landing order.** Recommend TA-first (C→A→B→D→E, rationale in §9).
    Perps-first is viable if the TA card should debut *with* perps instead.
 3. **Separate perps book + separate rank track** ("Leverage License") —
