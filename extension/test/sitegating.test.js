@@ -64,7 +64,11 @@ const MATRIX = [
   // GMGN
   ['https://gmgn.ai/sol/token/' + MINT, 'gmgn', 'mint', MINT, 'token route'],
   ['https://gmgn.ai/sol/address/' + WALLET, 'gmgn', null, null, 'wallet analysis must not mount (O-10)'],
-  ['https://gmgn.ai/eth/token/' + EVM_B58ISH, 'gmgn', null, null, 'EVM chain must never reach the Solana resolver (O-11)'],
+  // MULTICHAIN (2026-08-06): GMGN's EVM chains mount now. O-11's protection
+  // is unchanged in substance and stronger in form — this address is the one
+  // whose hex passes base58, and it may only ever be priced as ETHEREUM.
+  // test/chainrouting.test.js owns the full per-chain matrix.
+  ['https://gmgn.ai/eth/token/' + EVM_B58ISH, 'gmgn', 'mint', EVM_B58ISH, 'a base58-passing EVM address routes to its OWN chain, never Solana (O-11)'],
   // BullX
   ['https://neo.bullx.io/terminal?chainId=1399811149&address=' + PAIR, 'bullx', 'pair', PAIR, 'solana terminal'],
   ['https://neo.bullx.io/terminal?address=' + PAIR, 'bullx', 'pair', PAIR, 'no chainId defaults to accepting solana'],
@@ -73,11 +77,13 @@ const MATRIX = [
   ['https://neo.bullx.io/portfolio/' + WALLET, 'bullx', null, null, 'portfolio must not mount (O-10)'],
   // Dexscreener
   ['https://dexscreener.com/solana/' + PAIR, 'dexscreener', 'pair', PAIR, 'solana pair page'],
-  ['https://dexscreener.com/ethereum/' + EVM_B58ISH, 'dexscreener', null, null, 'EVM route must not reach the Solana resolver (O-11)'],
+  ['https://dexscreener.com/ethereum/' + EVM_B58ISH, 'dexscreener', 'pair', EVM_B58ISH, 'EVM route prices on ETHEREUM, never Solana (O-11 preserved by routing)'],
   ['https://dexscreener.com/watchlist', 'dexscreener', null, null, 'watchlist is not a token page'],
   // Birdeye
   ['https://birdeye.so/token/' + MINT + '?chain=solana', 'birdeye', 'mint', MINT, 'token route'],
-  ['https://birdeye.so/token/' + MINT + '?chain=ethereum', 'birdeye', null, null, 'explicit foreign chain is not ours'],
+  // A base58 mint under an explicit ethereum chain is a contradiction, and
+  // shape-strictness still refuses it outright.
+  ['https://birdeye.so/token/' + MINT + '?chain=ethereum', 'birdeye', null, null, 'a base58 mint under an EVM chain is refused (O-11, shape-strict)'],
   ['https://birdeye.so/profile/' + WALLET, 'birdeye', null, null, 'profile must not mount (O-10)'],
   // Jupiter
   ['https://jup.ag/swap?inputMint=So11111111111111111111111111111111111111112&outputMint=' + MINT, 'jupiter', 'mint', MINT, 'swap output mint'],

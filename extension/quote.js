@@ -31,7 +31,43 @@
     base: 'base',
     monad: 'monad',
     hyperliquid: 'hyperliquid',
+    /* The other terminals went multichain on 2026-08-06 (GMGN, Birdeye and
+     * DexScreener, all route shapes verified live). They already speak
+     * Dexscreener's own chainId vocabulary, so these are identity entries —
+     * present rather than assumed, because an ABSENT entry is what used to
+     * make a foreign token get priced on Solana. test/chainrouting.test.js
+     * fails if sites.js can ever emit a chain that is missing here. */
+    bsc: 'bsc',
+    arbitrum: 'arbitrum',
+    avalanche: 'avalanche',
+    optimism: 'optimism',
+    polygon: 'polygon',
+    sui: 'sui',
+    ton: 'ton',
+    tron: 'tron',
+    unichain: 'unichain',
+    sonic: 'sonic',
+    cronos: 'cronos',
+    pulsechain: 'pulsechain',
+    abstract: 'abstract',
+    hyperevm: 'hyperevm',
   };
+
+  /**
+   * The Dexscreener chainId to price a token against, or null.
+   *
+   * No chain at all means Solana — the historical default, and what every
+   * Solana-only caller still passes. But a chain we were GIVEN and cannot
+   * map must never fall back to Solana: that silently prices a foreign
+   * token against a different chain's pairs, which is the exact class of
+   * wrong number this product exists to refuse. Null flows into the pair
+   * filters as "match nothing", so the caller gets no price instead of the
+   * wrong one.
+   */
+  function chainIdFor(chain) {
+    if (chain === undefined || chain === null || chain === '') return 'solana';
+    return Object.prototype.hasOwnProperty.call(CHAIN_MAP, chain) ? CHAIN_MAP[chain] : null;
+  }
 
   /** Case-tolerant address equality: Dexscreener returns checksummed EVM
    *  addresses while page URLs are usually lowercase. Base58 is case-
@@ -173,7 +209,7 @@
    */
   function tokenFromPayload(payload, fallbackAddress, opts) {
     if (!payload || typeof payload !== 'object') return null;
-    const chainId = CHAIN_MAP[(opts && opts.chain) || 'solana'] || 'solana';
+    const chainId = chainIdFor(opts && opts.chain);
     const pair = payload.pair || pickBestPair(payload.pairs, fallbackAddress, chainId);
     return normalizePair(pair, fallbackAddress, opts);
   }
@@ -825,7 +861,7 @@
     // Multichain: one batch call carries ONE chain family (the resolver
     // groups by chain); default remains solana with SOL-native usability.
     const chain = (opts && opts.chain) || 'solana';
-    const chainId = CHAIN_MAP[chain] || 'solana';
+    const chainId = chainIdFor(chain);
     const foreign = chain !== 'solana';
 
     const byMint = new Map();
