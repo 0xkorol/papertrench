@@ -135,27 +135,52 @@ test('the manifest no longer injects into every page on the internet', () => {
   //
   // v2.4.0 adds a second injection surface: passive viewer bridges on
   // x.com/twitter.com for the opt-in warm-links feature, joined in v2.6.0 by
-  // the X-Ray observer and panel. The rule stays the same shape — every entry
-  // is either the trading surface or the X surface, each pinned to its own
-  // host list, and nothing runs anywhere else. The X allowlist is explicit
-  // and closed: a new file only reaches x.com by being named here, which is
-  // the review step that keeps the trading engine off X by construction.
+  // the X-Ray observer and panel. The perps expansion adds a third: the
+  // perps stack on its own venue hosts. The rule stays the same shape —
+  // every entry is the trading surface, the X surface, or the perps
+  // surface, each pinned to its own CLOSED host list, and nothing runs
+  // anywhere else. A new file only reaches a surface by being named here,
+  // which is the review step that keeps each engine off the others' sites
+  // by construction.
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
   const X_VIEWER_FILES = new Set([
     'xwarm-main.js', 'xwarm-relay.js',
     'xray-core.js', 'xray-main.js', 'xray-panel.js',
   ]);
+  const PERPS_FILES = new Set([
+    'perps-venues.js', 'perps.js', 'perps-sites.js',
+    'perps-reconcile.js', 'perps-ticket.js', 'perps-content.js',
+  ]);
+  const PERPS_HOSTS = new Set([
+    'https://app.hyperliquid.xyz/*', 'https://jup.ag/*', 'https://*.jup.ag/*',
+  ]);
   const isXEntry = (cs) => (cs.js || []).some((f) => X_VIEWER_FILES.has(f));
+  const isPerpsEntry = (cs) => (cs.js || []).some((f) => PERPS_FILES.has(f));
 
   for (const script of manifest.content_scripts) {
     assert.ok(!script.matches.includes('<all_urls>'),
       'content scripts must be limited to supported sites');
   }
 
-  const trading = manifest.content_scripts.filter((cs) => !isXEntry(cs));
+  const trading = manifest.content_scripts.filter((cs) => !isXEntry(cs) && !isPerpsEntry(cs));
   const xViewer = manifest.content_scripts.filter(isXEntry);
+  const perps = manifest.content_scripts.filter(isPerpsEntry);
   assert.ok(trading.length >= 2 && xViewer.length === 3,
     'expected the two trading-surface entries plus the three X surface entries');
+  assert.equal(perps.length, 1, 'the perps stack rides exactly one entry');
+
+  for (const script of perps) {
+    assert.ok(script.matches.every((m) => PERPS_HOSTS.has(m)),
+      'the perps surface is pinned to its own closed venue host list');
+    assert.ok(script.js.every((f) => PERPS_FILES.has(f)),
+      'the perps entry may carry ONLY the perps stack — never the spot engine or overlay');
+    assert.ok(!script.matches.some((m) => m.includes('x.com') || m.includes('twitter.com')),
+      'the perps surface must never run on X');
+  }
+  for (const script of trading.concat(xViewer)) {
+    assert.ok(!(script.js || []).some((f) => PERPS_FILES.has(f)),
+      'the perps stack must not leak onto the spot or X surfaces');
+  }
 
   for (const script of trading) {
     assert.ok(script.matches.includes('https://pump.fun/*'),
