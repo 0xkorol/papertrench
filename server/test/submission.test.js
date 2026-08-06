@@ -71,7 +71,7 @@ test('a tampered link is rejected as chain-invalid', async () => {
 
 test('a replaced history is rejected: the new chain must extend the old head', async () => {
   const first = await honestPayload();
-  const previous = { head: first.head, chainLen: first.chain.length };
+  const previous = { head: first.head, chainLen: first.chain.length, startingSol: 10 };
   // A fresh, luckier chain of the same length — the oldest cheat.
   seq = 100;
   const lucky = await chainOf([
@@ -88,7 +88,7 @@ test('a replaced history is rejected: the new chain must extend the old head', a
 
 test('a shrunk chain is rejected even if internally valid', async () => {
   const first = await honestPayload();
-  const previous = { head: first.head, chainLen: first.chain.length };
+  const previous = { head: first.head, chainLen: first.chain.length, startingSol: 10 };
   const payload = Object.assign({}, first, {
     chain: first.chain.slice(0, 1), head: first.chain[0].hash,
   });
@@ -97,9 +97,26 @@ test('a shrunk chain is rejected even if internally valid', async () => {
   assert.equal(result.reason, 'chain-shrunk');
 });
 
+test('the declared bankroll is pinned — shrinking it cannot inflate ROI', async () => {
+  // The cheapest possible cheat: resubmit the identical fills but declare a
+  // tiny bankroll, and the same P&L becomes a vastly larger return.
+  const first = await honestPayload();
+  const previous = { head: first.head, chainLen: first.chain.length, startingSol: 10 };
+
+  const inflated = Object.assign({}, first, {
+    claim: Object.assign({}, first.claim, { startingBalanceSol: 0.01 }),
+  });
+  const result = await fastChecks(inflated, previous);
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, 'bankroll-changed');
+
+  // The same chain with the same declared bankroll still goes through.
+  assert.equal((await fastChecks(first, previous)).accepted, true);
+});
+
 test('an extended chain from the committed head is accepted', async () => {
   const first = await honestPayload();
-  const previous = { head: first.head, chainLen: first.chain.length };
+  const previous = { head: first.head, chainLen: first.chain.length, startingSol: 10 };
   const extended = first.chain.slice();
   const next = await appendFill(first.head, buy('M2', 1, 30 * MIN));
   next.seq = extended.length;
@@ -118,8 +135,9 @@ test('a claim that disagrees with the replay is flagged, and replay wins', async
   const result = await fastChecks(payload, null);
   assert.equal(result.accepted, true);
   assert.equal(result.claimMismatch, true);
-  // Ranked stats come from the chain, not the brag.
-  assert.ok(Math.abs(result.stats.realizedPnlSol - 0.99) < 1e-9);
+  // Ranked stats come from the chain, not the brag — on the committed cash
+  // basis (gross out on buys), which is 0.98 rather than the client's 0.99.
+  assert.ok(Math.abs(result.stats.realizedPnlSol - 0.98) < 1e-9);
 });
 
 test('shape gates turn absurd payloads away before any crypto runs', async () => {

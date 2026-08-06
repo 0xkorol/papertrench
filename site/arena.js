@@ -1,0 +1,286 @@
+/* PaperTrench site — the Arena client.
+ *
+ * Talks to the API worker (api.papertrench.com) and, when the user clicks
+ * Sync, to the extension over the externally_connectable bridge.
+ *
+ * The honesty rules from the product carry over verbatim: every number
+ * rendered here came from the server's replay of a verified chain or it is
+ * not rendered. No invented rows, no placeholder standings, no filler while
+ * loading — a skeleton or an empty state instead. Unreachable says
+ * unreachable.
+ */
+(() => {
+  'use strict';
+
+  const API = 'https://api.papertrench.com';
+  // The stable id the Chrome Web Store assigns the published extension.
+  // Unpacked developer installs get per-machine ids the site cannot know —
+  // those users use the exported-file path instead (server/DEPLOY.md).
+  const EXTENSION_IDS = ['REPLACE_WITH_CWS_EXTENSION_ID'];
+
+  /* ------------------------------------------------------------ format -- */
+
+  const esc = (t) => String(t == null ? '' : t)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  function fmt(n, digits) {
+    const value = Number(n);
+    if (!Number.isFinite(value)) return '—';
+    return value.toLocaleString('en-US', {
+      minimumFractionDigits: digits, maximumFractionDigits: digits,
+    });
+  }
+
+  function signed(n, digits, suffix) {
+    const value = Number(n);
+    if (!Number.isFinite(value)) return '—';
+    return (value >= 0 ? '+' : '') + fmt(value, digits) + (suffix || '');
+  }
+
+  const dirClass = (n) => (Number(n) >= 0 ? 'up' : 'down');
+
+  /** "3m ago" / "2h ago" — short enough for a stream line. */
+  function ago(ts) {
+    const seconds = Math.max(0, (Date.now() - Number(ts)) / 1000);
+    if (seconds < 60) return Math.floor(seconds) + 's ago';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    return Math.floor(seconds / 86400) + 'd ago';
+  }
+
+  function initials(handle) {
+    return String(handle || '??').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '??';
+  }
+
+  // Deterministic per-handle tint, so a trader keeps the same colour on every
+  // surface and you learn to spot your rival by eye.
+  const TONES = [
+    ['rgba(255,157,69,.18)', 'var(--orange2)'],
+    ['rgba(106,169,255,.18)', 'var(--blue)'],
+    ['rgba(167,139,250,.18)', 'var(--violet)'],
+    ['rgba(52,211,153,.18)', 'var(--green)'],
+    ['rgba(224,67,58,.18)', '#ff8a80'],
+    ['rgba(207,216,230,.16)', 'var(--silver)'],
+  ];
+  function tone(handle) {
+    let hash = 0;
+    const text = String(handle || '');
+    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    return TONES[hash % TONES.length];
+  }
+
+  function face(entry, className) {
+    const cls = className || 'ar-face';
+    if (entry && entry.avatarUrl) {
+      return `<span class="${cls}"><img src="${esc(entry.avatarUrl)}" alt="" loading="lazy"
+        referrerpolicy="no-referrer"></span>`;
+    }
+    const [bg, fg] = tone(entry && entry.handle);
+    return `<span class="${cls}" style="background:${bg};color:${fg}">${esc(initials(entry && entry.handle))}</span>`;
+  }
+
+  /* -------------------------------------------------------- verification */
+
+  const CHIP = {
+    verified: '<span class="ar-chip verified" title="Every link re-hashed, book replayed, and every fill re-priced against real market history.">✓ Verified</span>',
+    pending: '<span class="ar-chip pending" title="Chain re-hashed and replayed. Prices are still being re-checked against market history."><i class="spin"></i>Verifying</span>',
+    partial: '<span class="ar-chip partial" title="Chain valid and replayed, but some fills had no public candle data to check against. Shown, labeled, and ranked below fully verified records.">◐ Partial data</span>',
+    rejected: '<span class="ar-chip rejected" title="This record failed verification and does not rank.">✕ Rejected</span>',
+  };
+  const chipFor = (status) => CHIP[status] || CHIP.pending;
+
+  /* ------------------------------------------------------------- network */
+
+  async function api(path, options) {
+    const res = await fetch(API + path, Object.assign({ credentials: 'include' }, options || {}));
+    const body = await res.json().catch(() => null);
+    return { status: res.status, body };
+  }
+
+  /**
+   * GET that throws on anything that is not a 2xx with a body.
+   *
+   * A caller that reads only `.body` cannot tell a 503 from an empty board:
+   * `body.entries` is undefined either way, and the page then states "the
+   * board is empty" — an affirmative claim about the world, made while the
+   * verifier is unreachable. This is the read path for anything whose absence
+   * would be rendered as a fact.
+   */
+  async function getOrThrow(path) {
+    const { status, body } = await api(path);
+    if (status < 200 || status >= 300 || !body) throw new Error('api ' + status);
+    return body;
+  }
+
+  async function me() {
+    try { return (await api('/api/me')).body || { signedIn: false }; }
+    catch { return { signedIn: false, unreachable: true }; }
+  }
+
+  function signIn() { window.location.href = API + '/api/auth/x/start'; }
+
+  async function logout() {
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+    window.location.reload();
+  }
+
+  async function submit(payload) {
+    try {
+      return await api('/api/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      return { status: 0, body: { ok: false, reason: 'server-unreachable' } };
+    }
+  }
+
+  /* ------------------------------------------------------ extension bridge */
+
+  function bridgeSend(message) {
+    return new Promise((resolve) => {
+      if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage)) {
+        resolve(null); // not a Chromium browser, or no extension API exposed
+        return;
+      }
+      let settled = 0;
+      const finish = (value) => { if (!settled++) resolve(value); };
+      const tryId = (index) => {
+        if (index >= EXTENSION_IDS.length) { finish(null); return; }
+        try {
+          chrome.runtime.sendMessage(EXTENSION_IDS[index], message, (response) => {
+            if (chrome.runtime.lastError || !response) { tryId(index + 1); return; }
+            finish(response);
+          });
+        } catch { tryId(index + 1); }
+      };
+      tryId(0);
+      setTimeout(() => finish(null), 2500);
+    });
+  }
+
+  const bridgePing = () => bridgeSend({ type: 'pt_bridge_ping' });
+  const bridgeGetRecord = () => bridgeSend({ type: 'pt_bridge_get_record' });
+
+  /* --------------------------------------------------------- rank deltas */
+  /*
+   * The server keeps no positional history, so a "▲2" against some global
+   * yesterday would be invented. What IS knowable is where these handles sat
+   * the last time YOU loaded the board — so that is exactly what this shows,
+   * labeled as such. First visit shows nothing rather than a fabricated zero.
+   */
+  const SNAPSHOT_KEY = 'pt_board_positions_v1';
+
+  function readSnapshot(board) {
+    try {
+      const all = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}');
+      return all[board] || null;
+    } catch { return null; }
+  }
+
+  function writeSnapshot(board, entries) {
+    try {
+      const all = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}');
+      const positions = {};
+      entries.forEach((entry, index) => { positions[entry.handle] = index; });
+      all[board] = { at: Date.now(), positions };
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(all));
+    } catch { /* private mode: deltas simply never appear */ }
+  }
+
+  function deltaCell(snapshot, handle, index) {
+    if (!snapshot || !snapshot.positions) return '<span class="delta flat">·</span>';
+    const was = snapshot.positions[handle];
+    if (was === undefined) return '<span class="delta up" title="New on the board since your last visit">NEW</span>';
+    const moved = was - index;
+    if (moved === 0) return '<span class="delta flat">·</span>';
+    const cls = moved > 0 ? 'up' : 'down';
+    const arrow = moved > 0 ? '▲' : '▼';
+    return `<span class="delta ${cls}" title="Moved ${Math.abs(moved)} since your last visit">${arrow}${Math.abs(moved)}</span>`;
+  }
+
+  /* ------------------------------------------------------------- pieces  */
+
+  function skeleton(rows) {
+    const lines = Array.from({ length: rows || 5 }, () => '<div class="line"></div>').join('');
+    return `<div class="ar-skel" aria-busy="true" aria-label="Loading standings">${lines}</div>`;
+  }
+
+  function empty(mark, title, body) {
+    return `<div class="ar-empty"><div class="mark">${mark}</div>
+      <h4>${esc(title)}</h4><p>${body}</p></div>`;
+  }
+
+  function errorState(body) {
+    return `<div class="ar-empty error"><div class="mark">⚠</div>
+      <h4>Can't reach the verifier</h4><p>${body}</p></div>`;
+  }
+
+  /** Score contribution split, for the formula bar. */
+  function scoreTerms(stats) {
+    const rounds = Number(stats.rounds) || 0;
+    const reps = Math.log(1 + rounds);
+    const discipline = Math.max(0.25,
+      1 - 0.5 * (Number(stats.revengeRatio) || 0) - 0.25 * (Number(stats.maxDrawdown) || 0));
+    return { roiPct: Number(stats.roiPct) || 0, reps, rounds, discipline };
+  }
+
+  function formulaHtml(stats) {
+    const t = scoreTerms(stats);
+    return `<div class="ar-formula">
+      <span class="term roi">${esc(fmt(t.roiPct, 1))}%<small>return</small></span>
+      <span class="op">×</span>
+      <span class="term reps">${esc(fmt(t.reps, 2))}<small>ln(1+${esc(String(t.rounds))})</small></span>
+      <span class="op">×</span>
+      <span class="term disc">${esc(fmt(t.discipline, 3))}<small>discipline</small></span>
+      <span class="op">=</span>
+      <span class="out">${esc(fmt(Number(stats.score) || 0, 1))}</span>
+    </div>`;
+  }
+
+  /** Tier-coloured initials for the compact badge strip. Board payloads carry
+   * {id, name, tier} only; the full evidence lives on the profile. */
+  function badgeChips(badges, limit) {
+    const list = (badges || []).slice(0, limit || 4);
+    if (!list.length) return '';
+    return '<span class="ar-badge-row">' + list.map((b) =>
+      `<i class="ar-badge-mini t-${esc(b.tier)}" title="${esc(b.name)}" aria-label="${esc(b.name)}"
+        >${esc(String(b.name || '?').slice(0, 1))}</i>`
+    ).join('') + '</span>';
+  }
+
+  /* ----------------------------------------------------------- readout --- */
+  /*
+   * Headline figures SETTLE rather than count up.
+   *
+   * A counter sweeping from zero renders a series of numbers that were never
+   * true, next to a real trader's handle, on pages built to be screenshotted —
+   * and a screenshot caught mid-sweep is a false record of someone's results.
+   * So the true value is in the DOM from the first paint and only its
+   * presentation animates: a short blur-and-rise that reads as the figure
+   * locking in, with nothing to misread at any frame.
+   */
+  function countUp(el, to, digits, suffix) {
+    // A non-finite target must read as absent, never as "+NaN".
+    if (!Number.isFinite(Number(to))) { el.textContent = '—'; return; }
+    el.textContent = (to >= 0 ? '+' : '') + fmt(to, digits) + (suffix || '');
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    el.classList.remove('ar-settle');
+    // Reflow so the class re-applies when a board repaints in place.
+    void el.offsetWidth;
+    el.classList.add('ar-settle');
+  }
+
+  window.PTArena = {
+    API, EXTENSION_IDS,
+    esc, fmt, signed, dirClass, ago, initials, tone, face,
+    CHIP, chipFor,
+    api, getOrThrow, me, signIn, logout, submit,
+    bridgePing, bridgeGetRecord,
+    readSnapshot, writeSnapshot, deltaCell,
+    skeleton, empty, errorState,
+    scoreTerms, formulaHtml, badgeChips, countUp,
+  };
+})();

@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 
 const { roundsFromChain, recordStats, seasonScore, revengeRatio, maxDrawdown,
         MIN_RANKED_ROUNDS } = require('../core/ranking.js');
-const { appendFill, GENESIS } = require('../core/chain.js');
+const { appendFill, GENESIS, verifyChain } = require('../core/chain.js');
 
 async function chainOf(fills) {
   const links = [];
@@ -46,8 +46,8 @@ test('rounds reconstruct from fills alone: open→flat, with net-basis P&L', asy
   assert.equal(rounds[0].win, true);
   assert.equal(rounds[1].win, false);
   assert.equal(rounds[0].mint.length > 0, true);
-  // Net basis: 0.99 in, 1.98 out → +0.99.
-  assert.ok(Math.abs(rounds[0].pnlSol - 0.99) < 1e-9);
+  // Committed basis: 1.00 gross out on the buy, 1.98 net in on the sell.
+  assert.ok(Math.abs(rounds[0].pnlSol - 0.98) < 1e-9);
 });
 
 test('a partial sell does not close the round; going flat does', async () => {
@@ -59,6 +59,61 @@ test('a partial sell does not close the round; going flat does', async () => {
   const rounds = roundsFromChain(links);
   assert.equal(rounds.length, 1);
   assert.equal(rounds[0].closedTs, 30 * MIN);
+});
+
+test('scaling out books EVERY leg, not just the last one', async () => {
+  // The disciplined exit this product teaches is taking profit in pieces.
+  // Booking only the closing leg understated those rounds, so the board
+  // disagreed with replayChain for precisely the best-behaved traders.
+  seq = 0;
+  const scaled = await chainOf([
+    buy('M1', 1, 10 * MIN),
+    sell('M1', 500, 0.004, 20 * MIN),   // half out at 4x
+    sell('M1', 500, 0.004, 30 * MIN),   // rest out at 4x
+  ]);
+  const [round] = roundsFromChain(scaled);
+
+  // Committed basis: 1.00 gross out; each leg returns 500 x 0.004 = 2 gross,
+  // 1.98 net in, against half the basis each time.
+  const expected = (1.98 - 0.5) + (1.98 - 0.5);
+  assert.ok(Math.abs(round.pnlSol - expected) < 1e-9,
+    `round P&L ${round.pnlSol} should book both legs (${expected})`);
+  assert.ok(Math.abs(round.costIn - 1.0) < 1e-9, 'cost basis is the whole position');
+
+  // The round total is the committed cash flow: net in on sells minus gross
+  // out on buys. That is the money that actually moved, fees included.
+  const summed = roundsFromChain(scaled).reduce((s, r) => s + r.pnlSol, 0);
+  assert.ok(Math.abs(summed - expected) < 1e-9);
+});
+
+test('ranked stats are immune to the fields the chain does not hash', async () => {
+  // attest.js commits gross on a buy and net on a sell. Buy-side solNet,
+  // txCostSol and the `amount` copy ride along UNHASHED, so an attacker can
+  // set them to anything and every link still re-hashes. Driving a buy's
+  // cost basis to nothing is the highest-leverage edit available, so the
+  // ranked book must not read those fields at all.
+  seq = 700;
+  const honest = await chainOf([
+    buy('M1', 1, 10 * MIN), sell('M1', 1000, 0.002, 20 * MIN),
+  ]);
+  const before = recordStats(honest, 10);
+
+  // Tamper with every uncommitted money field on the buy.
+  const tampered = honest.map((l) => Object.assign({}, l));
+  tampered[0].solNet = 0.000001;
+  tampered[0].txCostSol = 0;
+  tampered[0].amount = 0.000001;
+  tampered[1].amount = 9999;
+
+  // The chain still verifies — that is exactly what makes this dangerous.
+  const check = await verifyChain(tampered);
+  assert.equal(check.valid, true, 'the tamper must be invisible to the hash check');
+
+  const after = recordStats(tampered, 10);
+  assert.ok(Math.abs(after.realizedPnlSol - before.realizedPnlSol) < 1e-12,
+    `edited uncommitted fields moved ranked P&L from ${before.realizedPnlSol} to ${after.realizedPnlSol}`);
+  assert.ok(Math.abs(after.roiPct - before.roiPct) < 1e-12);
+  assert.ok(Math.abs(after.score - before.score) < 1e-12);
 });
 
 test('one lottery win does not outrank a sustained record', async () => {

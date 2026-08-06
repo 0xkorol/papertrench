@@ -4,23 +4,264 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PaperTrench — Trader profile</title>
-<meta name="description" content="A verified PaperTrench record: chain-committed fills, server-replayed stats, and sprint history — with the verification status stated plainly.">
+<!-- These static tags are what crawlers and link unfurlers read: the JS below
+     rewrites them for the loaded handle, but a scraper never runs it. So the
+     static copy claims nothing about any individual trader — it describes the
+     page, not a record. Anything else would be a number we did not verify
+     being attributed to a person we have not loaded. -->
+<meta name="description" content="One trader's public PaperTrench record: hash-chained fills, a server-side replay, every price re-checked against real market history, and the verification status stated plainly.">
+<meta property="og:title" content="PaperTrench — a trader's public record">
+<meta property="og:description" content="Chain-committed fills, replayed server-side and re-priced against real market history. Nothing on this page is self-reported except the declared bankroll.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="assets/icon128.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="arena.css">
 <style>
-  .prof-wrap { max-width: 860px; margin: 0 auto; }
-  .prof-head { display: flex; align-items: center; gap: 16px; padding: 26px; }
-  .prof-head img { width: 56px; height: 56px; border-radius: 50%; }
-  .prof-head h1 { font-size: 24px; margin: 0; }
-  .prof-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-top: 22px; }
-  .prof-stat { background: rgba(255,255,255,0.03); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
-  .prof-stat .num { font-family: var(--mono); font-size: 20px; font-weight: 800; }
-  .prof-stat .lbl { font-size: 11.5px; color: var(--dim); font-weight: 700; margin-top: 3px; letter-spacing: .4px; }
-  .lb-note { color: var(--dim); font-size: 12.5px; line-height: 1.65; }
-  .prof-chain { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--dim); }
+/* profile.html — page-scoped only.
+ *
+ * arena.css is shared with the other Arena surfaces and is being edited by
+ * another pass, so everything a profile needs and no other board needs lives
+ * here, in arena.css's own idiom and tokens. Four things earn their keep:
+ * the profile card (nothing else on the site is one trader at full size), the
+ * score waterfall's forfeit segment, the sprint rows, and the share-card frame.
+ */
+
+/* The shell and the empty/error pane swap places, and .ar-shell's display:grid
+   out-specifies the UA's [hidden] rule. Toggling a class instead would mean
+   two states to keep in sync; making `hidden` actually hide is one line. */
+[hidden] { display: none !important; }
+
+/* ===================================================== the profile card === */
+
+.ar-prof {
+  position: relative;
+  border-radius: 20px;
+  border: var(--edge);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.014));
+  box-shadow: var(--lift-3);
+  padding: 26px 28px 22px;
+  overflow: hidden;
+  animation: ar-rise var(--t-slow) var(--e-out) both;
+}
+
+/* The tier foil.
+ *
+ * arena.css's first rule is that gold belongs to rank 1 alone. This is the one
+ * place the badge case's metals reach the card frame, and it stays a hairline
+ * on purpose: the podium's rank-1 treatment is a FILLED gold ground plus a gold
+ * ring plus a gold place pill, so a 1px masked edge cannot be mistaken for it
+ * at any size. The foil is also earned, not decorative — no badges, no foil —
+ * which is the same contract the .ar-badge tiers already carry. */
+.ar-prof::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--foil, transparent);
+  opacity: 0.8;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.ar-prof::after {
+  content: "";
+  position: absolute;
+  inset: -30% auto -30% -8%;
+  width: 52%;
+  background: radial-gradient(ellipse 52% 46% at 26% 50%, var(--foil-glow, transparent), transparent 72%);
+  pointer-events: none;
+  z-index: 0;
+}
+.ar-prof.t-bronze  { --foil: var(--grad-bronze); --foil-glow: rgba(224, 151, 90, 0.15); }
+.ar-prof.t-silver  { --foil: var(--grad-silver); --foil-glow: rgba(207, 216, 230, 0.13); }
+.ar-prof.t-gold    { --foil: var(--grad-gold);   --foil-glow: rgba(255, 207, 92, 0.13); }
+.ar-prof.t-diamond {
+  --foil: linear-gradient(135deg, #dffcff 0%, #7dd3fc 40%, #a78bfa 100%);
+  --foil-glow: rgba(167, 139, 250, 0.16);
+}
+
+.ar-prof > * { position: relative; z-index: 1; }
+
+.ar-prof-top {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.ar-prof-face {
+  width: 104px; height: 104px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  font-size: 34px;
+  overflow: hidden;
+  border: 2px solid var(--line2);
+  background: var(--pane-hi);
+  box-shadow: var(--lift-2);
+}
+.ar-prof-face img { width: 100%; height: 100%; object-fit: cover; }
+.ar-prof.t-bronze  .ar-prof-face { border-color: rgba(224, 151, 90, 0.55); }
+.ar-prof.t-silver  .ar-prof-face { border-color: rgba(207, 216, 230, 0.5); }
+.ar-prof.t-gold    .ar-prof-face { border-color: rgba(255, 207, 92, 0.5); }
+.ar-prof.t-diamond .ar-prof-face { border-color: rgba(167, 139, 250, 0.55); }
+
+.ar-prof-id { min-width: 0; flex: 1 1 320px; }
+.ar-prof-handle {
+  font-size: clamp(28px, 3.6vw, 46px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  font-weight: 900;
+  margin: 10px 0 0;
+  word-break: break-word;
+}
+.ar-prof-name {
+  color: var(--muted);
+  font-size: 15px;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ar-prof-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+/* The hero chip is the one people screenshot, so it gets read-at-arm's-length
+   sizing. Colour and hatching stay exactly as arena.css defines them. */
+.ar-prof-chips .ar-chip { font-size: 10.5px; padding: 5px 11px; }
+
+.ar-prof .ar-spec { margin-top: 24px; }
+
+@media (max-width: 560px) {
+  .ar-prof { padding: 20px 18px 16px; }
+  .ar-prof-top { gap: 16px; }
+  .ar-prof-face { width: 72px; height: 72px; font-size: 24px; }
+}
+
+/* ============================================================ the record == */
+
+.ar-stat .num.score { color: var(--orange2); }
+/* The headline tile. It is warmed rather than widened: .ar-stats is an
+   auto-fit grid, and a spanning tile forces a second track on a phone narrow
+   enough to fit only one. */
+.ar-stat.head {
+  border-color: rgba(255, 157, 69, 0.28);
+  background: linear-gradient(180deg, rgba(255, 157, 69, 0.07), rgba(255, 255, 255, 0.02));
+}
+.ar-stat.head .num { font-size: 26px; }
+
+/* The discipline segment of the score bar is a FORFEIT — the part of the score
+   the discipline term took away — so it must not read as earned area. Same
+   hatching the partial chip uses, for the same reason: incomplete has to look
+   incomplete, and so does forfeited. */
+.ar-segbar .s-forfeit {
+  background-color: rgba(52, 211, 153, 0.22);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(52, 211, 153, 0.42) 0 4px,
+    transparent 4px 8px
+  );
+}
+.ar-seglegend .neg { color: var(--muted); }
+
+/* ========================================================== badge case ==== */
+
+/* On the board a badge is an ornament and arena.css drops its evidence below
+   400px. Here the evidence IS the badge — "31 losses, none chased" is the
+   whole claim — so the case keeps it and lets the badge take the full row. */
+@media (max-width: 400px) {
+  .ar-case .ar-badge { width: 100%; }
+  .ar-case .ar-badge .ev { display: block; }
+}
+
+/* ====================================================== sprint history ==== */
+
+.ar-week {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: var(--rail);
+}
+.ar-week:last-child { border-bottom: 0; padding-bottom: 0; }
+.ar-week .wk {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: var(--dim);
+}
+.ar-week .rc { font-size: 12.5px; color: var(--muted); }
+.ar-week .rv {
+  font-family: var(--mono);
+  font-weight: 800;
+  font-size: 14px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.ar-week .rv.up { color: var(--up); }
+.ar-week .rv.down { color: var(--down); }
+.ar-week .rv small {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--dim);
+  margin-top: 1px;
+}
+.ar-week .rv.none {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+@media (max-width: 400px) {
+  .ar-week { grid-template-columns: 64px minmax(0, 1fr) auto; }
+  .ar-week .rc { font-size: 11.5px; }
+}
+
+/* ========================================================== share card ==== */
+
+.ar-card-frame {
+  border: var(--edge);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #07090e;
+  box-shadow: var(--lift-2);
+}
+.ar-card-frame canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1200 / 630;
+}
+.ar-card-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.ar-card-actions .ar-btn { flex: 1 1 180px; }
+
+/* ==================================================== reduced motion ===== */
+/* arena.css already stills everything it owns; this stills what this page adds
+   so the card is simply present rather than arriving. */
+@media (prefers-reduced-motion: reduce) {
+  .ar-prof { animation: none; }
+}
 </style>
 </head>
 <body>
@@ -31,26 +272,105 @@
   <div class="nav-inner">
     <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
     <div class="nav-links">
-      <a href="leaderboard.html">Leaderboard</a>
-      <a href="sprint.html">Weekly Sprint</a>
+      <!-- A profile has no nav entry of its own — it is a leaf under the
+           leaderboard. aria-current="true" says "you are inside this section";
+           aria-current="page" would claim this IS leaderboard.html. -->
+      <a href="leaderboard.html" aria-current="true">Leaderboard</a>
+      <a href="sprint.html">Sprint</a>
+      <a href="duels.html">Duels</a>
       <a href="news.html">News</a>
       <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
       <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
     </div>
   </div>
 </nav>
 
-<section style="padding:110px 0 80px">
-  <div class="wrap prof-wrap">
-    <div id="profile"><p class="lb-note">Loading profile…</p></div>
+<header class="ar-hero">
+  <div class="wrap">
+    <div id="hero" aria-live="polite" aria-busy="true">
+      <div class="ar-prof"><div class="ar-skel" aria-label="Loading profile"><div class="line"></div><div class="line"></div></div></div>
+    </div>
   </div>
-</section>
+</header>
+
+<main class="wrap" style="padding-bottom:96px">
+  <div class="ar-shell" id="shell">
+
+    <!-- Pane titles carry role="heading" rather than being <h2>: style.css
+         sizes bare h2 at clamp(30px, 4.4vw, 50px) for page sections, which
+         would burst a 16px pane header. The role gives heading navigation the
+         real element would have given, at no cost to the shared header rule. -->
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="record-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--orange2)">◈</span><span id="record-h" role="heading" aria-level="2">The record</span>
+          <span class="spacer"></span>
+          <span id="record-note"></span>
+        </div>
+        <div id="record"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="score-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--violet)">ƒ</span><span id="score-h" role="heading" aria-level="2">Why this rank</span>
+        </div>
+        <div id="score"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="badges-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--blue)">✦</span><span id="badges-h" role="heading" aria-level="2">The badge case</span>
+          <span class="spacer"></span>
+          <span class="ar-note">process only</span>
+        </div>
+        <div id="badges"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="share-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--green)">▣</span><span id="share-h" role="heading" aria-level="2">Share this record</span>
+        </div>
+        <div id="share"></div>
+      </section>
+    </div>
+
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="proof-h">
+        <div class="ar-pane-head">
+          <span class="glyph">🛡</span><span id="proof-h" role="heading" aria-level="2">The proof</span>
+        </div>
+        <div id="proof"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="sprints-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--orange2)">▤</span><span id="sprints-h" role="heading" aria-level="2">Sprint history</span>
+          <span class="spacer"></span>
+          <a class="ar-note" style="color:var(--orange2)" href="sprint.html">This week →</a>
+        </div>
+        <div id="sprints"></div>
+      </section>
+    </div>
+
+  </div>
+
+  <!-- 404, never-submitted, and verifier-unreachable all land here, and the
+       shell above is hidden outright. A profile with no record must not show
+       panes full of dashes; there is nothing true to put in them. -->
+  <section class="ar-pane" id="state" hidden aria-labelledby="state-h">
+    <div class="ar-pane-head"><span class="glyph">§</span><span id="state-h" role="heading" aria-level="2">This profile</span></div>
+    <div id="state-body"></div>
+  </section>
+</main>
 
 <footer>
   <div class="wrap">
     <div class="foot-inner">
       <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
       <div class="foot-links">
+        <a href="sprint.html">Weekly Sprint</a>
+        <a href="duels.html">Duels</a>
         <a href="news.html">News &amp; patch notes</a>
         <a href="privacy.html">Privacy</a>
         <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
@@ -60,68 +380,842 @@
   </div>
 </footer>
 
-<script src="lb.js"></script>
+<script src="arena.js"></script>
 <script>
 (() => {
   'use strict';
-  const { esc, fmt, signed, STATUS_BADGE, emptyState } = window.PTLB;
-  const el = document.getElementById('profile');
-  const handle = new URLSearchParams(window.location.search).get('handle') || '';
+  const L = window.PTArena;
+  const { esc, fmt, signed, dirClass, ago, face, chipFor } = L;
 
-  const stat = (num, lbl, color) =>
-    `<div class="prof-stat"><div class="num" style="color:${color || 'inherit'}">${num}</div><div class="lbl">${lbl}</div></div>`;
+  const heroEl = document.getElementById('hero');
+  const shellEl = document.getElementById('shell');
+  const stateEl = document.getElementById('state');
+  const stateBodyEl = document.getElementById('state-body');
+  const recordEl = document.getElementById('record');
+  const recordNoteEl = document.getElementById('record-note');
+  const scoreEl = document.getElementById('score');
+  const badgesEl = document.getElementById('badges');
+  const proofEl = document.getElementById('proof');
+  const sprintsEl = document.getElementById('sprints');
+  const shareEl = document.getElementById('share');
 
-  (async () => {
-    if (!handle) { el.innerHTML = emptyState('No handle given. Open a profile from the leaderboard.'); return; }
-    let body;
-    try { body = (await window.PTLB.api('/api/profile?handle=' + encodeURIComponent(handle))).body; }
-    catch { el.innerHTML = emptyState('The server is unreachable right now.'); return; }
-    if (!body || body.ok === false) {
-      el.innerHTML = emptyState('No record for @' + esc(handle) + '. Profiles exist once a chain has been submitted.');
+  // A handle may arrive typed by hand, so tolerate the leading @ people paste.
+  // Everything after load renders from body.handle instead — the server owns
+  // the canonical casing, and echoing the query string back would let the URL
+  // decide how someone's name is spelled on their own profile.
+  const asked = (new URLSearchParams(window.location.search).get('handle') || '').trim().replace(/^@+/, '');
+
+  const pad = (html) => '<div class="pad">' + html + '</div>';
+
+  function showState(html) {
+    shellEl.hidden = true;
+    stateEl.hidden = false;
+    stateBodyEl.innerHTML = html;
+  }
+
+  /** Absolute date, or an em dash when the server had none to give. */
+  function dateOf(ts) {
+    const value = Number(ts);
+    if (!Number.isFinite(value) || value <= 0) return '—';
+    return new Date(value).toLocaleDateString('en-US', {
+      year: 'numeric', month: 'short', day: 'numeric',
+    });
+  }
+
+  const agoOr = (ts) => (Number.isFinite(Number(ts)) && Number(ts) > 0 ? ago(ts) : '—');
+
+  function setMeta(selector, content) {
+    const el = document.querySelector(selector);
+    if (el) el.setAttribute('content', content);
+  }
+
+  /* ------------------------------------------------------------ loading -- */
+
+  recordEl.innerHTML = L.skeleton(2);
+  scoreEl.innerHTML = L.skeleton(2);
+  badgesEl.innerHTML = L.skeleton(2);
+  proofEl.innerHTML = L.skeleton(3);
+  sprintsEl.innerHTML = L.skeleton(3);
+  shareEl.innerHTML = L.skeleton(3);
+
+  /* -------------------------------------------------------------- hero --- */
+
+  const TIER_ORDER = ['bronze', 'silver', 'gold', 'diamond'];
+
+  /** Highest badge tier held, or null. Drives the card's foil — which is why
+   *  it reads the awarded badges rather than anything about rank or profit. */
+  function topTier(badges) {
+    let best = -1;
+    for (const badge of badges || []) {
+      const index = TIER_ORDER.indexOf(badge && badge.tier && badge.tier.name);
+      if (index > best) best = index;
+    }
+    return best >= 0 ? TIER_ORDER[best] : null;
+  }
+
+  function renderHero(profile, record) {
+    const tier = record ? topTier(record.badges) : null;
+    const nameLine = profile.displayName && profile.displayName !== profile.handle
+      ? '<div class="ar-prof-name">' + esc(profile.displayName) + '</div>' : '';
+
+    // The fourth spec cell answers "how fresh is this?", and which timestamp
+    // honestly answers that depends on where the record is in the pipeline.
+    let stampKey = 'Submitted';
+    let stampValue = '—';
+    let stampClass = '';
+    if (record) {
+      if (record.verifiedAt) {
+        stampKey = 'Last checked';
+        stampValue = agoOr(record.verifiedAt);
+        if (record.status === 'verified') stampClass = ' ok';
+      } else {
+        stampValue = agoOr(record.submittedAt);
+        stampClass = record.status === 'pending' ? ' zero' : '';
+      }
+    }
+
+    const spec = record ? `
+      <div class="ar-spec" role="list" aria-label="Record parameters">
+        <div role="listitem"><div class="k">Joined</div><div class="v">${esc(dateOf(profile.joinedAt))}</div></div>
+        <div role="listitem"><div class="k">Declared bankroll</div><div class="v">${esc(fmt(record.startingSol, 1))} ◎</div></div>
+        <div role="listitem"><div class="k">Committed fills</div><div class="v">${esc(fmt(record.chainLen, 0))}</div></div>
+        <div role="listitem"><div class="k">${esc(stampKey)}</div><div class="v${stampClass}">${esc(stampValue)}</div></div>
+      </div>` : `
+      <div class="ar-spec" role="list" aria-label="Account parameters">
+        <div role="listitem"><div class="k">Joined</div><div class="v">${esc(dateOf(profile.joinedAt))}</div></div>
+        <div role="listitem"><div class="k">Declared bankroll</div><div class="v">—</div></div>
+        <div role="listitem"><div class="k">Committed fills</div><div class="v zero">None yet</div></div>
+        <div role="listitem"><div class="k">Submitted</div><div class="v">—</div></div>
+      </div>`;
+
+    heroEl.innerHTML = `
+      <div class="ar-prof${tier ? ' t-' + esc(tier) : ''}">
+        <div class="ar-prof-top">
+          ${face(profile, 'ar-prof-face')}
+          <div class="ar-prof-id">
+            <span class="ar-eyebrow"><span class="dot"></span>Public record · replayed server side</span>
+            <h1 class="ar-prof-handle">@${esc(profile.handle)}</h1>
+            ${nameLine}
+            <div class="ar-prof-chips">
+              ${record ? chipFor(record.status) : '<span class="ar-provisional">No record submitted</span>'}
+              ${record && !record.stats.rankable ? '<span class="ar-provisional">Unranked · 5 rounds minimum</span>' : ''}
+              ${tier ? `<div class="ar-badge t-${esc(tier)}" title="Highest badge tier in this trader's case. The card's edge follows it."><div class="mark" aria-hidden="true">★</div><div><div class="nm">${esc(tier[0].toUpperCase() + tier.slice(1))} case</div><div class="ev">${esc(String((record.badges || []).length))} badge${(record.badges || []).length === 1 ? '' : 's'} earned</div></div></div>` : ''}
+            </div>
+          </div>
+        </div>
+        ${spec}
+      </div>`;
+    heroEl.removeAttribute('aria-busy');
+  }
+
+  /* ------------------------------------------------------------ record --- */
+
+  function tile(num, label, cls) {
+    return `<div class="ar-stat${cls && cls.tile ? ' ' + cls.tile : ''}">
+      <div class="num ar-num${cls && cls.num ? ' ' + cls.num : ''}"${cls && cls.attr ? ' ' + cls.attr : ''}>${num}</div>
+      <div class="lbl">${label}</div>
+    </div>`;
+  }
+
+  function renderRecord(stats) {
+    recordEl.innerHTML = pad(`<div class="ar-stats">
+      ${tile('—', 'ROI on bankroll', { tile: 'head', num: dirClass(stats.roiPct), attr: 'data-roi="' + esc(String(stats.roiPct)) + '"' })}
+      ${tile(esc(signed(stats.realizedPnlSol, 2)) + ' ◎', 'Realized P&amp;L', { num: dirClass(stats.realizedPnlSol) })}
+      ${tile(esc(fmt(stats.rounds, 0)), 'Closed rounds')}
+      ${tile(esc(fmt(stats.winRate * 100, 0)) + '%', 'Win rate · ' + esc(fmt(stats.wins, 0)) + 'W ' + esc(fmt(stats.losses, 0)) + 'L')}
+      ${tile(esc(fmt(stats.score, 1)), 'Season score', { num: 'score' })}
+      ${tile(esc(fmt(stats.maxDrawdown * 100, 1)) + '%', 'Max drawdown')}
+      ${tile(esc(signed(stats.expectancy * 100, 1, '%')), 'Avg return per round', { num: dirClass(stats.expectancy) })}
+    </div>
+    <p class="ar-note" style="margin-top:14px">Every figure here is the server's replay of the committed
+      chain, not anything the extension reported. Drawdown and expectancy are measured on closed
+      rounds only — an open bag has no honest realized number yet.</p>`);
+
+    const roiEl = recordEl.querySelector('.num[data-roi]');
+    if (roiEl) L.countUp(roiEl, Number(roiEl.dataset.roi), 1, '%');
+
+    recordNoteEl.innerHTML = stats.rankable
+      ? '<span class="ar-note">' + esc(fmt(stats.rounds, 0)) + ' rounds · ranked</span>'
+      : '<span class="ar-provisional">Not ranked yet</span>';
+  }
+
+  /* ------------------------------------------------------------- score --- */
+  /*
+   * The score is a PRODUCT — roiPct × ln(1+rounds) × discipline — so "each
+   * term's contribution" has to be defined before it can be drawn, or the bar
+   * is just three numbers wearing a chart.
+   *
+   * The definition used here: the bar totals the score this record would carry
+   * WITHOUT the discipline term (|roi| × reps). It splits into the return
+   * itself, what repetition multiplied on top, and what discipline held back.
+   * The three add up exactly to that total, and the first two add up exactly
+   * to the score. Nothing is normalised, fudged, or rescaled.
+   *
+   * Below two closed rounds ln(1+rounds) is < 1 and shrinks the score instead
+   * of amplifying it; the split would then need a negative segment, so the bar
+   * is withheld and the reason is written out instead.
+   */
+  function renderScore(stats) {
+    const t = L.scoreTerms(stats);
+    const roiMag = Math.abs(t.roiPct);
+    const total = roiMag * t.reps;
+    const drawable = t.rounds >= 2 && total > 0 && t.reps > 1;
+
+    const base = roiMag * t.discipline;
+    const reps = roiMag * (t.reps - 1) * t.discipline;
+    const forfeit = roiMag * t.reps * (1 - t.discipline);
+    const pct = (value) => (value / total * 100).toFixed(2);
+
+    const bar = drawable ? `
+      <div class="ar-segbar" role="img" aria-label="Score composition: ${esc(fmt(base, 1))} from return, ${esc(fmt(reps, 1))} added by repeated rounds, ${esc(fmt(forfeit, 1))} held back by the discipline term">
+        <i class="s-roi" style="flex:0 0 ${pct(base)}%"></i>
+        <i class="s-reps" style="flex:0 0 ${pct(reps)}%"></i>
+        <i class="s-forfeit" style="flex:0 0 ${pct(forfeit)}%"></i>
+      </div>
+      <div class="ar-seglegend">
+        <span><i style="background:var(--orange)"></i><b>${esc(fmt(base, 1))}</b> from the return</span>
+        <span><i style="background:var(--blue)"></i><b>+${esc(fmt(reps, 1))}</b> added by ${esc(fmt(t.rounds, 0))} rounds</span>
+        <span class="neg"><i style="background:rgba(52,211,153,.4)"></i><b>−${esc(fmt(forfeit, 1))}</b> held back by discipline</span>
+      </div>
+      <p class="ar-note" style="margin-top:12px">The bar is the score this record would carry with the
+        discipline term switched off (${esc(fmt(total, 1))}). The first two segments are the score itself
+        (${esc(fmt(stats.score, 1))}); the hatched third is what revenge entries and drawdown cost.
+        ${t.roiPct < 0 ? 'The return is negative, so the score is too — the bar shows magnitudes.' : ''}</p>`
+      // Two different reasons a split cannot be drawn, and they must not be
+      // told as each other: a record can have plenty of rounds and a flat
+      // return, which is not the same failure as having almost no rounds.
+      : t.rounds < 2
+        ? `<p class="ar-note" style="margin-top:14px">With ${esc(fmt(t.rounds, 0))} closed round${t.rounds === 1 ? '' : 's'},
+          ln(1+rounds) is below 1 and shrinks the score rather than multiplying it, so there is no
+          contribution to split. The formula above is still the whole of it.</p>`
+        : `<p class="ar-note" style="margin-top:14px">The return over these
+          ${esc(fmt(t.rounds, 0))} rounds is flat, and the other two terms multiply it — so the score
+          is zero no matter what they are, and there is nothing to split between them.</p>`;
+
+    scoreEl.innerHTML = pad(`
+      <p class="ar-note" style="margin-bottom:14px">Three terms, published and deterministic. Run them
+        yourself over the raw fills and you get the number the server got — that is the point of
+        publishing them.</p>
+      ${L.formulaHtml(stats)}
+      ${bar}
+      <p class="ar-note" style="margin-top:14px">Discipline is
+        <span style="font-family:var(--mono)">1 − ½·revenge − ¼·drawdown</span>, floored at 0.25.
+        This record re-entered a mint it had just lost on in
+        <strong>${esc(fmt((Number(stats.revengeRatio) || 0) * 100, 0))}%</strong> of its losing rounds.
+        ${stats.rankable ? '' : 'Fewer than five closed rounds, so this score is computed but does not rank.'}</p>`);
+  }
+
+  /* ------------------------------------------------------------ badges --- */
+
+  // Marks are presentation, never data: an unknown id falls back to its name's
+  // first letter rather than borrowing a meaning it was not awarded.
+  const BADGE_MARK = {
+    'committed': '§',
+    'clean-hands': '◇',
+    'iron-stomach': '▲',
+    'cut-short': '✂︎',
+    'sized-down': '⚖︎',
+    'long-haul': '⌛︎',
+    'patience': '◷',
+    'unbroken': '⛓︎',
+  };
+
+  const EARNS_ONE = [
+    ['Clean Hands', 'eight or more losses taken without once re-entering the mint that took them'],
+    ['Iron Stomach', 'a drawdown of 20% or worse, traded back to a new equity high'],
+    ['Cut It Short', 'a median loss smaller than the median win, over at least five of each'],
+    ['Sized Down When Cold', 'position size after a loss at or below size after a win'],
+    ['The Long Haul', 'closed rounds on seven or more distinct days'],
+    ['Let It Cook', 'a median hold long enough that the thesis closed the trade, not the candle'],
+    ['On the Record', 'twenty-five fills committed to the chain before their outcome was known'],
+    ['Unbroken Chain', 'every fill re-priced against real market history and confirmed'],
+  ];
+
+  function renderBadges(badges) {
+    const list = badges || [];
+    if (!list.length) {
+      badgesEl.innerHTML = pad(`
+        <p class="ar-note" style="margin-bottom:12px"><strong>No badges yet — and there are none for
+          making money.</strong> Every badge in PaperTrench is for process, derivable from committed
+          fills alone, so nobody can claim one the chain does not already prove. Empty slots would
+          suggest there is something to collect; here is the actual list instead:</p>
+        <ul style="list-style:none;display:grid;gap:9px;margin:0">
+          ${EARNS_ONE.map(([name, how]) => `<li class="ar-note">
+            <b style="color:var(--text);font-weight:700">${esc(name)}</b> — ${esc(how)}.</li>`).join('')}
+        </ul>`);
       return;
     }
-    document.title = 'PaperTrench — @' + body.handle;
-    const r = body.record;
-    const s = r && r.stats;
-    el.innerHTML = `
-      <div class="visual-card prof-head">
-        ${body.avatarUrl ? `<img src="${esc(body.avatarUrl)}" alt="" referrerpolicy="no-referrer">` : ''}
-        <div>
-          <h1>@${esc(body.handle)} ${r ? (STATUS_BADGE[r.status] || '') : ''}</h1>
-          <p class="lb-note" style="margin:6px 0 0">${esc(body.displayName || '')}${r ? ` · ${r.chainLen} committed fills · ${fmt(r.startingSol, 1)} ◎ declared bankroll` : ''}</p>
-        </div>
+
+    badgesEl.innerHTML = pad(`
+      <div class="ar-badges ar-case">
+        ${list.map((badge) => {
+          const tier = (badge.tier && badge.tier.name) || 'bronze';
+          const mark = BADGE_MARK[badge.id] || String(badge.name || '?').slice(0, 1).toUpperCase();
+          // Units that are really suffixes ("% recovered", "x win/loss") close
+          // up against the figure; word units keep their space.
+          const unit = badge.evidence ? String(badge.evidence.unit || '') : '';
+          const evidence = badge.evidence
+            ? fmt(badge.evidence.value, Number.isInteger(Number(badge.evidence.value)) ? 0 : 2)
+              + (/^[%x]/.test(unit) ? '' : ' ') + unit
+            : '';
+          return `<div class="ar-badge t-${esc(tier)}" title="${esc(badge.blurb || '')}">
+            <div class="mark" aria-hidden="true">${esc(mark)}</div>
+            <div>
+              <div class="nm">${esc(badge.name)}</div>
+              ${evidence ? `<div class="ev">${esc(evidence.trim())}</div>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
       </div>
-      ${!r ? emptyState('Signed in, but no record submitted yet.') : `
-      <div class="prof-stats">
-        ${stat(esc(signed(s.roiPct, 1, '%')), 'ROI ON BANKROLL', s.roiPct >= 0 ? 'var(--green)' : '#ff8a80')}
-        ${stat(esc(signed(s.realizedPnlSol, 2)) + ' ◎', 'REALIZED P&L', s.realizedPnlSol >= 0 ? 'var(--green)' : '#ff8a80')}
-        ${stat(String(s.rounds), 'CLOSED ROUNDS')}
-        ${stat(esc(fmt(s.winRate * 100, 0)) + '%', 'WIN RATE')}
-        ${stat(esc(fmt(s.score, 1)), 'SEASON SCORE', 'var(--orange2)')}
-        ${stat(esc(fmt(s.maxDrawdown * 100, 0)) + '%', 'MAX DRAWDOWN')}
+      <p class="ar-note" style="margin-top:14px">Each badge carries the numbers that earned it. Tier
+        rises with the evidence, not with profit — there is no badge here for a win streak, a P&amp;L
+        figure, or volume, because a badge for making money rewards the coin flip.</p>`);
+  }
+
+  /* ------------------------------------------------------------- proof --- */
+
+  function verificationCopy(record) {
+    const pricing = record.pricing;
+    const counts = (pricing && pricing.counts) || null;
+    const coverage = pricing && Number.isFinite(Number(pricing.coverage))
+      ? fmt(Number(pricing.coverage) * 100, 0) + '%' : null;
+    const noData = counts ? Number(counts.noData) || 0 : 0;
+
+    if (record.status === 'verified') {
+      let text = 'Every link was re-hashed, the book was replayed from the raw fills, and ';
+      text += counts
+        ? '<strong>' + esc(fmt(counts.ok, 0)) + ' fills</strong> were confirmed against the token\'s real traded range in the minute each one happened.'
+        : 'every fill was confirmed against the token\'s real traded range in the minute it happened.';
+      if (noData > 0) {
+        text += ' ' + esc(fmt(noData, 0)) + ' fill' + (noData === 1 ? '' : 's') +
+          ' had no public candle data to check against, so coverage is <strong>' + esc(coverage || '—') +
+          '</strong> rather than 100%. That gap is reported, not rounded away.';
+      }
+      return text;
+    }
+    if (record.status === 'pending') {
+      return 'The chain has been re-hashed and the book replayed. Prices are still being re-checked ' +
+        'against market history, one minute of candles at a time. Until that finishes this record ' +
+        'reads <strong>Verifying</strong>, and nothing on this page claims otherwise.';
+    }
+    if (record.status === 'partial') {
+      return 'The chain is valid and the book replayed cleanly, but only <strong>' +
+        esc(coverage || 'some') + '</strong> of the fills had public candle data to check against. ' +
+        'This record is shown, labeled, and ranked below fully verified ones. Missing data is not a ' +
+        'pass and not a failure — it is missing, and saying so is cheaper than pretending.';
+    }
+    if (record.status === 'rejected') {
+      return 'This record <strong>failed verification and does not rank</strong>. At least one fill ' +
+        'could not be reconciled with the token\'s traded range in the minute it claims to have ' +
+        'happened, even after the tolerance that absorbs quote skew. The figures above are the replay ' +
+        'of what was submitted — shown so the claim can be inspected, not endorsed.';
+    }
+    return 'This record is in a state this page does not have wording for, so it is not being ' +
+      'described. The status returned by the verifier was: ' + esc(String(record.status)) + '.';
+  }
+
+  function renderProof(record) {
+    const head = String(record.head || '');
+    proofEl.innerHTML = pad(`
+      <div class="ar-hash" id="chain-head">${esc(head)}</div>
+      <div class="ar-chainline" style="margin-top:12px">
+        <span class="lnk">genesis</span><span class="arw">→</span>
+        <span class="lnk">${esc(fmt(record.chainLen, 0))} committed fills</span><span class="arw">→</span>
+        <span class="lnk">head</span>
       </div>
-      <div class="gcard" style="padding:20px;margin-top:22px">
-        <p class="lb-note" style="margin:0">
-          <strong>Verification:</strong>
-          ${r.status === 'verified' ? `every link re-hashed, book replayed, and ${r.pricing ? fmt(r.pricing.counts.ok, 0) : 'all'} fill prices confirmed against market history${r.pricing && r.pricing.counts.noData ? ` (${r.pricing.counts.noData} lacked public candle data — coverage ${fmt(r.pricing.coverage * 100, 0)}%)` : ''}.`
-          : r.status === 'pending' ? 'chain re-hashed and replayed; prices still being re-checked against market history.'
-          : r.status === 'partial' ? `chain valid and replayed, but only ${r.pricing ? fmt(r.pricing.coverage * 100, 0) : '—'}% of fills had public candle data to check against. Shown, labeled, ranked below fully verified records.`
-          : 'this record failed verification and does not rank.'}
-          ${r.claimMismatch ? ' ⚠ The claimed P&L differed from the chain replay; replayed numbers are shown.' : ''}
-        </p>
-        <p class="prof-chain" style="margin:12px 0 0">chain head: ${esc(r.head)}</p>
+      <p class="ar-note" style="margin-top:14px">${verificationCopy(record)}</p>
+      ${record.claimMismatch ? `<p class="ar-note" style="margin-top:12px;color:var(--orange2)">
+        <strong>The displayed P&amp;L differed from the chain replay.</strong> The replayed number is the
+        one shown here and the one that ranks; the mismatch is kept as a signal, not treated as a
+        verdict.</p>` : ''}
+      <p class="ar-note" style="margin-top:12px">The declared bankroll
+        (${esc(fmt(record.startingSol, 1))} ◎) is the single input the chain cannot prove. It is the
+        denominator of ROI and nothing else — which is why the score also weighs round count and
+        discipline rather than return alone.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+        <button class="ar-btn" id="copy-head-btn" style="flex:1 1 auto">⧉ Copy chain head</button>
       </div>
-      ${body.sprints && body.sprints.length ? `
-      <div class="gcard" style="padding:20px;margin-top:22px">
-        <h3 style="margin:0 0 10px;font-size:15px">Sprint history</h3>
-        ${body.sprints.map((w) => `
-          <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
-            <span style="font-family:var(--mono);color:var(--dim)">${esc(w.weekId)}</span>
-            <span>${w.entry.rounds} rds · ${w.entry.wins}W ${w.entry.losses}L</span>
-            <span style="color:${w.entry.roiPct >= 0 ? 'var(--green)' : '#ff8a80'};font-weight:700">${esc(signed(w.entry.roiPct, 1, '%'))}</span>
-          </div>`).join('')}
-      </div>` : ''}`}
-    `;
+      <p class="ar-note" id="copy-head-status" aria-live="polite" style="margin-top:8px"></p>
+      <p class="ar-note" style="margin-top:12px">Submitted ${esc(agoOr(record.submittedAt))}${
+        record.verifiedAt ? ' · verified ' + esc(agoOr(record.verifiedAt)) : ''}.
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">How verification works</a></p>`);
+
+    const status = document.getElementById('copy-head-status');
+    document.getElementById('copy-head-btn').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(head);
+        status.textContent = 'Chain head copied.';
+      } catch {
+        status.textContent = 'Your browser blocked the clipboard — the full head is printed above.';
+      }
+    });
+  }
+
+  /* ----------------------------------------------------------- sprints --- */
+
+  function renderSprints(sprints) {
+    const list = sprints || [];
+    if (!list.length) {
+      sprintsEl.innerHTML = L.empty('▤', 'No sprint weeks on record.',
+        'The weekly window counts only rounds opened <em>and</em> closed inside it. Submit during a ' +
+        'live week and it appears here — there is no separate entry to file.');
+      return;
+    }
+    sprintsEl.innerHTML = pad(list.map((week) => {
+      const entry = week.entry || {};
+      const rounds = Number(entry.rounds) || 0;
+      // A week with no closed rounds has no measured return — its ROI is zero
+      // by definition, not by observation, and rendering "+0.0%" would dress
+      // an absence up as a result.
+      const value = rounds > 0
+        ? `<span class="rv ${dirClass(entry.roiPct)}">${esc(signed(entry.roiPct, 1, '%'))}<small>${esc(signed(entry.pnlSol, 2))} ◎</small></span>`
+        : '<span class="rv none">no rounds closed</span>';
+      return `<div class="ar-week">
+        <span class="wk">${esc(week.weekId)}</span>
+        <span class="rc">${rounds > 0
+          ? esc(fmt(rounds, 0)) + ' rds · ' + esc(fmt(entry.wins, 0)) + 'W ' + esc(fmt(entry.losses, 0)) + 'L · score ' + esc(fmt(entry.score, 1))
+          : 'submitted, nothing closed in the window'}</span>
+        ${value}
+      </div>`;
+    }).join('') + `<p class="ar-note" style="margin-top:14px">Sprint returns are measured against equity
+      at the window's open, so a 10 ◎ bankroll and a 1,000 ◎ one race on the same axis.</p>`);
+  }
+
+  /* -------------------------------------------------------- share card --- */
+  /*
+   * A 1200×630 render of exactly what the API returned, and nothing else.
+   *
+   * The trader's avatar is deliberately NOT drawn: it is a cross-origin image,
+   * drawing it taints the canvas, and a tainted canvas makes toBlob() throw —
+   * so the card would export as nothing at all. The deterministic monogram
+   * arena.js already uses for missing avatars stands in, which keeps a trader
+   * the same colour here as on every board.
+   */
+  const CSS = getComputedStyle(document.documentElement);
+  const cssVar = (name, fallback) => (CSS.getPropertyValue(name).trim() || fallback);
+  const paint = (value, fallback) => {
+    const match = /^var\((--[\w-]+)\)$/.exec(String(value).trim());
+    return match ? cssVar(match[1], fallback) : String(value);
+  };
+
+  const SANS = '"Inter", ui-sans-serif, system-ui, sans-serif';
+  const MONO = '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace';
+
+  function roundRect(g, x, y, w, h, r) {
+    const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+    g.beginPath();
+    g.moveTo(x + radius, y);
+    g.arcTo(x + w, y, x + w, y + h, radius);
+    g.arcTo(x + w, y + h, x, y + h, radius);
+    g.arcTo(x, y + h, x, y, radius);
+    g.arcTo(x, y, x + w, y, radius);
+    g.closePath();
+  }
+
+  // ctx.letterSpacing is recent; where it is missing the card simply renders
+  // with normal tracking rather than losing the label.
+  function tracking(g, value) {
+    try { g.letterSpacing = value; } catch { /* unsupported: normal tracking */ }
+  }
+
+  function fitFont(g, text, maxWidth, size, weight, family) {
+    let px = size;
+    while (px > 14) {
+      g.font = weight + ' ' + px + 'px ' + family;
+      if (g.measureText(text).width <= maxWidth) break;
+      px -= 2;
+    }
+    g.font = weight + ' ' + px + 'px ' + family;
+    return px;
+  }
+
+  function ellipsize(g, text, maxWidth) {
+    if (g.measureText(text).width <= maxWidth) return text;
+    let out = text;
+    while (out.length > 1 && g.measureText(out + '…').width > maxWidth) out = out.slice(0, -1);
+    return out + '…';
+  }
+
+  const CHIP_TEXT = {
+    verified: '✓  VERIFIED',
+    pending: '◔  VERIFYING',
+    partial: '◐  PARTIAL DATA',
+    rejected: '✕  REJECTED — DOES NOT RANK',
+  };
+
+  function drawCard(canvas, profile, record) {
+    const W = 1200;
+    const H = 630;
+    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    const g = canvas.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const stats = record.stats;
+    const verified = record.status === 'verified';
+    const TEXT = cssVar('--text', '#eaeff7');
+    const MUTED = cssVar('--muted', '#8d97a9');
+    const DIM = cssVar('--dim', '#5c6674');
+    const ORANGE = cssVar('--orange', '#ff9d45');
+    const ORANGE2 = cssVar('--orange2', '#ffc081');
+    const GREEN = cssVar('--green', '#34d399');
+    const DOWN = cssVar('--down', '#ff8a80');
+    const GOLD = cssVar('--gold', '#ffcf5c');
+    const BLUE = cssVar('--blue', '#6aa9ff');
+    const up = (n) => (Number(n) >= 0 ? GREEN : DOWN);
+
+    // --- ground -------------------------------------------------------------
+    g.fillStyle = cssVar('--bg', '#07090e');
+    g.fillRect(0, 0, W, H);
+    const glow = (x, y, r, color) => {
+      const grad = g.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, color);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, W, H);
+    };
+    glow(170, -70, 700, 'rgba(255,157,69,0.20)');
+    glow(1090, 30, 620, 'rgba(52,211,153,0.13)');
+    glow(600, 720, 620, 'rgba(106,169,255,0.10)');
+
+    g.strokeStyle = 'rgba(255,255,255,0.022)';
+    g.lineWidth = 1;
+    for (let x = 56; x < W; x += 56) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, H); g.stroke(); }
+    for (let y = 56; y < H; y += 56) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(W, y + 0.5); g.stroke(); }
+
+    // Gold on the frame only when the record is fully verified — the one
+    // signal on this card that cannot be earned by trading well.
+    g.strokeStyle = verified ? 'rgba(255,207,92,0.55)' : 'rgba(255,255,255,0.10)';
+    g.lineWidth = 2;
+    roundRect(g, 1, 1, W - 2, H - 2, 26);
+    g.stroke();
+
+    // --- masthead -----------------------------------------------------------
+    g.textBaseline = 'alphabetic';
+    g.textAlign = 'left';
+    tracking(g, '3px');
+    g.font = '800 21px ' + SANS;
+    g.fillStyle = TEXT;
+    g.fillText('PAPERTRENCH', 72, 66);
+    const markWidth = g.measureText('PAPERTRENCH').width;
+    g.fillStyle = ORANGE2;
+    g.fillText('ARENA', 72 + markWidth + 18, 66);
+
+    g.textAlign = 'right';
+    g.font = '800 13px ' + SANS;
+    g.fillStyle = DIM;
+    g.fillText('PAPER TRADING · NO REAL MONEY', W - 72, 66);
+    tracking(g, '0px');
+    g.textAlign = 'left';
+
+    g.fillStyle = verified ? GOLD : ORANGE;
+    g.fillRect(72, 82, 58, 3);
+
+    // --- identity -----------------------------------------------------------
+    const [toneBg, toneFg] = L.tone(profile.handle);
+    roundRect(g, 72, 124, 96, 96, 26);
+    g.fillStyle = paint(toneBg, 'rgba(255,157,69,0.18)');
+    g.fill();
+    g.strokeStyle = 'rgba(255,255,255,0.10)';
+    g.lineWidth = 1.5;
+    g.stroke();
+    g.textAlign = 'center';
+    g.font = '900 36px ' + SANS;
+    g.fillStyle = paint(toneFg, ORANGE2);
+    g.fillText(L.initials(profile.handle), 120, 185);
+    g.textAlign = 'left';
+
+    // The chip is measured first so the handle knows how much room it has.
+    const chipLabel = CHIP_TEXT[record.status] || String(record.status || '').toUpperCase();
+    tracking(g, '1.4px');
+    g.font = '800 15px ' + SANS;
+    const chipWidth = g.measureText(chipLabel).width + 40;
+    const chipX = W - 72 - chipWidth;
+    roundRect(g, chipX, 132, chipWidth, 42, 21);
+    const chipTone = record.status === 'verified' ? [GREEN, 'rgba(52,211,153,0.12)', 'rgba(52,211,153,0.42)']
+      : record.status === 'pending' ? [ORANGE2, 'rgba(255,157,69,0.10)', 'rgba(255,157,69,0.42)']
+      : record.status === 'partial' ? [BLUE, 'rgba(106,169,255,0.10)', 'rgba(106,169,255,0.42)']
+      : [DOWN, 'rgba(224,67,58,0.12)', 'rgba(224,67,58,0.48)'];
+    g.fillStyle = chipTone[1];
+    g.fill();
+    g.strokeStyle = chipTone[2];
+    g.lineWidth = 1.5;
+    g.stroke();
+    g.fillStyle = chipTone[0];
+    g.fillText(chipLabel, chipX + 20, 159);
+    tracking(g, '0px');
+
+    const idWidth = chipX - 192 - 32;
+    fitFont(g, '@' + profile.handle, idWidth, 52, '900', SANS);
+    g.fillStyle = TEXT;
+    g.fillText('@' + profile.handle, 192, 176);
+
+    if (profile.displayName && profile.displayName !== profile.handle) {
+      g.font = '500 21px ' + SANS;
+      g.fillStyle = MUTED;
+      g.fillText(ellipsize(g, profile.displayName, idWidth), 192, 208);
+    }
+
+    g.strokeStyle = 'rgba(255,255,255,0.09)';
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(72, 268.5); g.lineTo(W - 72, 268.5); g.stroke();
+
+    // --- the headline -------------------------------------------------------
+    tracking(g, '2.2px');
+    g.font = '800 13px ' + SANS;
+    g.fillStyle = DIM;
+    g.fillText('RETURN ON DECLARED BANKROLL', 72, 312);
+    tracking(g, '0px');
+
+    fitFont(g, signed(stats.roiPct, 1, '%'), 460, 78, '800', MONO);
+    g.fillStyle = up(stats.roiPct);
+    g.fillText(signed(stats.roiPct, 1, '%'), 72, 390);
+
+    g.font = '500 17px ' + SANS;
+    g.fillStyle = MUTED;
+    g.fillText('on a ' + fmt(record.startingSol, 1) + ' ◎ declared bankroll · replayed server side', 72, 424);
+
+    // --- the four tiles -----------------------------------------------------
+    const tiles = [
+      ['CLOSED ROUNDS', fmt(stats.rounds, 0), TEXT],
+      ['WIN RATE', fmt(stats.winRate * 100, 0) + '%', TEXT],
+      ['SEASON SCORE', fmt(stats.score, 1), ORANGE2],
+      ['REALIZED P&L', signed(stats.realizedPnlSol, 2) + ' ◎', up(stats.realizedPnlSol)],
+    ];
+    tiles.forEach(([label, value, color], i) => {
+      const x = 600 + (i % 2) * 278;
+      const y = 292 + Math.floor(i / 2) * 108;
+      roundRect(g, x, y, 250, 92, 14);
+      g.fillStyle = 'rgba(255,255,255,0.04)';
+      g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.08)';
+      g.lineWidth = 1;
+      g.stroke();
+      tracking(g, '1.5px');
+      g.font = '800 11px ' + SANS;
+      g.fillStyle = DIM;
+      g.fillText(label, x + 18, y + 30);
+      tracking(g, '0px');
+      fitFont(g, value, 214, 29, '800', MONO);
+      g.fillStyle = color;
+      g.fillText(value, x + 18, y + 70);
+    });
+
+    // --- caveats, when there are any ---------------------------------------
+    const caveats = [];
+    // A rejected record still replays to a number, and on a card that number
+    // can be enormous. The chip says REJECTED; this says it again in words,
+    // because a screenshot is read at a glance and once.
+    if (record.status === 'rejected') caveats.push('Failed verification — these are the replayed figures of a rejected submission.');
+    if (!stats.rankable) caveats.push('Not ranked — five closed rounds minimum.');
+    if (record.claimMismatch) caveats.push('Displayed P&L differed from the chain replay; the replayed number is shown.');
+    if (caveats.length) {
+      g.font = '600 15px ' + SANS;
+      g.fillStyle = ORANGE2;
+      g.fillText(ellipsize(g, caveats.join('  ·  '), W - 144), 72, 496);
+    }
+
+    g.strokeStyle = 'rgba(255,255,255,0.09)';
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(72, 546.5); g.lineTo(W - 72, 546.5); g.stroke();
+
+    // --- footer -------------------------------------------------------------
+    const head = String(record.head || '');
+    g.font = '400 17px ' + MONO;
+    g.fillStyle = DIM;
+    g.fillText('chain ' + (head.length > 20 ? head.slice(0, 12) + '…' + head.slice(-8) : head) +
+      '  ·  ' + fmt(record.chainLen, 0) + ' fills', 72, 590);
+
+    g.textAlign = 'right';
+    tracking(g, '0.5px');
+    g.font = '800 21px ' + SANS;
+    g.fillStyle = ORANGE2;
+    g.fillText('papertrench.com', W - 72, 590);
+    tracking(g, '0px');
+    g.textAlign = 'left';
+  }
+
+  function cardBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('encode-failed'))), 'image/png');
+    });
+  }
+
+  async function renderShare(profile, record) {
+    const stats = record.stats;
+    const alt = '@' + profile.handle + ' — ' + signed(stats.roiPct, 1, '%') +
+      ' return on a declared ' + fmt(record.startingSol, 1) + ' SOL bankroll over ' +
+      fmt(stats.rounds, 0) + ' closed rounds, season score ' + fmt(stats.score, 1) +
+      ', verification status ' + record.status + '.';
+
+    shareEl.innerHTML = pad(`
+      <div class="ar-card-frame"><canvas id="share-canvas" role="img" aria-label="${esc(alt)}"></canvas></div>
+      <div class="ar-card-actions">
+        <button class="ar-btn primary" id="download-btn">⬇ Download PNG</button>
+        <button class="ar-btn" id="copy-image-btn">⧉ Copy image</button>
+      </div>
+      <p class="ar-note" id="share-status" aria-live="polite" style="margin-top:10px"></p>
+      <p class="ar-note" style="margin-top:6px">1200×630, drawn in your browser from the values on this
+        page and nothing else. The avatar is left off on purpose — a cross-origin image would taint the
+        canvas and the export would fail silently. Gold on the frame means fully verified; a pending or
+        partial record says so on the card.</p>`);
+
+    const canvas = document.getElementById('share-canvas');
+    const status = document.getElementById('share-status');
+
+    // Wait for Inter and JetBrains Mono, or the card bakes a fallback face into
+    // a PNG that cannot be re-rendered later.
+    if (document.fonts && document.fonts.ready) {
+      try { await document.fonts.ready; } catch { /* draw with whatever loaded */ }
+    }
+    drawCard(canvas, profile, record);
+
+    const download = (note) => {
+      canvas.toBlob((blob) => {
+        if (!blob) { status.textContent = 'This browser could not encode the card as a PNG.'; return; }
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'papertrench-' + profile.handle.replace(/[^A-Za-z0-9_-]/g, '') + '.png';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        status.textContent = note || 'Downloaded.';
+      }, 'image/png');
+    };
+
+    document.getElementById('download-btn').addEventListener('click', () => download());
+
+    document.getElementById('copy-image-btn').addEventListener('click', async () => {
+      if (!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write)) {
+        download('This browser cannot put images on the clipboard, so the card downloaded instead.');
+        return;
+      }
+      status.textContent = 'Copying…';
+      try {
+        // Safari wants the Promise, not an awaited blob, inside ClipboardItem —
+        // and Chrome accepts it too, so one form covers both.
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': cardBlob(canvas) })]);
+        status.textContent = 'Copied — paste it anywhere that takes an image.';
+      } catch {
+        download('The clipboard was blocked, so the card downloaded instead.');
+      }
+    });
+  }
+
+  /* -------------------------------------------------------------- load --- */
+
+  (async () => {
+    if (!asked) {
+      showState(L.empty('🔎', 'This page needs a name.',
+        'Profiles open from the board — every ranked row on the ' +
+        '<a href="leaderboard.html" style="color:var(--orange2)">leaderboard</a> links to the record ' +
+        'behind it. There is no directory to browse, because a directory would list people who have ' +
+        'submitted nothing.'));
+      heroEl.innerHTML = '';
+      heroEl.removeAttribute('aria-busy');
+      return;
+    }
+
+    let status;
+    let body;
+    try {
+      const response = await L.api('/api/profile?handle=' + encodeURIComponent(asked));
+      status = response.status;
+      body = response.body;
+    } catch {
+      heroEl.innerHTML = '';
+      heroEl.removeAttribute('aria-busy');
+      showState(L.errorState(
+        'The verifier is not answering, so this profile is showing nothing at all rather than a ' +
+        'number that might be hours stale. The record itself is untouched — only our ability to read ' +
+        'it is. Try again in a moment.'));
+      return;
+    }
+
+    if (!body || status >= 500) {
+      heroEl.innerHTML = '';
+      heroEl.removeAttribute('aria-busy');
+      showState(L.errorState(
+        'The verifier answered, but not with a record it could stand behind. Nothing is shown rather ' +
+        'than something half-read.'));
+      return;
+    }
+
+    if (status === 404 || body.ok === false) {
+      heroEl.innerHTML = '';
+      heroEl.removeAttribute('aria-busy');
+      showState(L.empty('🏴', 'Nobody trades under that name here.',
+        '<strong>@' + esc(asked) + '</strong> has no PaperTrench profile. Profiles are minted by ' +
+        'evidence rather than by signup: sign in on the ' +
+        '<a href="leaderboard.html" style="color:var(--orange2)">leaderboard</a>, submit a ' +
+        'hash-chained record, and this page writes itself. Until then there is nothing to show, and ' +
+        'nothing gets invented to fill the gap.'));
+      return;
+    }
+
+    const record = body.record;
+
+    // A record whose replay is missing is not a record with zeros in it. Every
+    // figure on this page is derived from stats, so without them the honest
+    // move is to render none of them and say the read failed.
+    if (record && !record.stats) {
+      heroEl.innerHTML = '';
+      heroEl.removeAttribute('aria-busy');
+      showState(L.errorState(
+        'The verifier returned a record without its replay attached, so there are no figures to ' +
+        'show and none are being guessed. This is a server-side fault, not a problem with the ' +
+        'record itself.'));
+      return;
+    }
+
+    renderHero(body, record);
+
+    // Crawlers only ever see the static tags above, so these exist for the tab
+    // title and for anything that renders the live DOM. Every value is one the
+    // server just returned.
+    if (record) {
+      const stats = record.stats;
+      document.title = '@' + body.handle + ' — PaperTrench record';
+      const summary = '@' + body.handle + ' on PaperTrench: ' + signed(stats.roiPct, 1, '%') +
+        ' on a declared ' + fmt(record.startingSol, 1) + ' ◎ bankroll over ' + fmt(stats.rounds, 0) +
+        ' closed paper rounds, score ' + fmt(stats.score, 1) + '. Chain of ' +
+        fmt(record.chainLen, 0) + ' committed fills, status: ' + record.status + '.';
+      setMeta('meta[property="og:title"]', '@' + body.handle + ' — PaperTrench record');
+      setMeta('meta[property="og:description"]', summary);
+      setMeta('meta[name="description"]', summary);
+    } else {
+      document.title = '@' + body.handle + ' — PaperTrench';
+      setMeta('meta[property="og:title"]', '@' + body.handle + ' — PaperTrench');
+      setMeta('meta[property="og:description"]',
+        '@' + body.handle + ' has a PaperTrench account but has not submitted a committed record yet.');
+    }
+
+    if (!record) {
+      // PTArena.empty() escapes the title for us; escaping here too would print
+      // the entities.
+      showState(L.empty('⛓', '@' + body.handle + ' is here. Their chain is not.',
+        'This account exists but has never submitted a committed record, so there is nothing to ' +
+        'replay and nothing true to put on the page. One export from the extension\'s Leaderboard tab ' +
+        'is the whole of it — five closed rounds and this becomes a ranked profile. Until then it ' +
+        'stays honestly blank.'));
+      return;
+    }
+
+    renderRecord(record.stats);
+    renderScore(record.stats);
+    renderBadges(record.badges);
+    renderProof(record);
+    renderSprints(body.sprints);
+    // The share card is the only part of this page that can fail on its own
+    // (canvas, fonts, encoders). If it does, the record still stands — the
+    // pane says so instead of leaving a skeleton shimmering forever.
+    renderShare(body, record).catch(() => {
+      shareEl.innerHTML = pad('<p class="ar-note">This browser could not draw the share card. ' +
+        'Everything else on this page is unaffected — the card is only a picture of it.</p>');
+    });
   })();
 })();
 </script>

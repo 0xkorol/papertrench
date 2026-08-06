@@ -14,6 +14,15 @@ npx wrangler d1 execute papertrench --file=schema.sql --remote
 npx wrangler secret put SESSION_SECRET     # paste output of: openssl rand -hex 32
 ```
 
+`schema.sql` is idempotent (`CREATE TABLE IF NOT EXISTS`), so re-running it
+after a release that adds tables is safe. It does **not** add columns to
+tables that already exist — if you deployed before duels landed, also run:
+
+```bash
+npx wrangler d1 execute papertrench --remote \
+  --command "ALTER TABLE records ADD COLUMN badges_json TEXT"
+```
+
 The `[[routes]]` block in wrangler.toml binds `api.papertrench.com/*`. For
 that to resolve, add a DNS record in the papertrench.com Cloudflare zone:
 `api` → AAAA `100::` (proxied) — a placeholder the Worker route intercepts.
@@ -43,10 +52,22 @@ it is a no-op while there are no pending records.
 
 ## 4. Site config
 
-`site/lb.js` → `EXTENSION_IDS`: put the stable extension id the Chrome Web
+`site/arena.js` → `EXTENSION_IDS`: put the stable extension id the Chrome Web
 Store assigns after the listing goes live. Until then the Sync button
 honestly reports "extension not detected" for unpacked installs and points
 users at the exported-file path, which always works.
+
+### Known limitation: link previews
+
+Profile and duel pages set `og:title`/`og:description` from the loaded
+record, but social crawlers do not run JavaScript, so a shared link unfurls
+with the site-wide preview rather than that trader's numbers. Fixing it
+properly needs server-rendered OG tags plus a rasterised image (satori +
+resvg-wasm on the Worker), which is a real chunk of work and cannot be
+verified without deploying — so it is deliberately NOT shipped rather than
+half-shipped. In the meantime the profile page's **share card** renders the
+record to a PNG the user downloads or copies, which is how traders actually
+post results anyway.
 
 ## 5. Smoke checklist (after deploy)
 
@@ -61,6 +82,12 @@ users at the exported-file path, which always works.
 - [ ] A second submission with a shorter chain is rejected `chain-shrunk`
 - [ ] "delete my data" removes the account and the board row disappears
       after the 60s edge cache expires
+- [ ] `/api/activity` returns events, and rejection events carry no handle
+- [ ] Create a duel, open the invite link in a second browser profile signed
+      in as a different X account, join it — the clock starts on join and
+      both sides show as provisional until the window closes
+- [ ] A duel whose window has closed shows `awaiting` until a post-close
+      submission lands, then settles with a plain-language reason
 
 ## Costs, honestly
 

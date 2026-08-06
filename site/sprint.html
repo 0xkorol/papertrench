@@ -4,21 +4,137 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PaperTrench — Weekly Trench Sprint</title>
-<meta name="description" content="One shared week, UTC Monday to Monday. Only rounds opened and closed inside the window count, scored by ROI on window-start equity — verified from the same hash chain as everything else.">
-<meta property="og:title" content="PaperTrench — Weekly Trench Sprint">
-<meta property="og:description" content="A fresh race every week: same chain, same verification, one comparable number. No entry fee, no real money, no faked rows.">
+<meta name="description" content="One shared week, UTC Monday to Monday. Only rounds that opened and closed inside the window count, measured against your equity when the window opened — verified from the same hash chain as everything else.">
+<meta property="og:title" content="PaperTrench — The Weekly Trench Sprint">
+<meta property="og:description" content="A fresh race every week: same chain, same replay, same formula, one comparable number. No entry, no reset, no faked rows.">
 <meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="assets/icon128.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="arena.css">
 <style>
-  .sprint-clock { display: flex; gap: 26px; flex-wrap: wrap; margin-top: 34px; }
-  .sprint-clock .num { font-family: var(--mono); font-size: 30px; font-weight: 800; letter-spacing: -0.5px; }
-  .sprint-clock .lbl { font-size: 12px; color: var(--dim); font-weight: 700; margin-top: 2px; letter-spacing: .6px; }
-  .sprint-board { padding: 22px; max-width: 860px; margin: 0 auto; }
-  .lb-note { color: var(--dim); font-size: 12.5px; line-height: 1.65; }
+/* sprint.html — page-scoped only.
+ *
+ * arena.css owns the Arena vocabulary and is shared with the other competitive
+ * surfaces, so nothing here edits it. What lives here is only what is true of
+ * this page and no other: an eight-column standings grid, a hero card that
+ * houses the countdown, the under-six-hours state, and links inside empty copy.
+ *
+ * No podium lives on this page. A week is short and positions churn; a podium
+ * would dress up a lead that is often a few hours old, and gold belongs to the
+ * all-time rank 1 alone.
+ */
+
+/* The sprint board is flatter than the all-time tower: no rank delta, no
+ * discipline bar, eight columns instead of ten. The selectors are doubled up
+ * (.ar-sprint .ar-row) so they outrank arena.css's ten-column default at every
+ * width without editing the shared file. Only the template is overridden — gap
+ * and row padding still come from arena.css, including inside its own
+ * breakpoints, so the two files can never disagree about row rhythm.
+ *
+ * The third track is sized off the WIDEST chip in the set — "◐ Partial data",
+ * measured at 109px. .ar-chip is flex:none and nowrap, so a track shorter than
+ * the label does not clip it, it bleeds over the number in the next column.
+ * Every breakpoint below repeats that constraint. */
+.ar-sprint .ar-thead,
+.ar-sprint .ar-row {
+  grid-template-columns:
+    46px minmax(140px, 1.5fr) 114px minmax(72px, 0.8fr)
+    72px 52px 62px 68px;
+}
+
+/* This page's pane head carries a title AND the three board tabs. At phone
+ * widths they cannot share one line without the title being squeezed to a
+ * sliver, and a nowrap flex row does exactly that. */
+.ar-sprint-head { flex-wrap: wrap; row-gap: 10px; }
+
+/* style.css makes every <a> inherit its colour — correct for the row links,
+ * wrong for the "here is how you get on this board" link in the empty state,
+ * which is the one thing that copy exists to offer. */
+.ar-empty p a { color: var(--orange2); }
+
+/* The clock takes the hero's right column, in the same glass shell the
+ * leaderboard gives the verifier stream. Same furniture, different instrument. */
+.ar-clockcard > .pad { padding: 18px 20px 20px; }
+.ar-clockcard .ar-clock { margin-top: 16px; }
+/* Segments share the card rather than sitting at their 66px minimum: this is
+ * the page's centrepiece and it should be readable across a room. */
+.ar-clockcard .ar-clock .seg { flex: 1; }
+.ar-clockcard .ar-note { margin-top: 10px; }
+
+/* Under six hours, colour alone is carrying the warning in a card people only
+ * glance at. A slow breath on the segments adds weight without turning the
+ * page into a casino. */
+@keyframes ar-sp-urgent {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 157, 69, 0); }
+  50% { box-shadow: 0 0 22px -6px rgba(255, 157, 69, 0.55); }
+}
+.ar-clockcard .ar-clock.urgent .seg {
+  animation: ar-sp-urgent 2.4s var(--e-in-out) infinite;
+}
+
+@media (max-width: 1180px) {
+  .ar-sprint .ar-thead,
+  .ar-sprint .ar-row {
+    grid-template-columns:
+      42px minmax(120px, 1.4fr) 112px minmax(70px, 0.8fr)
+      68px 48px 58px 64px;
+  }
+}
+
+@media (max-width: 720px) {
+  /* P&L, rounds and W/L go. Position, trader, VERIFICATION STATE, and the two
+   * numbers that decide the race stay. The status chip is never the column
+   * that gets dropped: a row whose verification state is invisible is a row
+   * that reads as verified, and that is the one misreading this product is not
+   * allowed to let a phone screen cause. */
+  .ar-sprint .ar-thead,
+  .ar-sprint .ar-row { grid-template-columns: 32px minmax(0, 1fr) 110px 52px 48px; }
+  .ar-sprint .ar-c-pnl,
+  .ar-sprint .ar-c-rounds,
+  .ar-sprint .ar-c-wl { display: none; }
+  /* Desktop numeral sizes do not fit beside a chip this wide on a tablet. */
+  .ar-sprint .ar-row .pos { font-size: 13px; }
+  .ar-sprint .ar-row .val { font-size: 12px; }
+  .ar-sprint .ar-row .val.score { font-size: 12.5px; }
+}
+
+@media (max-width: 480px) {
+  /* Measured on a 375px phone, the trader column collapsed to 54px — narrower
+   * than the 28px avatar plus its gap, so every handle was ellipsis. A board
+   * you cannot read the names on has stopped being a board.
+   *
+   * Score is what gives way: the rows are already in score order and the
+   * position column carries that ordering. The handle, the ROI and the
+   * verification chip are each unrecoverable if dropped — you cannot infer any
+   * of them from what is left on screen. */
+  .ar-sprint .ar-thead,
+  .ar-sprint .ar-row { grid-template-columns: 26px minmax(0, 1fr) 104px 52px; }
+  .ar-sprint .ar-c-score { display: none; }
+  .ar-sprint .ar-face { width: 24px; height: 24px; font-size: 9.5px; }
+  .ar-sprint .ar-who { gap: 7px; }
+  /* .ar-chip is flex:none/nowrap, so a track narrower than the longest label
+   * does not clip it — it bleeds over the next column. "◐ Partial data" is the
+   * widest of the four and therefore sets this track. Trimmed half a point so
+   * it fits whole: a verification state that is ellipsised, or overlapping the
+   * number beside it, is worse than one that is simply absent. */
+  .ar-sprint .ar-chip { font-size: 8.5px; padding: 3px 6px; letter-spacing: 0.7px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Held at its end state rather than removed: the six-hour warning must not
+   * be something only people who can perceive motion get to notice.
+   *
+   * The countdown itself keeps ticking. It is information, not decoration —
+   * freezing it would make the page state something untrue about the time. */
+  .ar-clockcard .ar-clock.urgent .seg {
+    animation: none;
+    box-shadow: 0 0 22px -8px rgba(255, 157, 69, 0.45);
+  }
+}
 </style>
 </head>
 <body>
@@ -30,7 +146,8 @@
     <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
     <div class="nav-links">
       <a href="leaderboard.html">Leaderboard</a>
-      <a href="sprint.html" aria-current="page">Weekly Sprint</a>
+      <a href="sprint.html" aria-current="page">Sprint</a>
+      <a href="duels.html">Duels</a>
       <a href="news.html">News</a>
       <a href="index.html#install">Install</a>
       <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
@@ -39,96 +156,455 @@
   </div>
 </nav>
 
-<header class="hero news-hero">
+<header class="ar-hero">
   <div class="wrap">
-    <span class="hero-badge reveal"><span class="dot"></span>A fresh race every week · UTC Monday to Monday</span>
-    <h1 class="reveal d1">The weekly <span class="grad-orange">Trench Sprint.</span></h1>
-    <p class="hero-sub reveal d2">Same chain, same verification, one shared window. Only rounds <strong>opened AND closed inside the week</strong> count, scored by return on your equity at the window's open — so a 10&nbsp;◎ bankroll races a 1,000&nbsp;◎ whale on even terms. Trade normally, submit your record on the leaderboard page, and your week is in.</p>
-    <div class="sprint-clock reveal d3" id="clock">
-      <div><div class="num" style="color:var(--orange2)" id="clock-week">—</div><div class="lbl">WEEK</div></div>
-      <div><div class="num" style="color:var(--green)" id="clock-left">—</div><div class="lbl">REMAINING</div></div>
-      <div><div class="num" style="color:var(--blue)" id="clock-entries">—</div><div class="lbl">ENTRIES</div></div>
+    <div class="ar-hero-grid">
+      <div>
+        <span class="ar-eyebrow"><span class="dot"></span>Weekly sprint · one shared window, UTC</span>
+        <h1 class="ar-title"><span class="line">One week, one clock,</span><span class="line accent">everyone back to zero.</span></h1>
+        <p class="ar-lede">Monday 00:00 UTC clears the slate for everybody at the same instant.
+          Your return is measured against the equity you carried into the window, so a
+          <strong>10 ◎ account races a 1,000 ◎ account on the same axis</strong>, and only rounds
+          that <strong>opened and closed inside the week</strong> are in it. Same chain, same
+          replay, same formula — a seven-day slice of the record you already keep.</p>
+
+        <div class="ar-spec" role="list" aria-label="Sprint parameters">
+          <div role="listitem"><div class="k">Window</div><div class="v">UTC Mon → Mon</div></div>
+          <div role="listitem"><div class="k">Counted</div><div class="v">Opened + closed</div></div>
+          <div role="listitem"><div class="k">Measured</div><div class="v ok">vs. window open</div></div>
+          <div role="listitem"><div class="k">Entry fee</div><div class="v zero">None</div></div>
+        </div>
+      </div>
+
+      <!-- The clock is the hero visual because the sprint's whole claim is that
+           everybody is on one timer. Nothing in this card is drawn until the
+           server has told us the real window: until then the segments read "—"
+           and the progress bar is absent rather than parked at a fabricated
+           zero. The window is computable client-side — deriving it here anyway
+           would be inventing a number the API did not return. -->
+      <aside class="ar-verifier ar-clockcard" aria-labelledby="clock-h">
+        <div class="bar">
+          <span class="bulbs" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="name" id="clock-h">sprint window · closing in</span>
+          <span class="streaming"><span class="dot"></span>LIVE</span>
+        </div>
+        <div class="pad">
+          <div class="ar-stats">
+            <div class="ar-stat"><div class="num" id="week-id">—</div><div class="lbl">Week</div></div>
+            <div class="ar-stat"><div class="num" id="entry-count">—</div><div class="lbl">On the board</div></div>
+          </div>
+
+          <div class="ar-clock" id="clock" role="timer"
+               aria-label="Time remaining in this week's sprint window is not known yet">
+            <div class="seg" aria-hidden="true"><b id="cd-d">—</b><span>Days</span></div>
+            <div class="seg" aria-hidden="true"><b id="cd-h">—</b><span>Hrs</span></div>
+            <div class="seg" aria-hidden="true"><b id="cd-m">—</b><span>Min</span></div>
+            <div class="seg" aria-hidden="true"><b id="cd-s">—</b><span>Sec</span></div>
+          </div>
+
+          <div class="ar-window" id="window-bar" hidden role="progressbar"
+               aria-label="Elapsed share of this week's window"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="window-fill"></i></div>
+
+          <p class="ar-note" id="window-caption" aria-live="polite">Asking the verifier which week
+            it is.</p>
+        </div>
+      </aside>
     </div>
   </div>
 </header>
 
-<section style="padding:24px 0 40px">
-  <div class="wrap">
-    <div class="visual-card sprint-board reveal">
-      <div class="lb-title"><span class="shield">⚡</span>This week's standings
-        <span style="margin-left:auto;font-size:11px;font-weight:800;letter-spacing:1px;color:var(--green);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:4px 10px;background:rgba(52,211,153,.08)">CHAIN-VERIFIED</span></div>
-      <div id="board"><p class="lb-note" style="padding:12px 6px">Loading this week…</p></div>
-      <p class="lb-note" style="margin-top:16px">Standings update when players submit on the <a href="leaderboard.html" style="color:var(--orange2)">leaderboard page</a> — resubmitting mid-week refreshes your row from the same extend-only chain. Rows marked VERIFYING… have passed the replay and are still being re-priced against market history.</p>
-    </div>
-  </div>
-</section>
+<main class="wrap" style="padding-bottom:96px">
+  <div class="ar-shell">
 
-<section style="padding:0 0 80px">
-  <div class="wrap" style="max-width:860px">
-    <div class="gcard reveal" style="padding:26px">
-      <h3 style="margin:0 0 12px;font-size:16px">Sprint rules — short, because the chain does the enforcing</h3>
-      <ul class="lb-note" style="margin:0;padding-left:18px">
-        <li><strong>The window is UTC Monday 00:00 → next Monday 00:00.</strong> One shared clock, no timezone games — fill timestamps are hash-committed.</li>
-        <li><strong>A round counts only if it opened and closed inside the window.</strong> A bag carried in was last week's decision; a bag carried out has no honest realized number yet.</li>
-        <li><strong>Score is the same formula as the main board</strong> — window ROI × ln(1+rounds) × discipline — applied to the week's slice only.</li>
-        <li><strong>No separate entry, no reset.</strong> Your normal practice IS your entry. The sprint is a lens on the same committed record, which is why it can't be gamed separately.</li>
-      </ul>
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="board-h">
+        <div class="ar-pane-head ar-sprint-head">
+          <span class="glyph" style="color:var(--orange2)">⚡</span>
+          <span id="board-h">This week's standings</span>
+          <span class="spacer"></span>
+          <div class="ar-tabs">
+            <a class="ar-tab" href="leaderboard.html">All-time</a>
+            <a class="ar-tab" href="sprint.html" aria-current="page">This week</a>
+            <a class="ar-tab" href="duels.html">Duels</a>
+          </div>
+        </div>
+        <!-- The row list is deliberately NOT a live region: announcing two
+             hundred rows on arrival would be hostile. The one-line summary
+             below it is, and it is the honest spoken version of what changed. -->
+        <div class="ar-sprint" id="board"></div>
+        <div class="pad" style="border-top:var(--edge)">
+          <p class="ar-note" id="board-status" aria-live="polite">Loading this week's board.</p>
+          <p class="ar-note" style="margin-top:10px">ROI here is return on the equity you carried
+            into the window, not on your all-time bankroll. Rows marked
+            <span class="ar-chip pending" style="font-size:8px"><i class="spin"></i>Verifying</span>
+            have passed the chain replay and are still being re-priced against market history;
+            <span class="ar-chip partial" style="font-size:8px">◐ Partial data</span> means some
+            fills had no public candle data to check against. Both are labeled, and neither is
+            ever dressed up as verified. Records that failed verification are not on this board
+            at all.</p>
+        </div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="rules-h">
+        <div class="ar-pane-head"><span class="glyph">§</span>
+          <span id="rules-h">How the sprint works</span></div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:14px">Four rules. The chain enforces all of
+            them, which is why there are only four.</p>
+          <ol style="list-style:none;counter-reset:s;display:grid;gap:14px">
+            <li style="counter-increment:s">
+              <b style="font-size:13px">One clock, and it runs on UTC.</b>
+              <p class="ar-note">The window is UTC Monday 00:00 → the following Monday 00:00 — the
+                same seven days for everyone, with no timezone worth gaming. Which side of the
+                boundary a fill lands on is not a claim you get to make afterwards: the timestamp
+                was hash-committed at the moment the fill happened.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">In and out, or it doesn't count.</b>
+              <p class="ar-note">A round counts only if it opened <em>and</em> closed inside the
+                window. A bag you carried in was last week's decision; a bag you carry out has no
+                honest realized number yet. A round that straddles the Monday boundary belongs to
+                neither week's sprint — it still counts on the all-time board, which has no window
+                to fall out of.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Same formula, one week's slice.</b>
+              <p class="ar-note">Window ROI × ln(1+rounds) × discipline, exactly as on the main
+                board. Nothing about the score is special-cased for the sprint; the only thing
+                that changes is which part of the chain the question is asked about.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">No separate entry, and no reset.</b>
+              <p class="ar-note">There is nothing to sign up for and nothing to wipe. Your normal
+                practice <em>is</em> your entry — the sprint is a lens on the same committed chain
+                that backs your all-time record, which is precisely why it cannot be gamed
+                separately. Deleting a bad week to start fresh breaks the extend-only anchor and
+                is refused by name.</p>
+            </li>
+          </ol>
+          <p class="ar-note" style="margin-top:16px">Full protocol:
+            <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">docs/LEADERBOARD.md</a></p>
+        </div>
+      </section>
     </div>
+
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="you-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--orange2)">◆</span>
+          <span id="you-h">Your week</span></div>
+        <div class="pad">
+          <div id="your-week" aria-live="polite"><p class="ar-note">Checking sign-in…</p></div>
+        </div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="formula-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--violet)">ƒ</span>
+          <span id="formula-h">The week's slice, scored</span></div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:14px">The same three terms the all-time board
+            uses, run over seven days instead of a career. Run it yourself over the week's fills
+            and you get the number the server got — that is why it is published. Shown here for
+            whoever currently leads the week:</p>
+          <div id="formula"><p class="ar-note">Loading.</p></div>
+        </div>
+      </section>
+    </div>
+
   </div>
-</section>
+</main>
 
 <footer>
   <div class="wrap">
     <div class="foot-inner">
       <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
       <div class="foot-links">
+        <a href="sprint.html">Weekly Sprint</a>
+        <a href="duels.html">Duels</a>
         <a href="news.html">News &amp; patch notes</a>
-        <a href="streams.html">Live on Twitch</a>
         <a href="privacy.html">Privacy</a>
         <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
         <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
-        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
       </div>
     </div>
   </div>
 </footer>
 
-<script src="lb.js"></script>
-<script src="reveal.js"></script>
+<script src="arena.js"></script>
 <script>
 (() => {
   'use strict';
-  const { row, emptyState, fmt, signed } = window.PTLB;
+  const L = window.PTArena;
+  const { esc, fmt, signed, dirClass, face, chipFor } = L;
 
-  (async () => {
-    const el = document.getElementById('board');
-    try {
-      const { body } = await window.PTLB.api('/api/sprint/current');
-      document.getElementById('clock-week').textContent = body.weekId || '—';
-      document.getElementById('clock-entries').textContent = String((body.entries || []).length);
-      const tick = () => {
-        const left = body.endTs - Date.now();
-        if (left <= 0) { document.getElementById('clock-left').textContent = 'closing'; return; }
-        const d = Math.floor(left / 86400000);
-        const h = Math.floor(left % 86400000 / 3600000);
-        const m = Math.floor(left % 3600000 / 60000);
-        document.getElementById('clock-left').textContent = `${d}d ${h}h ${m}m`;
-      };
-      tick();
-      setInterval(tick, 30000);
+  const boardEl = document.getElementById('board');
+  const statusEl = document.getElementById('board-status');
+  const youEl = document.getElementById('your-week');
+  const formulaEl = document.getElementById('formula');
 
-      const entries = body.entries || [];
-      if (!entries.length) {
-        el.innerHTML = emptyState('Nobody has submitted a round this week yet. One closed round inside the window puts you on this board.');
+  const clockEl = document.getElementById('clock');
+  const segEls = {
+    d: document.getElementById('cd-d'), h: document.getElementById('cd-h'),
+    m: document.getElementById('cd-m'), s: document.getElementById('cd-s'),
+  };
+  const weekEl = document.getElementById('week-id');
+  const countEl = document.getElementById('entry-count');
+  const barEl = document.getElementById('window-bar');
+  const fillEl = document.getElementById('window-fill');
+  const captionEl = document.getElementById('window-caption');
+
+  const HOUR = 3600000;
+  const DAY = 86400000;
+
+  boardEl.innerHTML = L.skeleton(6);
+
+  /* ------------------------------------------------------------- clock --- */
+
+  let ticker = null;      // exactly one interval ever exists on this page
+  let lastCaption = '';
+  let lastPercent = -1;
+
+  const pad = (n) => String(n).padStart(2, '0');
+
+  const closesAt = (ts) => new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(ts)) + ' UTC';
+
+  function caption(text) {
+    // The caption is a polite live region, and rewriting an identical string
+    // makes some screen readers announce it again for no reason.
+    if (text === lastCaption) return;
+    lastCaption = text;
+    captionEl.textContent = text;
+  }
+
+  /**
+   * Drives the countdown and the window bar from the server's real timestamps.
+   * Never called with anything else: if the API does not answer, the card keeps
+   * showing "—" rather than counting down to a window we assumed.
+   */
+  function startClock(startTs, endTs) {
+    const span = endTs - startTs;
+    if (!Number.isFinite(span) || span <= 0) return;
+    if (ticker) { clearInterval(ticker); ticker = null; }
+    barEl.hidden = false;
+
+    const tick = () => {
+      const now = Date.now();
+      const left = endTs - now;
+
+      if (left <= 0) {
+        // The page outlived its own window. The board below is now last week's
+        // and the server would answer with a different one, so say so rather
+        // than let a stale board sit under a clock reading zero.
+        clearInterval(ticker);
+        ticker = null;
+        segEls.d.textContent = '0';
+        segEls.h.textContent = '00';
+        segEls.m.textContent = '00';
+        segEls.s.textContent = '00';
+        clockEl.classList.remove('urgent');
+        clockEl.setAttribute('aria-label', 'This sprint window has closed');
+        fillEl.style.width = '100%';
+        barEl.setAttribute('aria-valuenow', '100');
+        caption('This window closed while the page was open — the board below is last week’s. Reload for the new one.');
         return;
       }
-      el.innerHTML = entries.map((e, i) => row(e, i,
-        `<span style="color:${e.entry.roiPct >= 0 ? 'var(--green)' : '#ff8a80'}">${signed(e.entry.roiPct, 1, '%')}</span> <small style="opacity:.75">${signed(e.entry.pnlSol, 2)} ◎</small>`,
-        `${e.entry.rounds} rds · ${e.entry.wins}W ${e.entry.losses}L`
-      )).join('');
-    } catch {
-      el.innerHTML = emptyState('The sprint server is unreachable right now. Nothing is shown rather than something stale.');
+
+      const d = Math.floor(left / DAY);
+      const h = Math.floor((left % DAY) / HOUR);
+      const m = Math.floor((left % HOUR) / 60000);
+      const s = Math.floor((left % 60000) / 1000);
+      segEls.d.textContent = String(d);
+      segEls.h.textContent = pad(h);
+      segEls.m.textContent = pad(m);
+      segEls.s.textContent = pad(s);
+
+      clockEl.classList.toggle('urgent', left < 6 * HOUR);
+      // role="timer" is a live region that defaults to off, so relabelling it
+      // every second costs nothing; the digits are aria-hidden, which makes
+      // this sentence the only thing a screen reader ever reads here.
+      clockEl.setAttribute('aria-label',
+        d + ' days, ' + h + ' hours, ' + m + ' minutes and ' + s +
+        ' seconds left in this week’s sprint window');
+
+      const percent = Math.min(100, Math.max(0, ((now - startTs) / span) * 100));
+      fillEl.style.width = percent.toFixed(2) + '%';
+      const rounded = Math.round(percent);
+      if (rounded !== lastPercent) {
+        lastPercent = rounded;
+        barEl.setAttribute('aria-valuenow', String(rounded));
+      }
+      caption('Day ' + Math.min(7, Math.floor((now - startTs) / DAY) + 1) +
+        ' of 7 · closes ' + closesAt(endTs));
+    };
+
+    tick();
+    ticker = setInterval(tick, 1000);
+  }
+
+  /* ------------------------------------------------------------- board --- */
+
+  const THEAD = `<div class="ar-thead">
+      <span>Pos</span>
+      <span>Trader</span>
+      <span>Status</span>
+      <span class="r" title="Return on the equity you carried into the window — this week only">ROI</span>
+      <span class="r ar-c-pnl">P&amp;L ◎</span>
+      <span class="r ar-c-rounds">Rds</span>
+      <span class="r ar-c-wl">W/L</span>
+      <span class="r ar-c-score">Score</span>
+    </div>`;
+
+  function boardRow(item, index, youHandle) {
+    const e = item.entry || {};
+    const isYou = youHandle && String(item.handle).toLowerCase() === youHandle.toLowerCase();
+    return `<a class="ar-row${isYou ? ' is-you' : ''}"
+       style="animation-delay:${Math.min(index * 26, 320)}ms"
+       href="profile.html?handle=${encodeURIComponent(item.handle)}">
+      <span class="pos">#${index + 1}</span>
+      <span class="ar-who">
+        ${face(item)}
+        <span class="ar-handle">@${esc(item.handle)}</span>
+        ${isYou ? '<span class="ar-you-tag">YOU</span>' : ''}
+      </span>
+      <span>${chipFor(item.status)}</span>
+      <span class="val ${dirClass(e.roiPct)}">${esc(signed(e.roiPct, 1, '%'))}</span>
+      <span class="val dim ar-c-pnl">${esc(signed(e.pnlSol, 2))}</span>
+      <span class="val dim ar-c-rounds">${esc(fmt(e.rounds, 0))}</span>
+      <span class="val dim ar-c-wl">${esc(fmt(e.wins, 0))}/${esc(fmt(e.losses, 0))}</span>
+      <span class="val score ar-c-score">${esc(fmt(e.score, 1))}</span>
+    </a>`;
+  }
+
+  /* -------------------------------------------------------- your week ---- */
+
+  function identity(session) {
+    return `<div style="display:flex;align-items:center;gap:10px">
+        ${face(session, 'ar-face')}
+        <div style="min-width:0">
+          <div style="font-weight:800">@${esc(session.handle)}</div>
+          <a class="ar-note" style="color:var(--orange2)"
+             href="profile.html?handle=${encodeURIComponent(session.handle)}">View public profile →</a>
+        </div>
+      </div>`;
+  }
+
+  /** `entries` is null when the board itself could not be loaded. In that case
+   *  we know who you are and genuinely do not know where you stand, and this
+   *  pane has to say the second half out loud.
+   *
+   *  `down` is what the board request actually observed. arena.js only reports
+   *  `unreachable` when the fetch throws, so a 5xx comes back as a plain body
+   *  with no `signedIn` — indistinguishable from being signed out. Offering a
+   *  sign-in button that cannot possibly complete is its own small dishonesty,
+   *  so a known-down verifier wins over an ambiguous session. */
+  function renderYou(session, entries, down) {
+    if (!session || session.unreachable || (down && !session.signedIn)) {
+      youEl.innerHTML = `<p class="ar-note">Sign-in is down along with the verifier, so this page
+        cannot tell whether you are in this week. It is showing nothing rather than a guess.</p>`;
+      return;
     }
+    if (!session.signedIn) {
+      youEl.innerHTML = `<p class="ar-note" style="margin-bottom:12px">Sign in with X and your row
+          lights up wherever it lands. It does not enter you into anything — there is nothing to
+          enter — it just tells this page which row is yours.</p>
+        <button class="ar-btn primary" id="signin-btn">𝕏 &nbsp;Sign in with X</button>`;
+      document.getElementById('signin-btn').addEventListener('click', L.signIn);
+      return;
+    }
+
+    const head = identity(session);
+    if (entries === null) {
+      youEl.innerHTML = head + `<p class="ar-note" style="margin-top:12px">This week's standings
+        did not load, so your position is unknown right now — not zero, not last, unknown. Reload
+        once the verifier is back.</p>`;
+      return;
+    }
+
+    const handle = String(session.handle).toLowerCase();
+    const index = entries.findIndex((e) => String(e.handle).toLowerCase() === handle);
+    if (index < 0) {
+      youEl.innerHTML = head + `<p class="ar-note" style="margin-top:12px">Nothing of yours has
+          closed inside this window yet — which is not a scolding, it is just Monday doing its job.
+          One round opened and closed since the window started puts you on the board.</p>
+        <p class="ar-note" style="margin-top:10px">Trade the way you normally would, then sync your
+          record on the <a href="leaderboard.html">leaderboard page</a>. The sprint reads the same
+          chain, so there is nothing extra to submit and no separate entry to miss.</p>`;
+      return;
+    }
+
+    const e = entries[index].entry || {};
+    youEl.innerHTML = head + `
+      <div style="margin-top:12px">${chipFor(entries[index].status)}</div>
+      <div class="ar-stats" style="margin-top:12px">
+        <div class="ar-stat"><div class="num">#${index + 1}</div><div class="lbl">Position</div></div>
+        <div class="ar-stat"><div class="num ${dirClass(e.roiPct)}">${esc(signed(e.roiPct, 1, '%'))}</div><div class="lbl">Window ROI</div></div>
+        <div class="ar-stat"><div class="num ${dirClass(e.pnlSol)}">${esc(signed(e.pnlSol, 2))}</div><div class="lbl">P&amp;L ◎</div></div>
+        <div class="ar-stat"><div class="num">${esc(fmt(e.rounds, 0))}</div><div class="lbl">Rounds · ${esc(fmt(e.wins, 0))}W ${esc(fmt(e.losses, 0))}L</div></div>
+      </div>
+      <p class="ar-note" style="margin-top:12px">Resubmitting mid-week refreshes this from the same
+        extend-only chain — it re-slices what you have already committed, it does not add to it.</p>`;
+  }
+
+  /* ------------------------------------------------------------- boot ---- */
+
+  (async () => {
+    // Both requests fly in parallel, but rows are not drawn until BOTH have
+    // landed. Deciding "is this you" on whichever fetch won the race would mean
+    // the YOU tag appears or not depending on network luck, and a highlight
+    // that flickers in late is worse than one that waits behind a skeleton.
+    const sessionPromise = L.me();
+
+    // getOrThrow, not api(): a 5xx answers with a JSON error object, so a
+    // caller reading only `.body` sees `entries === undefined` and cannot tell
+    // an outage from an empty week. Rendering the former as the latter would
+    // state "nobody traded this week" while the verifier is down — the exact
+    // lie this board exists not to tell.
+    let body = null;
+    try { body = await L.getOrThrow('/api/sprint/current'); } catch { body = null; }
+
+    const session = await sessionPromise;
+    const youHandle = session && session.signedIn ? session.handle : null;
+
+    // The shape check survives separately: a 200 carrying something that is not
+    // a board is still not a board.
+    if (!body || !Array.isArray(body.entries)) {
+      boardEl.innerHTML = L.errorState(
+        'The sprint verifier is unreachable, so this week’s standings are not shown. Nothing here is cached, carried over from last week, or guessed.');
+      statusEl.textContent = 'Standings unavailable — the verifier could not be reached.';
+      formulaEl.innerHTML = '<p class="ar-note">No week to run the formula over while the verifier is unreachable.</p>';
+      renderYou(session, null, true);
+      caption('The verifier is unreachable, so the window’s clock is not shown rather than assumed.');
+      return;
+    }
+
+    const entries = body.entries;
+    weekEl.textContent = body.weekId || '—';
+    countEl.textContent = fmt(entries.length, 0);
+    startClock(Number(body.startTs), Number(body.endTs));
+
+    if (!entries.length) {
+      boardEl.innerHTML = L.empty('🏁',
+        'Nobody has closed a round this week yet.',
+        'The window is open and the board is blank — someone has to go first. One round opened <em>and</em> closed since Monday puts your name here. Trade the way you normally do, then sync your record on the <a href="leaderboard.html">leaderboard page</a>; the sprint reads the same chain. Nothing appears on this board until a real round has been committed and replayed — there are no seeded names and no demo week.');
+      statusEl.textContent = 'No entries yet this week.';
+      formulaEl.innerHTML = '<p class="ar-note">No entries yet, so there is no week to run it over. The worked example appears with the first ranked round.</p>';
+      renderYou(session, entries);
+      return;
+    }
+
+    boardEl.innerHTML = THEAD + entries.map((e, i) => boardRow(e, i, youHandle)).join('');
+    statusEl.textContent = fmt(entries.length, 0) + ' racing this week · ' +
+      fmt(entries.filter((e) => e.status === 'verified').length, 0) + ' fully verified';
+
+    formulaEl.innerHTML =
+      `<div style="font-weight:800;margin-bottom:10px">@${esc(entries[0].handle)}` +
+      (body.weekId ? ' · ' + esc(body.weekId) : '') + '</div>' +
+      L.formulaHtml(entries[0].entry || {});
+
+    renderYou(session, entries);
   })();
 })();
 </script>

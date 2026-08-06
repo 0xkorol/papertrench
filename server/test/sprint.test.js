@@ -72,7 +72,7 @@ test('only rounds opened AND closed inside the window count', async () => {
   const entry = sprintEntry(links, 10, window);
   assert.equal(entry.rounds, 1);
   assert.equal(entry.wins, 1);
-  assert.ok(Math.abs(entry.pnlSol - (1.98 - 0.99)) < 1e-9);
+  assert.ok(Math.abs(entry.pnlSol - (1.98 - 1.0)) < 1e-9);
 });
 
 test('ROI is on window-start equity, so bankroll size is not an edge', async () => {
@@ -85,8 +85,9 @@ test('ROI is on window-start equity, so bankroll size is not an edge', async () 
   ];
   const links = await chainOf(fills);
   const entry = sprintEntry(links, 10, window);
-  // Start equity = cash after the carry buy (10 − 2) + carried cost basis (1.98).
-  assert.ok(Math.abs(entry.equityAtStart - (10 - 2 + 1.98)) < 1e-9);
+  // Start equity = cash after the carry buy (10 − 2) + its committed cost
+  // basis (2.00 gross). Committed-basis accounting makes these cancel.
+  assert.ok(Math.abs(entry.equityAtStart - (10 - 2 + 2.0)) < 1e-9);
   const expectedRoi = (entry.pnlSol / entry.equityAtStart) * 100;
   assert.ok(Math.abs(entry.roiPct - expectedRoi) < 1e-9);
 });

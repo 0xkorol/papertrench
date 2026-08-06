@@ -3180,12 +3180,16 @@ function renderStandingsPlaceholder(identity, stats) {
     <p class="dim" style="font-size:12px;line-height:1.6;margin:14px 0 0">
       Global standings live at <a href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener" style="color:var(--orange2)">papertrench.com/leaderboard</a>,
       recomputed server-side from submitted chains — never from a self-reported
-      number. ROI is shown next to absolute P&amp;L because the starting bankroll
-      is a free choice: +10 SOL on 10 is not +10 SOL on 1,000.
+      number. The same chain also feeds the weekly Sprint and head-to-head
+      duels; there is no second record to keep. ROI is shown next to absolute
+      P&amp;L because the starting bankroll is a free choice: +10 SOL on 10 is
+      not +10 SOL on 1,000.
     </p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
       <button class="btn-sec" id="lb-export" ${chain.length ? '' : 'disabled'}>Export record (JSON)</button>
-      <a class="btn-sec" href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener" style="text-decoration:none">Open leaderboard ↗</a>
+      <a class="btn-sec" href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener" style="text-decoration:none">Leaderboard ↗</a>
+      <a class="btn-sec" href="https://papertrench.com/sprint.html" target="_blank" rel="noopener" style="text-decoration:none">Weekly Sprint ↗</a>
+      <a class="btn-sec" href="https://papertrench.com/duels.html" target="_blank" rel="noopener" style="text-decoration:none">Duels ↗</a>
     </div>
     <div class="field field-check" style="margin-top:14px"><label><input type="checkbox" id="lb-bridge" ${settings.leaderboardBridge === true ? 'checked' : ''}> Site sync</label><small>Lets papertrench.com read your verified record when you click Sync there — nothing is sent anywhere on its own, and no other site can ask. Off means the site tells you to use the exported file instead.</small></div>`;
 }

@@ -22,11 +22,33 @@ const REVENGE_WINDOW_MS = 10 * 60 * 1000;
 const MIN_RANKED_ROUNDS = 5;
 
 /**
+ * The cash amount a fill actually COMMITTED to the hash chain.
+ *
+ * attest.js's preimage hashes exactly one money field per fill: gross on a
+ * buy, net on a sell. Everything else a link carries — buy-side `solNet`,
+ * `txCostSol`, and the convenience `amount` copy — is stored but NOT hashed,
+ * so all three can be edited to any value while every link still re-hashes
+ * and the chain still verifies.
+ *
+ * The extension replays with those fields because a user has no reason to
+ * lie to themselves. A leaderboard does: shrinking a buy's uncommitted
+ * `solNet` toward zero drives the cost basis to nothing and inflates the
+ * reported return without limit. So the ranked book is built only from what
+ * the chain proves.
+ *
+ * That is also the more honest measure: gross out on a buy and net in on a
+ * sell is the cash that genuinely left and entered the wallet, fees included.
+ */
+function committedAmount(link) {
+  const value = link.side === 'buy' ? link.solGross : link.solNet;
+  return Number(value) || 0;
+}
+
+/**
  * Reconstruct closed rounds from chain links.
  *
- * Mirrors replayChain's book math (net-basis cost, share accounting) but
- * keeps per-round detail: a round is a mint's position going flat, carrying
- * entry/exit times, cost in, and realized P&L.
+ * A round is a mint's position going flat, carrying entry/exit times, cost
+ * in, and realized P&L — all on the committed cash basis above.
  */
 function roundsFromChain(links) {
   const list = Array.isArray(links) ? links : [];
@@ -36,35 +58,38 @@ function roundsFromChain(links) {
   for (const link of list) {
     const qty = Number(link.qty) || 0;
     const price = Number(link.priceNative) || 0;
-    const amount = Number(link.amount !== undefined
-      ? link.amount
-      : (link.side === 'buy' ? link.solGross : link.solNet)
-    ) || 0;
+    const amount = committedAmount(link);
     if (!(qty > 0) || !(price > 0)) continue;
 
     if (link.side === 'buy') {
-      const held = open.get(link.mint) || { qty: 0, cost: 0, openedTs: Number(link.ts) || 0 };
+      const held = open.get(link.mint)
+        || { qty: 0, cost: 0, openedTs: Number(link.ts) || 0, realized: 0, costOut: 0 };
       if (held.qty <= 0) held.openedTs = Number(link.ts) || 0;
       held.qty += qty;
-      held.cost += (Number(link.solNet) > 0 ? Number(link.solNet) : amount)
-        + (Number(link.txCostSol) || 0);
+      held.cost += amount;
       open.set(link.mint, held);
     } else if (link.side === 'sell') {
       const held = open.get(link.mint);
       if (!held || held.qty <= 0) continue;
       const share = Math.min(1, qty / held.qty);
       const costOut = held.cost * share;
-      const pnl = amount - costOut;
       held.qty -= qty;
       held.cost -= costOut;
+      // Every leg accumulates. Scaling out is the disciplined exit this
+      // product teaches, and booking only the FINAL leg's P&L understated the
+      // round by every take-profit before it — which made the board's realized
+      // P&L, ROI and win rate disagree with replayChain for exactly the
+      // traders behaving best.
+      held.realized += amount - costOut;
+      held.costOut += costOut > 0 ? costOut : 0;
       if (held.qty <= 1e-12) {
         rounds.push({
           mint: String(link.mint),
           openedTs: held.openedTs,
           closedTs: Number(link.ts) || 0,
-          costIn: costOut > 0 ? costOut : 0,
-          pnlSol: pnl,
-          win: pnl > 0,
+          costIn: held.costOut,
+          pnlSol: held.realized,
+          win: held.realized > 0,
         });
         open.delete(link.mint);
       } else {
@@ -154,5 +179,5 @@ function recordStats(links, startingSol) {
 
 module.exports = {
   REVENGE_WINDOW_MS, MIN_RANKED_ROUNDS,
-  roundsFromChain, maxDrawdown, revengeRatio, seasonScore, recordStats,
+  committedAmount, roundsFromChain, maxDrawdown, revengeRatio, seasonScore, recordStats,
 };

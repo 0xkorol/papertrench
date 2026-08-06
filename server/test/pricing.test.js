@@ -75,9 +75,27 @@ test('a lookup budget pauses the run at a resumable cursor', async () => {
   assert.equal(rest.verdicts[0].index, 2);
 });
 
-test('a throwing candle source degrades to no-data, not a crash', async () => {
-  const getCandles = async () => { throw new Error('upstream down'); };
-  const run = await priceChain([link('M1', 60000, 0.01)], getCandles, {});
+test('a throwing candle source PAUSES — failing to ask is never evidence of absence', async () => {
+  // The distinction this locks: a null RESULT means "asked, nothing there"
+  // (no-data); a THROW means "could not ask" (budget gone, rate limited,
+  // network fault). Recording the second as no-data would quietly skip the
+  // re-pricing gate on the rest of the chain while reporting coverage as if
+  // the fills had been checked.
+  const links = [link('M1', 60000, 0.01), link('M2', 120000, 0.01)];
+  const run = await priceChain(links, async () => { throw new Error('upstream down'); }, {});
+  assert.equal(run.done, false, 'the run must not claim to be finished');
+  assert.equal(run.cursor, 0, 'and must resume from the fill it could not price');
+  assert.deepEqual(run.verdicts, []);
+
+  // Recovery on the next run produces real verdicts, with nothing lost.
+  const ok = await priceChain(links, async () => CANDLES, { startAt: run.cursor });
+  assert.equal(ok.done, true);
+  assert.equal(ok.verdicts.length, 2);
+  assert.ok(ok.verdicts.every((v) => v.verdict === 'ok'));
+});
+
+test('a null candle result is still honest no-data', async () => {
+  const run = await priceChain([link('M1', 60000, 0.01)], async () => null, {});
   assert.equal(run.done, true);
   assert.equal(run.verdicts[0].verdict, 'no-data');
 });

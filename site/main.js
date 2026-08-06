@@ -366,18 +366,9 @@
     runLoop(recCanvas, drawRec);
   }
 
-  /* =========================================================
-     LEADERBOARD — rolling hash chain ticker
-     ========================================================= */
-  const chainEl = document.getElementById('chainTicker');
-  if (chainEl && !reduced) {
-    const hex = () => Array.from({ length: 4 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
-    const link = () => `${hex()}…${hex()}`;
-    let chain = [link(), link(), link()];
-    setInterval(() => {
-      chain.push(link());
-      if (chain.length > 4) chain.shift();
-      chainEl.innerHTML = 'hash: ' + chain.map(h => `<span class="h">${h}</span>`).join(' <span class="arrow">→</span> ') + ' <span class="arrow">→</span> <span class="h">verifying…</span>';
-    }, 1600);
-  }
+  /* The leaderboard ticker used to roll RANDOM hex as a decorative "hash
+     chain". Once a real verifier existed, invented hashes on the front page
+     of a product whose entire claim is that its numbers are never wrong
+     became indefensible — index.html now feeds that element from the real
+     activity feed instead. */
 })();

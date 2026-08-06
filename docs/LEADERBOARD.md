@@ -89,6 +89,23 @@ Cloudflare Workers adapters) and implements every check above, plus:
 - **Extend-only anchoring** (check 5 made concrete): the stored head must
   appear at its committed position in the next submission, so a chain can
   be extended but never replaced — including after a local reset.
+- **The declared bankroll is pinned.** It is the denominator of ROI and
+  therefore of the whole score, and it is the one input the chain cannot
+  prove. Resubmitting identical fills under a smaller bankroll would
+  multiply the return arbitrarily, so a changed figure is rejected as
+  `bankroll-changed`; changing it means deleting the server record and
+  starting over, which is self-serve and visible.
+- **Ranked figures use only hash-committed fields.** The preimage above
+  commits one money field per fill: gross on a buy, net on a sell. A link
+  also carries `solNet` on buys, `txCostSol`, and an `amount` copy — stored
+  but *not* hashed, so all three can be edited to any value while the chain
+  still verifies end to end. The extension replays with them (a user has no
+  reason to lie to themselves); the server must not, because driving a buy's
+  uncommitted cost toward zero would inflate the return without bound. So
+  the ranked book is gross-out on buys and net-in on sells — which is also
+  the more honest measure: the cash that actually left and entered the
+  wallet, fees included. It runs a little below the figure the dashboard
+  shows, and that difference is the buy-side fee, not a discrepancy.
 - **Three-state re-pricing.** Fills are checked against the token's USD
   minute candle crossed with the SOL/USD range for the same minute. An
   impossible price rejects the record; a minute with no public candle data
@@ -96,6 +113,54 @@ Cloudflare Workers adapters) and implements every check above, plus:
 - **Process-weighted ranking** (`ROI × ln(1+rounds) × discipline`, five
   closed rounds minimum) and the weekly **Trench Sprint**, both computed
   from the same chain — there is no second record to game.
+
+## Modes are windows, not books
+
+Every competitive mode is the same committed chain seen through a different
+time window: the season is the whole chain, the Sprint is a UTC
+Monday-to-Monday slice, a duel is a 1-hour-to-1-week head-to-head slice. A
+round counts only if it opened *and* closed inside the window. This is what
+makes the set of modes uncheatable rather than each mode separately — there
+is no per-mode book to inflate.
+
+### Duels, and the one vector left open
+
+A duel settles **only from a chain submitted after its window closed.**
+
+The chain is append-only locally and extend-only on the server, so a player
+cannot delete a losing round from inside the window: removing a link breaks
+every hash after it, and a swapped-in history is rejected as
+`chain-replaced`. That leaves exactly one gaming vector — submit while you
+are up, then go quiet so the server's newest copy of your chain predates
+your losses. Settling only from post-close submissions closes it, because a
+post-close chain necessarily carries every fill made inside the window.
+Refusing to submit forfeits rather than freezing a flattering snapshot.
+Live standings during the window are shown, labeled provisional, and decide
+nothing.
+
+## Achievements
+
+Badges are derived from committed fills alone, under the extension's own
+doctrine (`gamify.js`): **no profit badges, no win-streak badges, no volume
+badges.** A badge for making money rewards the coin flip and teaches the
+lesson this product exists to unteach. Each badge is a process claim —
+losses taken without chasing, a drawdown actually recovered, sizing that did
+not grow after a loss, distinct days of reps — and each award carries the
+evidence that earned it.
+
+One consequence worth stating: a badge must not be earnable by never being
+tested. "Clean Hands" counts *losses not chased*, not a run of clean rounds,
+because a record with no losses has demonstrated no revenge discipline at
+all.
+
+## Activity feed
+
+The verifier's work is public: chains accepted, records verified,
+submissions rejected. Positive events carry the handle; **rejections never
+do.** An automated verdict can fire on thin candle data as easily as on
+fraud, and must not publicly brand a named person a cheat.
+
+## Getting the record to the server
 
 The record reaches the site two ways, both user-initiated: a JSON export
 from the dashboard, or the site's Sync button asking the extension over

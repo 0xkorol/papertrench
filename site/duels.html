@@ -1,0 +1,1414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Duels</title>
+<meta name="description" content="Head-to-head paper duels over one shared window. Settled only from a hash chain submitted after the clock stops, so going quiet while you are up forfeits instead of freezing a flattering snapshot.">
+<meta property="og:title" content="PaperTrench — Duels">
+<meta property="og:description" content="One opponent, one shared clock, and a result neither of you controls. Both records are replayed and re-priced against real market history before anyone wins anything.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="arena.css">
+<style>
+/* duels.html — page-scoped styles.
+ *
+ * arena.css owns the Arena vocabulary and is shared with the other
+ * competitive surfaces, so nothing here edits it. This block adds only the
+ * pieces a LOBBY needs and no board does: a duration chooser, a code field,
+ * the invite hand-off, and a duel card compact enough to list twenty of.
+ * Everything is built from arena.css tokens, and every selector is a new
+ * name — no page-local variant of a class another surface also renders.
+ */
+
+/* Pane titles are real headings so a screen-reader user can jump pane to pane
+ * by heading rather than hunting landmarks. style.css sizes bare <h2> for
+ * full-page sections, which would dwarf a pane head, so it inherits instead. */
+.ar-pane-head h2 { font: inherit; letter-spacing: inherit; }
+.ar-verifier .bar h2 { margin: 0; }
+
+/* Heads that carry tabs or a counter need to wrap on a phone; .ar-pane-head
+ * itself must not wrap globally or the board's head would break. */
+.ar-headwrap { flex-wrap: wrap; row-gap: 9px; }
+
+/* Visually hidden, still focusable and still read aloud. Used for the radio
+ * inputs behind the duration chooser and for the non-ticking text alternative
+ * beside every countdown. */
+.ar-vis {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* =============================================== hero: duel lifecycle ==== */
+
+.ar-stages { list-style: none; margin: 0; padding: 10px 0 14px; }
+.ar-stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 16px;
+}
+/* The rail between stage bullets. Drawn on the item rather than the list so
+ * it stops at the last bullet instead of running off the panel. */
+.ar-stage:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 28px; top: 34px; bottom: -6px;
+  width: 1px;
+  background: var(--line2);
+}
+.ar-stage .n {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 800;
+  border: var(--edge);
+  background: var(--pane-lo);
+  color: var(--muted);
+}
+.ar-stage h3 {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text);
+  line-height: 1.9;
+}
+.ar-stage p { font-size: 12.5px; line-height: 1.55; color: var(--muted); margin-top: 2px; }
+/* The one stage that is the whole design gets the verifier's green. */
+.ar-stage.gate .n {
+  color: var(--green);
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.08);
+}
+.ar-stage.gate h3 { color: var(--green); }
+
+/* ====================================================== create / join ==== */
+
+.ar-gauntlet {
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(320px, 0.94fr);
+  gap: 22px;
+  align-items: start;
+  margin-bottom: 22px;
+}
+
+.ar-durwrap { border: 0; margin: 0 0 16px; padding: 0; }
+.ar-durwrap legend {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 10px;
+}
+.ar-dur {
+  position: relative; /* containing block for the hidden radios */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px;
+}
+.ar-durbox {
+  display: block;
+  text-align: center;
+  border: var(--edge);
+  border-radius: 12px;
+  background: var(--pane-lo);
+  padding: 10px 8px;
+  cursor: pointer;
+  transition: border-color var(--t-fast) linear, background var(--t-fast) linear,
+              color var(--t-fast) linear;
+}
+.ar-durbox b { display: block; font-family: var(--mono); font-size: 13px; font-weight: 800; }
+.ar-durbox span {
+  display: block;
+  font-size: 9.5px;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-top: 3px;
+}
+.ar-durbox:hover { border-color: var(--line2); }
+.ar-durin:checked + .ar-durbox {
+  color: var(--orange2);
+  border-color: rgba(255, 157, 69, 0.45);
+  background: rgba(255, 157, 69, 0.1);
+}
+.ar-durin:checked + .ar-durbox span { color: var(--orange2); opacity: 0.75; }
+/* style.css only rings <a> and <button>; a keyboard user picking a duration
+ * needs the same ring on the label the hidden radio drives. */
+.ar-durin:focus-visible + .ar-durbox { outline: 2px solid var(--orange); outline-offset: 2px; }
+
+.ar-field {
+  width: 100%;
+  font-family: var(--mono);
+  /* 16px is not a taste call: anything smaller makes iOS Safari zoom the page
+   * on focus, which throws the lobby layout sideways mid-typing. */
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.3);
+  border: var(--edge);
+  border-radius: 12px;
+  padding: 13px 14px;
+}
+.ar-field::placeholder { color: var(--dim); font-weight: 700; letter-spacing: 1.2px; }
+.ar-field:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.ar-field.ready { border-color: rgba(52, 211, 153, 0.4); }
+.ar-field.link {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+
+.ar-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.ar-acts .ar-btn { flex: 1 1 auto; }
+
+.ar-hint {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--dim);
+  margin-top: 9px;
+}
+
+.ar-msg {
+  border: var(--edge);
+  border-radius: 12px;
+  background: var(--pane-lo);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.ar-msg b { color: var(--text); font-weight: 700; }
+.ar-msg.bad { border-color: rgba(224, 67, 58, 0.35); background: rgba(224, 67, 58, 0.07); color: #ffb3ae; }
+.ar-msg.bad b { color: #ffd9d6; }
+.ar-msg.good { border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.06); }
+.ar-msg .ar-btn { margin-top: 10px; }
+
+/* The hand-off. This is the moment the page exists for, so it gets the
+ * heat gradient's border and the biggest mono on the page. */
+.ar-invite {
+  border: 1px solid rgba(255, 157, 69, 0.4);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 157, 69, 0.12), rgba(255, 255, 255, 0.012));
+  padding: 16px;
+  animation: ar-rise var(--t-slow) var(--e-out) both;
+}
+.ar-invite .k {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--orange2);
+}
+.ar-invite .code {
+  font-family: var(--mono);
+  font-size: clamp(21px, 4.6vw, 29px);
+  font-weight: 800;
+  letter-spacing: 2px;
+  margin: 6px 0 10px;
+  word-break: break-all;
+}
+.ar-copy { display: flex; gap: 8px; align-items: stretch; margin-top: 12px; }
+.ar-copy .ar-field { min-width: 0; }
+.ar-copy .ar-btn { flex: none; white-space: nowrap; }
+
+/* ============================================================= my duels == */
+
+.ar-duellist { display: grid; gap: 12px; padding: 16px 18px 20px; }
+
+.ar-duelcard {
+  border: var(--edge);
+  border-radius: 14px;
+  background: var(--pane);
+  overflow: hidden;
+  animation: ar-rise var(--t-slow) var(--e-out) both;
+}
+.ar-duelcard.is-active { border-color: rgba(255, 157, 69, 0.3); }
+
+.ar-duelcard-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: var(--rail);
+  background: rgba(255, 255, 255, 0.02);
+}
+.ar-duelcard-head .code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+  color: var(--muted);
+}
+.ar-duelcard-head .spacer { margin-left: auto; }
+.ar-duelcard-head .meta { font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+
+/* A duel's lifecycle state is deliberately rectangular. Every round pill in
+ * this product means VERIFICATION and only that — an "active" badge must not
+ * be mistakable for a verified one in a screenshot. */
+.ar-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  border-radius: 5px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  flex: none;
+}
+.ar-state.open { color: var(--violet); border-color: rgba(167, 139, 250, 0.4); background: rgba(167, 139, 250, 0.1); }
+.ar-state.active { color: var(--orange2); border-color: rgba(255, 157, 69, 0.45); background: rgba(255, 157, 69, 0.1); }
+.ar-state.awaiting { color: var(--blue); border-color: rgba(106, 169, 255, 0.4); background: rgba(106, 169, 255, 0.09); }
+.ar-state.settled { color: var(--silver); border-color: rgba(207, 216, 230, 0.32); background: rgba(207, 216, 230, 0.07); }
+.ar-state.expired,
+.ar-state.unknown { color: var(--dim); border-color: var(--line2); background: var(--pane-lo); }
+
+.ar-cd { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 800; color: var(--muted); }
+.ar-cd.urgent { color: var(--orange2); }
+.ar-cd.done { color: var(--dim); font-weight: 700; }
+
+.ar-duelcard-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 16px 14px 14px;
+}
+.ar-duelcard .ar-vs { width: 40px; height: 40px; font-size: 14px; }
+
+.ar-mini-side { min-width: 0; text-align: center; }
+.ar-mini-side .top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ar-mini-side .nm {
+  font-weight: 750;
+  font-size: 13.5px;
+  min-width: 0; /* flex items default to min-width:auto, which defeats ellipsis */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ar-mini-side .roi {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-top: 8px;
+}
+.ar-mini-side .roi.up { color: var(--up); }
+.ar-mini-side .roi.down { color: var(--down); }
+/* No number, so no number-shaped thing. A dash at 22px reads as a value; this
+ * reads as an absence, which is what it is. */
+.ar-mini-side .roi.none {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.ar-mini-side .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.ar-mini-side .stamp { font-family: var(--mono); font-size: 9.5px; color: var(--dim); margin-top: 3px; }
+.ar-mini-side .chips { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.ar-mini-side.leading .nm { color: var(--orange2); }
+.ar-mini-side.leading .ar-face { border-color: rgba(255, 157, 69, 0.6); }
+/* Gold on a duel winner follows arena.css's own .ar-duel-side.won — the
+ * podium's rank-1 rule is about the leaderboard's gold, and the design system
+ * already spends it here for exactly this meaning. */
+.ar-mini-side.won .ar-face { border-color: var(--gold); box-shadow: 0 0 18px -6px var(--gold-glow); }
+.ar-mini-side.seat .ar-face {
+  border-style: dashed;
+  color: var(--dim);
+  background: transparent;
+}
+/* The winner tag. Solid, where .ar-provisional is dashed — the two must not
+ * be confusable, since one of them means "this decided nothing". */
+.ar-wontag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--gold);
+  border: 1px solid rgba(255, 207, 92, 0.5);
+  background: rgba(255, 207, 92, 0.09);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.ar-duelcard .ar-tug { margin: 0 14px 14px; height: 8px; }
+
+.ar-duelcard-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-top: var(--rail);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.ar-duelcard-foot .why { min-width: 0; }
+.ar-duelcard-foot a { color: var(--orange2); }
+.ar-otag {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: var(--edge);
+  border-radius: 5px;
+  padding: 3px 7px;
+  flex: none;
+}
+.ar-duelcard-acts { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 14px 14px; }
+.ar-duelcard-acts .ar-btn { font-size: 12.5px; padding: 8px 14px; border-radius: 10px; }
+
+/* ======================================================= the explainer === */
+
+.ar-fork { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0 4px; }
+.ar-forkcol { border: var(--edge); border-radius: 12px; background: var(--pane-lo); padding: 14px 16px; }
+.ar-forkcol h4 {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.ar-forkcol p { font-size: 13px; line-height: 1.62; color: var(--muted); }
+.ar-forkcol.attack { border-color: rgba(224, 67, 58, 0.3); }
+.ar-forkcol.attack h4 { color: var(--down); }
+.ar-forkcol.answer { border-color: rgba(52, 211, 153, 0.3); }
+.ar-forkcol.answer h4 { color: var(--green); }
+
+.ar-legend { display: grid; gap: 12px; }
+.ar-legend > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; }
+.ar-legend p { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+
+.ar-outcomes { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px 12px; align-items: start; }
+.ar-outcomes dt { margin: 0; }
+.ar-outcomes dd { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+
+/* ========================================================== responsive === */
+
+@media (max-width: 980px) {
+  .ar-gauntlet { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .ar-fork { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  /* Same move arena.css makes on .ar-duel at 900px: stack the sides rather
+   * than squeeze two handles and two returns into 150px each. */
+  .ar-duelcard-body { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .ar-duelcard .ar-vs { margin: 0 auto; }
+  .ar-duellist { padding: 14px; }
+  .ar-copy { flex-wrap: wrap; }
+  .ar-copy .ar-btn { flex: 1 1 auto; }
+}
+@media (max-width: 400px) {
+  .ar-outcomes { grid-template-columns: minmax(0, 1fr); gap: 4px 0; }
+  .ar-outcomes dd { margin-bottom: 8px; }
+}
+
+/* ==================================================== reduced motion ===== */
+/* arena.css already parks its own animations; these are this page's, so this
+ * page has to park them too. Both end states are the visible state. */
+@media (prefers-reduced-motion: reduce) {
+  .ar-duelcard,
+  .ar-invite { animation: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="sprint.html">Sprint</a>
+      <a href="duels.html" aria-current="page">Duels</a>
+      <a href="news.html">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="ar-hero">
+  <div class="wrap">
+    <div class="ar-hero-grid">
+      <div>
+        <span class="ar-eyebrow"><span class="dot"></span>1v1 · one shared window · settled server side</span>
+        <h1 class="ar-title"><span class="line">One opponent.</span><span class="line">One clock.</span><span class="line accent">One result neither of you writes.</span></h1>
+        <p class="ar-lede">Pick a window, hand someone the code, and trade the way you already
+          trade — same sites, same feeds, still no money. Nobody keeps score in a duel: the
+          server slices <strong>both hash-chained records</strong> to the same minutes and
+          compares them. And it only looks <strong>after the clock stops</strong>, which is the
+          one thing that makes going quiet while you are up a forfeit instead of a strategy.</p>
+
+        <div class="ar-spec" role="list" aria-label="Duel parameters">
+          <div role="listitem"><div class="k">Format</div><div class="v">1v1 · one window</div></div>
+          <div role="listitem"><div class="k">Window</div><div class="v">1 hour – 1 week</div></div>
+          <div role="listitem"><div class="k">Settles from</div><div class="v ok">Post-close chain</div></div>
+          <div role="listitem"><div class="k">Live standings</div><div class="v zero">Provisional</div></div>
+        </div>
+      </div>
+
+      <!-- The lifecycle, not a feed. There is no live duel activity to stream
+           on a lobby page, and inventing one would be the exact failure this
+           product is built against — so the hero explains the clock instead. -->
+      <aside class="ar-verifier" aria-labelledby="lifecycle-h">
+        <div class="bar">
+          <span class="bulbs"><i></i><i></i><i></i></span>
+          <h2 class="name" id="lifecycle-h">duel · lifecycle</h2>
+        </div>
+        <ol class="ar-stages">
+          <li class="ar-stage">
+            <span class="n">1</span>
+            <div>
+              <h3>Create</h3>
+              <p>You pick the length and get a code. Nothing is running yet — the invite just sits
+                open for 48 hours.</p>
+            </div>
+          </li>
+          <li class="ar-stage">
+            <span class="n">2</span>
+            <div>
+              <h3>Accept</h3>
+              <p>The clock starts when your opponent takes the seat, not when you created it. Same
+                instant, same conditions, both sides.</p>
+            </div>
+          </li>
+          <li class="ar-stage">
+            <span class="n">3</span>
+            <div>
+              <h3>Run</h3>
+              <p>Trade normally. Standings appear as each of you submits, stamped with when they
+                arrived and labeled provisional.</p>
+            </div>
+          </li>
+          <li class="ar-stage">
+            <span class="n">4</span>
+            <div>
+              <h3>Close</h3>
+              <p>The window ends and nothing is decided. Whatever the board said a minute ago has
+                no standing at all.</p>
+            </div>
+          </li>
+          <li class="ar-stage gate">
+            <span class="n">5</span>
+            <div>
+              <h3>Settle</h3>
+              <p>Each of you submits a record from <em>after</em> the close. That chain cannot be
+                missing a fill from inside the window, so the comparison is honest by
+                construction.</p>
+            </div>
+          </li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" style="padding-bottom:96px">
+
+  <section class="ar-pane" aria-labelledby="you-h" style="margin-bottom:22px">
+    <div class="ar-pane-head ar-headwrap">
+      <span class="glyph" style="color:var(--orange2)">◆</span>
+      <h2 id="you-h">Your side</h2>
+      <span class="spacer"></span>
+      <div class="ar-tabs">
+        <a class="ar-tab" href="leaderboard.html">All-time</a>
+        <a class="ar-tab" href="sprint.html">This week</a>
+        <a class="ar-tab" href="duels.html" aria-current="page">Duels</a>
+      </div>
+    </div>
+    <div class="pad">
+      <div id="you" aria-live="polite"><p class="ar-note">Checking sign-in…</p></div>
+    </div>
+  </section>
+
+  <div class="ar-gauntlet">
+
+    <section class="ar-pane" aria-labelledby="create-h">
+      <div class="ar-pane-head">
+        <span class="glyph" style="color:var(--orange2)">⚔</span>
+        <h2 id="create-h">Throw down</h2>
+      </div>
+      <div class="pad">
+        <p class="ar-note" style="margin-bottom:16px">Pick how long the window runs. The server
+          clamps anything outside <strong>1 hour to 1 week</strong> and defaults to 24 hours —
+          long enough that one lucky candle is not the whole story.</p>
+
+        <fieldset class="ar-durwrap">
+          <legend>Window length</legend>
+          <div class="ar-dur">
+            <input class="ar-durin ar-vis" type="radio" name="pt-dur" id="dur-1" value="1">
+            <label class="ar-durbox" for="dur-1"><b>1h</b><span>a sprint</span></label>
+
+            <input class="ar-durin ar-vis" type="radio" name="pt-dur" id="dur-6" value="6">
+            <label class="ar-durbox" for="dur-6"><b>6h</b><span>an evening</span></label>
+
+            <input class="ar-durin ar-vis" type="radio" name="pt-dur" id="dur-24" value="24" checked>
+            <label class="ar-durbox" for="dur-24"><b>24h</b><span>the default</span></label>
+
+            <input class="ar-durin ar-vis" type="radio" name="pt-dur" id="dur-72" value="72">
+            <label class="ar-durbox" for="dur-72"><b>3d</b><span>a weekend</span></label>
+
+            <input class="ar-durin ar-vis" type="radio" name="pt-dur" id="dur-168" value="168">
+            <label class="ar-durbox" for="dur-168"><b>1w</b><span>the maximum</span></label>
+          </div>
+        </fieldset>
+
+        <button class="ar-btn primary" id="create-btn" style="width:100%" disabled>
+          ⚔ &nbsp;Create challenge
+        </button>
+        <p class="ar-hint">creating does not start the clock — accepting does</p>
+
+        <div id="create-out" style="margin-top:14px" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="ar-pane" aria-labelledby="join-h">
+      <div class="ar-pane-head">
+        <span class="glyph" style="color:var(--violet)">⇥</span>
+        <h2 id="join-h">Take the seat</h2>
+      </div>
+      <div class="pad">
+        <p class="ar-note" style="margin-bottom:14px">Got a code? Taking the seat starts the window
+          immediately, for both of you.</p>
+
+        <label class="ar-hint" for="join-code" style="display:block;margin:0 0 8px">invite code</label>
+        <input class="ar-field" id="join-code" type="text" inputmode="text"
+               autocapitalize="characters" autocomplete="off" spellcheck="false"
+               placeholder="TRENCH-______" aria-describedby="join-hint">
+        <p class="ar-hint" id="join-hint">six characters after the dash · never contains O, 0, I or
+          1, so those are dropped as you type · pasting the whole invite link works too</p>
+
+        <button class="ar-btn" id="join-btn" style="width:100%;margin-top:12px" disabled>
+          Join the duel
+        </button>
+
+        <div id="join-out" style="margin-top:14px" aria-live="polite"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="ar-shell">
+
+    <div class="ar-stack">
+
+      <section class="ar-pane" aria-labelledby="mine-h">
+        <div class="ar-pane-head ar-headwrap">
+          <span class="glyph">▦</span>
+          <h2 id="mine-h">Your duels</h2>
+          <span class="spacer"></span>
+          <span class="ar-note" id="mine-count"></span>
+        </div>
+        <div id="duels" aria-live="polite"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="settle-h">
+        <div class="ar-pane-head">
+          <span class="glyph">§</span>
+          <h2 id="settle-h">How settlement works</h2>
+        </div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:16px">A duel is decided from the same evidence as
+            every other board here: your committed chain, sliced to the window. What makes a duel
+            different is <strong>when the server is allowed to look</strong> — and that one rule is
+            doing all the work.</p>
+
+          <h3 style="font-size:13.5px;font-weight:800;margin-bottom:6px">The chain already kills the obvious cheat</h3>
+          <p class="ar-note">Every paper fill is hash-committed the moment it happens, and each link
+            commits the one before it. Delete the round that went against you and every hash after
+            it stops matching. Submit a clean history instead and the server refuses it by name —
+            <strong>chain-replaced</strong> — because a submission has to extend the head you
+            already committed. There is no edit, only append.</p>
+
+          <div class="ar-chainline" style="margin:14px 0 4px" aria-label="Removing a link breaks every hash after it">
+            <span class="lnk">link n−1</span><span class="arw">→</span>
+            <span class="lnk" style="border-color:rgba(224,67,58,.45);color:#ffb3ae">✕ link n</span><span class="arw">→</span>
+            <span class="lnk" style="opacity:.5">link n+1</span><span class="arw">→</span>
+            <span class="lnk" style="opacity:.35">link n+2</span>
+            <span style="color:var(--down)">all broken</span>
+          </div>
+
+          <h3 style="font-size:13.5px;font-weight:800;margin:22px 0 6px">Which leaves exactly one vector</h3>
+          <div class="ar-fork">
+            <div class="ar-forkcol attack">
+              <h4>The attack</h4>
+              <p>Submit while you are up, then go quiet. You never deleted anything — you just
+                stopped talking, so the newest copy the server holds of your chain predates the
+                trade that ruined your afternoon.</p>
+            </div>
+            <div class="ar-forkcol answer">
+              <h4>The gate</h4>
+              <p>A duel settles <strong>only</strong> from a chain submitted after the window
+                closed. A post-close chain necessarily carries every fill made inside the window,
+                because the chain cannot skip one. There is no version of your history where the
+                bad round is not in it.</p>
+            </div>
+          </div>
+
+          <h3 style="font-size:13.5px;font-weight:800;margin:22px 0 6px">So silence is a forfeit, not a save</h3>
+          <p class="ar-note">Refusing to submit after the close does not freeze your flattering
+            snapshot — it hands the duel to the other player, and the result says
+            <strong>forfeit</strong> out loud rather than showing a bare trophy. If neither of you
+            submits, nobody wins: it is recorded as a <strong>no-contest</strong>.</p>
+
+          <h3 style="font-size:13.5px;font-weight:800;margin:22px 0 6px">And live standings decide nothing</h3>
+          <p class="ar-note" style="margin-bottom:10px">While the window runs, each side shows
+            whatever that player has submitted <em>so far</em>, stamped with when it arrived. That
+            is the fun part and it is worth watching. It is also labeled everywhere it appears, and
+            it has no bearing on the outcome:</p>
+          <span class="ar-provisional">provisional · decides nothing</span>
+
+          <p class="ar-note" style="margin-top:18px">Window math is shared with the weekly Sprint: a
+            round counts only if it <strong>opened and closed inside the window</strong>, and returns
+            are measured against your equity at the window's open — so a 10&nbsp;◎ bankroll duels a
+            1,000&nbsp;◎ bankroll on even terms. Full protocol:
+            <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">docs/LEADERBOARD.md</a></p>
+        </div>
+      </section>
+
+    </div>
+
+    <div class="ar-stack">
+
+      <section class="ar-pane" aria-labelledby="states-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--violet)">◷</span>
+          <h2 id="states-h">The five states</h2>
+        </div>
+        <div class="pad">
+          <div class="ar-legend">
+            <div><span class="ar-state open">open</span>
+              <p>Created, waiting for someone to accept. Invites lapse after 48 hours.</p></div>
+            <div><span class="ar-state active">active</span>
+              <p>Both players in, window running. Everything shown is provisional.</p></div>
+            <div><span class="ar-state awaiting">awaiting</span>
+              <p>The clock stopped. Now each player submits a record from after the close.</p></div>
+            <div><span class="ar-state settled">settled</span>
+              <p>Decided and frozen. The result and its reason never change after this.</p></div>
+            <div><span class="ar-state expired">expired</span>
+              <p>Nobody accepted inside 48 hours, so the duel never started.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="outcomes-h">
+        <div class="ar-pane-head">
+          <span class="glyph">⚖</span>
+          <h2 id="outcomes-h">Every outcome is named</h2>
+        </div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:14px">A result is never a bare trophy. The server
+            returns one of five outcomes and a sentence explaining it, and the card prints both.</p>
+          <dl class="ar-outcomes">
+            <dt><span class="ar-otag">by-return</span></dt>
+            <dd>Both players submitted after the close. The higher window return takes it.</dd>
+            <dt><span class="ar-otag">by-inaction</span></dt>
+            <dd>One side took no rounds in the window and still finished ahead. Not trading beats
+              losing money, and this product will say so.</dd>
+            <dt><span class="ar-otag">forfeit</span></dt>
+            <dd>One side never submitted a record from after the close. The player who did wins.</dd>
+            <dt><span class="ar-otag">draw</span></dt>
+            <dd>Both replays produced the same return, to the last decimal.</dd>
+            <dt><span class="ar-otag">no-contest</span></dt>
+            <dd>Neither side submitted after the close. Nothing to compare, so nobody won.</dd>
+          </dl>
+        </div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="stakes-h">
+        <div class="ar-pane-head">
+          <span class="glyph">🛡</span>
+          <h2 id="stakes-h">What's at stake: nothing</h2>
+        </div>
+        <div class="pad">
+          <p class="ar-note">No entry fee, no pot, no token, no wallet connection — a duel is two
+            people practising against the same clock and finding out who read the tape better. The
+            only thing on the line is the record, and the record is the point.</p>
+          <p class="ar-note" style="margin-top:12px">Both sides are re-priced against real market
+            history like everything else on the Arena. A record still being re-checked shows
+            <span class="ar-chip pending" style="font-size:8px"><i class="spin"></i>Verifying</span>
+            and one with gaps in the candle data shows
+            <span class="ar-chip partial" style="font-size:8px">◐ Partial data</span> — neither is
+            dressed up as verified, in a duel or anywhere else.</p>
+        </div>
+      </section>
+
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="leaderboard.html">Leaderboard</a>
+        <a href="sprint.html">Weekly Sprint</a>
+        <a href="news.html">News &amp; patch notes</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="arena.js"></script>
+<script>
+(() => {
+  'use strict';
+  const L = window.PTArena;
+  const { esc, fmt, signed, dirClass, ago, face, chipFor } = L;
+
+  const youEl = document.getElementById('you');
+  const createBtn = document.getElementById('create-btn');
+  const createOut = document.getElementById('create-out');
+  const joinInput = document.getElementById('join-code');
+  const joinBtn = document.getElementById('join-btn');
+  const joinOut = document.getElementById('join-out');
+  const duelsEl = document.getElementById('duels');
+  const countEl = document.getElementById('mine-count');
+
+  // Set once /api/me answers. Used to tag YOUR side of a card and to decide
+  // whether the "submit your final record" nudge applies to you.
+  let signedInHandle = null;
+
+  /* ------------------------------------------------------------ format -- */
+
+  /** Never returns a number for a duration the API did not really give us:
+   *  an unaccepted duel reports durationMs 0, and "0 hours" would be a lie. */
+  function humanDuration(ms) {
+    const hours = Math.round(Number(ms) / 3600000);
+    if (!Number.isFinite(hours) || hours <= 0) return '';
+    if (hours === 168) return '1 week';
+    // Phrased to match the chooser's own labels, so the invite echoes back the
+    // words the player just clicked rather than a different unit.
+    if (hours >= 48 && hours % 24 === 0) return (hours / 24) + ' days';
+    return hours + (hours === 1 ? ' hour' : ' hours');
+  }
+
+  function countdownText(msLeft) {
+    const total = Math.max(0, Math.floor(msLeft / 1000));
+    const pad = (n) => String(n).padStart(2, '0');
+    const d = Math.floor(total / 86400);
+    const h = Math.floor((total % 86400) / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (d > 0) return d + 'd ' + pad(h) + 'h ' + pad(m) + 'm';
+    if (h > 0) return h + 'h ' + pad(m) + 'm ' + pad(s) + 's';
+    return m + 'm ' + pad(s) + 's';
+  }
+
+  /* Both of these are defensive about a bad timestamp: Date#toISOString throws
+   * on an invalid date, and an exception raised inside a template literal
+   * would blank the whole panel it was building. */
+  const validTs = (ts) => Number.isFinite(Number(ts)) && Number(ts) > 0;
+  const absTime = (ts) => (validTs(ts)
+    ? new Date(Number(ts)).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    : '');
+  const isoTime = (ts) => (validTs(ts) ? new Date(Number(ts)).toISOString() : '');
+
+  /**
+   * A ticking countdown plus a static, non-ticking alternative for assistive
+   * tech. The clock lives in an aria-live region; announcing it once a second
+   * would make the region unusable, so the absolute time is what gets read.
+   * Callers that already print the absolute time pass includeAlt false rather
+   * than say it twice.
+   */
+  function clockHtml(endTs, doneLabel, includeAlt) {
+    if (!validTs(endTs)) return '';
+    const alt = includeAlt === false ? '' :
+      `<span class="ar-vis">until
+        <time datetime="${esc(isoTime(endTs))}">${esc(absTime(endTs))}</time></span>`;
+    return `<span class="ar-cd" data-until="${Number(endTs)}" data-done="${esc(doneLabel)}"
+        aria-hidden="true">…</span>${alt}`;
+  }
+
+  /* One sweep for every countdown on the page. Per-element timers would leak
+   * on each re-render of the duel list; a single sweep over the live DOM
+   * cannot, and it costs one query a second. */
+  function tick() {
+    const now = Date.now();
+    document.querySelectorAll('[data-until]').forEach((el) => {
+      const left = Number(el.dataset.until) - now;
+      if (!Number.isFinite(left) || left <= 0) {
+        el.textContent = el.dataset.done || 'closed';
+        el.classList.add('done');
+        el.classList.remove('urgent');
+        return;
+      }
+      el.textContent = countdownText(left);
+      el.classList.remove('done');
+      el.classList.toggle('urgent', left < 3600000);
+    });
+  }
+  setInterval(tick, 1000);
+
+  const msg = (cls, html) => `<div class="ar-msg ${cls}">${html}</div>`;
+
+  /* ------------------------------------------------------------ clipboard */
+
+  async function copyText(text, button, okLabel) {
+    if (!button.dataset.label) button.dataset.label = button.textContent.trim();
+    try {
+      if (!navigator.clipboard) throw new Error('no clipboard');
+      await navigator.clipboard.writeText(text);
+      button.textContent = okLabel || '✓ Copied';
+    } catch {
+      // Clipboard access is denied on insecure origins and in some embedded
+      // views. Say so instead of pretending it worked.
+      button.textContent = '✕ Blocked — select it and copy';
+    }
+    setTimeout(() => { button.textContent = button.dataset.label; }, 2600);
+  }
+
+  /* ------------------------------------------------------- sign-in gate -- */
+
+  function signInButton(id) {
+    return `<button class="ar-btn primary" id="${id}">𝕏 &nbsp;Sign in with X</button>`;
+  }
+  function wireSignIn(id) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', L.signIn);
+  }
+
+  function setGate(enabled) {
+    createBtn.disabled = !enabled;
+    // Join stays gated on a complete code as well as on the session.
+    joinBtn.disabled = !enabled || codeBody(joinInput.value).length !== 6;
+  }
+
+  (async () => {
+    const session = await L.me();
+
+    if (session.unreachable) {
+      youEl.innerHTML = `<p class="ar-note">The Arena server is unreachable right now, so
+        creating and joining are switched off and nothing below is shown. Nothing here is cached:
+        a duel card with a stale clock in it would be worse than no card.</p>`;
+      setGate(false);
+      return;
+    }
+
+    if (!session.signedIn) {
+      youEl.innerHTML = `
+        <p class="ar-note" style="margin-bottom:12px">A duel is between two <strong>accounts</strong>,
+          not two browsers — that is what stops one person quietly filling both seats. Sign in with X
+          to create or accept one. There is no password, nothing to install for this part, and
+          nothing to pay.</p>
+        ${signInButton('you-signin')}`;
+      wireSignIn('you-signin');
+      setGate(false);
+      return;
+    }
+
+    signedInHandle = session.handle;
+    youEl.innerHTML = `
+      <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
+        ${face(session, 'ar-face')}
+        <div style="min-width:0">
+          <div style="font-weight:800">@${esc(session.handle)}</div>
+          <a class="ar-note" style="color:var(--orange2)"
+             href="profile.html?handle=${encodeURIComponent(session.handle)}">View public profile →</a>
+        </div>
+      </div>
+      <p class="ar-note" style="margin-top:12px">Your duel slices are recomputed from your chain
+        every time you submit on the <a href="leaderboard.html">leaderboard page</a> — there is no
+        separate duel record to keep up to date, and no second book to game.
+        <a href="#" id="you-signout" style="color:var(--dim)">sign out</a></p>`;
+    document.getElementById('you-signout').addEventListener('click', (event) => {
+      event.preventDefault();
+      L.logout();
+    });
+    setGate(true);
+  })();
+
+  /* ------------------------------------------------------------- create -- */
+
+  const CREATE_REASONS = {
+    'not-signed-in': 'Sign in with X first — a duel needs an account on both sides.',
+    'rate-limited': 'Ten duels an hour, and you have used them. The limit exists so nobody can paper the site in invites.',
+    'server-error': 'The server errored on that one. Nothing was created.',
+  };
+
+  createBtn.addEventListener('click', async () => {
+    const picked = document.querySelector('input[name="pt-dur"]:checked');
+    const hours = picked ? Number(picked.value) : 24;
+
+    createBtn.disabled = true;
+    createOut.innerHTML = msg('', 'Opening a challenge…');
+
+    let result;
+    try {
+      result = await L.api('/api/duel/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationHours: hours }),
+      });
+    } catch {
+      createBtn.disabled = false;
+      createOut.innerHTML = msg('bad', 'The Arena server is unreachable. <b>Nothing was created</b> — try again once it answers.');
+      return;
+    }
+
+    createBtn.disabled = false;
+    const body = result.body || {};
+    if (!body.ok || !body.code) {
+      const reason = body.reason || 'server-error';
+      const text = CREATE_REASONS[reason] || ('The server refused: <b>' + esc(reason) + '</b>');
+      createOut.innerHTML = msg('bad', text);
+      if (reason === 'not-signed-in') {
+        createOut.querySelector('.ar-msg').insertAdjacentHTML('beforeend', signInButton('create-signin'));
+        wireSignIn('create-signin');
+      }
+      return;
+    }
+
+    showInvite(body);
+    loadDuels();
+  });
+
+  function showInvite(body) {
+    const code = String(body.code);
+    // The server builds the canonical link from its own SITE_ORIGIN; fall back
+    // to this page's origin only if it did not send one.
+    const url = body.url || new URL('duel.html?code=' + encodeURIComponent(code), location.href).href;
+    const duration = humanDuration(body.durationMs);
+    const gauntlet = code + (duration ? ' · ' + duration : '') +
+      ' · paper only, same clock, no money. Accept: ' + url;
+    const expires = Number(body.expiresAt);
+    const hasExpiry = Number.isFinite(expires) && expires > 0;
+
+    createOut.innerHTML = `
+      <div class="ar-invite">
+        <div class="k">Your challenge is open</div>
+        <div class="code">${esc(code)}</div>
+        <p class="ar-note">${duration ? `A <b style="color:var(--text)">${esc(duration)}</b> window,
+          starting the moment they accept — not now.` : ''}
+          ${hasExpiry ? `The invite itself expires
+          <time datetime="${esc(isoTime(expires))}">${esc(absTime(expires))}</time>
+          (${clockHtml(expires, 'expired', false)} left).` : ''}</p>
+
+        <div class="ar-copy">
+          <input class="ar-field link" id="invite-url" readonly value="${esc(url)}" aria-label="Invite link">
+          <button class="ar-btn primary" id="copy-url">Copy link</button>
+        </div>
+        <div class="ar-acts">
+          <button class="ar-btn" id="copy-gauntlet">Copy the whole gauntlet</button>
+          <a class="ar-btn" href="duel.html?code=${encodeURIComponent(code)}">Open duel →</a>
+        </div>
+      </div>`;
+    tick();
+
+    const urlField = document.getElementById('invite-url');
+    urlField.addEventListener('focus', () => urlField.select());
+    document.getElementById('copy-url').addEventListener('click', (event) => {
+      urlField.select();
+      copyText(url, event.currentTarget, '✓ Link copied');
+    });
+    document.getElementById('copy-gauntlet').addEventListener('click', (event) => {
+      copyText(gauntlet, event.currentTarget, '✓ Copied — go taunt someone');
+    });
+  }
+
+  /* --------------------------------------------------------------- join -- */
+
+  // Codes are generated from an unambiguous alphabet on the server: no O, 0,
+  // I or 1, because they get read aloud on streams and retyped from
+  // screenshots. Anything outside it cannot be part of a real code.
+  const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+  /** The six characters after the dash, from a code, a messy retype, or a
+   *  pasted invite link — people hand over the URL as often as the code. */
+  function codeBody(raw) {
+    // Trim first: codes arrive pasted out of chat with leading whitespace, and
+    // the prefix strip below is anchored — without the trim, " TRENCH ABC123"
+    // keeps its prefix, the filter eats the space, and the first six legal
+    // characters are the word TRENCH itself.
+    let text = String(raw || '').trim().toUpperCase();
+    const fromLink = text.match(/CODE=([A-Z0-9-]+)/);
+    if (fromLink) text = fromLink[1];
+    // Every letter of TRENCH is itself a legal code character, so the prefix
+    // has to come off before filtering — anchored and once only, in case the
+    // body genuinely starts with those letters.
+    text = text.replace(/^TRENCH[\s-]*/, '');
+    let out = '';
+    for (const ch of text) if (CODE_ALPHABET.indexOf(ch) !== -1) out += ch;
+    return out.slice(0, 6);
+  }
+
+  function syncCodeField() {
+    const bodyChars = codeBody(joinInput.value);
+    const next = joinInput.value.trim() === '' ? '' : 'TRENCH-' + bodyChars;
+    if (joinInput.value !== next) {
+      joinInput.value = next;
+      // Rewriting the value drops the caret to position 0 in some engines;
+      // typing only ever appends here, so pin it to the end.
+      const end = joinInput.value.length;
+      try { joinInput.setSelectionRange(end, end); } catch { /* not a text input mode */ }
+    }
+    joinInput.classList.toggle('ready', bodyChars.length === 6);
+    joinBtn.disabled = createBtn.disabled || bodyChars.length !== 6;
+  }
+
+  joinInput.addEventListener('input', syncCodeField);
+  joinInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !joinBtn.disabled) joinBtn.click();
+  });
+
+  const JOIN_REASONS = {
+    'cannot-duel-yourself': 'That is your own invite. Send the link to someone else — a duel needs two accounts.',
+    'already-accepted': 'Someone already took that seat. A duel is strictly two players, first come.',
+    'invite-expired': 'That invite lapsed. Invites stay open 48 hours; ask for a fresh code.',
+    'not-found': 'No duel with that code. Check for a typo — real codes never contain O, 0, I or 1.',
+    'not-signed-in': 'Sign in with X first — a duel is between two accounts, not two browsers.',
+    'rate-limited': 'Too many attempts this hour. Wait it out and try again.',
+    'server-error': 'The server errored on that one. <b>You were not entered</b> into anything.',
+  };
+
+  joinBtn.addEventListener('click', async () => {
+    const code = 'TRENCH-' + codeBody(joinInput.value);
+    joinBtn.disabled = true;
+    joinOut.innerHTML = msg('', 'Taking the seat…');
+
+    let result;
+    try {
+      result = await L.api('/api/duel/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+    } catch {
+      syncCodeField();
+      joinOut.innerHTML = msg('bad', 'The Arena server is unreachable. <b>You did not join anything</b> — try again once it answers.');
+      return;
+    }
+
+    syncCodeField();
+    const body = result.body || {};
+    if (!body.ok) {
+      const reason = body.reason || 'server-error';
+      const text = JOIN_REASONS[reason] || ('The server refused: <b>' + esc(reason) + '</b>');
+      joinOut.innerHTML = msg('bad', text);
+      if (reason === 'not-signed-in') {
+        joinOut.querySelector('.ar-msg').insertAdjacentHTML('beforeend', signInButton('join-signin'));
+        wireSignIn('join-signin');
+      }
+      return;
+    }
+
+    const w = body.window || {};
+    const hasWindow = Number(w.endTs) > 0;
+    joinOut.innerHTML = msg('good', `<b>You're in.</b> The clock is running on
+      ${esc(body.code || code)}.
+      ${hasWindow ? `It stops
+        <time datetime="${esc(isoTime(w.endTs))}">${esc(absTime(w.endTs))}</time> —
+        ${clockHtml(w.endTs, 'window closed', false)} left.` : ''}
+      Nothing is decided until you both submit a record after that.
+      <a class="ar-btn" href="duel.html?code=${encodeURIComponent(body.code || code)}">Open duel →</a>`);
+    tick();
+    joinInput.value = '';
+    syncCodeField();
+    loadDuels();
+  });
+
+  // Someone who lands on the lobby with ?code= — a mistyped or shortened
+  // invite link — should not have to retype what they already pasted.
+  const incoming = codeBody(new URLSearchParams(location.search).get('code') || '');
+  if (incoming.length === 6) {
+    joinInput.value = 'TRENCH-' + incoming;
+    syncCodeField();
+    joinInput.focus();
+  } else {
+    syncCodeField();
+  }
+
+  /* ---------------------------------------------------------- the cards -- */
+
+  const STATE_TITLE = {
+    open: 'Created — waiting for someone to accept',
+    active: 'Both players in, window running',
+    awaiting: 'Window closed — final records still needed',
+    settled: 'Decided and frozen',
+    expired: 'Nobody accepted within 48 hours',
+  };
+
+  function stateChip(status) {
+    const known = Object.prototype.hasOwnProperty.call(STATE_TITLE, status);
+    // An unrecognised state is printed as-is in neutral colours rather than
+    // being coerced into one this page happens to know.
+    return `<span class="ar-state ${known ? esc(status) : 'unknown'}"
+      title="${esc(known ? STATE_TITLE[status] : 'Unrecognised state')}">${esc(status || '—')}</span>`;
+  }
+
+  const isMe = (handle) => Boolean(signedInHandle) && Boolean(handle) &&
+    String(handle).toLowerCase() === String(signedInHandle).toLowerCase();
+
+  function miniSide(side, view) {
+    if (!side) {
+      return `<div class="ar-mini-side seat">
+        <span class="top">
+          <span class="ar-face" aria-hidden="true">?</span>
+          <span class="nm" style="color:var(--dim)">Seat open</span>
+        </span>
+        <div class="roi none">no opponent yet</div>
+        <div class="sub">the code is still worth sending</div>
+      </div>`;
+    }
+
+    const entry = side.entry;
+    const leading = Boolean(view.leading) && view.leading === side.handle;
+    const won = Boolean(view.result) && Boolean(view.result.winner) &&
+      view.result.winner === side.handle;
+
+    const classes = ['ar-mini-side'];
+    if (leading) classes.push('leading');
+    if (won) classes.push('won');
+
+    // The verification chip is only shown when there is actually a slice to
+    // verify. Every player carries a record status (it defaults to 'pending'
+    // server-side even for someone who has never submitted), so rendering it
+    // next to "no record for this window" would attach a verification state to
+    // a thing that does not exist.
+    const chips = [];
+    if (side.status && entry) chips.push(chipFor(side.status));
+    if (leading) chips.push('<span class="ar-provisional">leading · provisional</span>');
+    if (won) chips.push('<span class="ar-wontag">winner</span>');
+
+    let roi = '<div class="roi none">no record for this window</div>';
+    let sub = '<div class="sub">nothing has been submitted that covers these minutes</div>';
+    let stamp = '';
+    if (entry && Number.isFinite(Number(entry.roiPct))) {
+      roi = `<div class="roi ${dirClass(entry.roiPct)}">${esc(signed(entry.roiPct, 1, '%'))}</div>`;
+      sub = `<div class="sub">${esc(fmt(entry.rounds, 0))} rds · ${esc(fmt(entry.wins, 0))}W
+        ${esc(fmt(entry.losses, 0))}L · ${esc(signed(entry.pnlSol, 2))} ◎</div>`;
+      stamp = side.final
+        ? '<div class="stamp">final · submitted after the close</div>'
+        : (side.submittedAt
+          ? `<div class="stamp">as of their submit ${esc(ago(side.submittedAt))}</div>`
+          : '');
+    }
+
+    return `<div class="${classes.join(' ')}">
+      <span class="top">
+        ${face(side, 'ar-face')}
+        <span class="nm" title="@${esc(side.handle)}">@${esc(side.handle)}</span>
+        ${isMe(side.handle) ? '<span class="ar-you-tag">YOU</span>' : ''}
+      </span>
+      ${roi}
+      ${sub}
+      ${stamp}
+      ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
+    </div>`;
+  }
+
+  /**
+   * The tug bar is a shape, not a statistic. It is squashed through tanh over a
+   * 20-point spread and clamped, so a runaway lead never erases the other side
+   * and nobody can read a ratio off it — the two real returns sit right above.
+   */
+  function tugHtml(a, b) {
+    if (!a || !b || !a.entry || !b.entry) return '';
+    const diff = Number(a.entry.roiPct) - Number(b.entry.roiPct);
+    if (!Number.isFinite(diff)) return '';
+    const share = Math.min(0.86, Math.max(0.14, 0.5 + 0.5 * Math.tanh(diff / 20)));
+    return `<div class="ar-tug" role="img"
+      aria-label="Relative lead between the two returns shown above">
+      <i class="a" style="flex-basis:${(share * 100).toFixed(1)}%"></i>
+      <i class="b" style="flex-basis:${((1 - share) * 100).toFixed(1)}%"></i>
+    </div>`;
+  }
+
+  function footHtml(view) {
+    const status = view.status;
+    const result = view.result;
+
+    if (result && result.decided) {
+      const outcome = result.outcome ? `<span class="ar-otag">${esc(result.outcome)}</span>` : '';
+      const line = result.reason
+        ? esc(result.reason)
+        : (result.winner ? esc(result.winner) + ' took it.' : 'No winner.');
+      return `<div class="ar-duelcard-foot">${outcome}<span class="why">${line}</span></div>`;
+    }
+    if (status === 'awaiting') {
+      const mine = [view.challenger, view.opponent].find((s) => s && isMe(s.handle));
+      const nudge = mine && !mine.final
+        ? ` <a href="leaderboard.html">Submit your record →</a>`
+        : '';
+      const text = view.awaiting
+        ? esc(view.awaiting)
+        : 'The window is closed. A record submitted after the close is the only thing that can settle it.';
+      return `<div class="ar-duelcard-foot"><span class="ar-otag">awaiting</span>
+        <span class="why">${text}${nudge}</span></div>`;
+    }
+    if (status === 'active') {
+      return `<div class="ar-duelcard-foot"><span class="ar-provisional">provisional</span>
+        <span class="why">Live standings. Nothing here decides the duel — the result comes only
+        from records submitted after the window closes.</span></div>`;
+    }
+    if (status === 'open') {
+      return `<div class="ar-duelcard-foot"><span class="why">Waiting for someone to take the seat.
+        The window has not started, and the invite lapses 48 hours after you made it.</span></div>`;
+    }
+    if (status === 'expired') {
+      return `<div class="ar-duelcard-foot"><span class="why">Nobody accepted inside 48 hours, so
+        this one never started. Create a fresh challenge above.</span></div>`;
+    }
+    return '';
+  }
+
+  function duelCard(view, index) {
+    const code = String(view.code || '');
+    const status = String(view.status || '');
+    const href = 'duel.html?code=' + encodeURIComponent(code);
+    const absolute = new URL(href, location.href).href;
+    const w = view.window || {};
+    const duration = humanDuration(view.durationMs);
+    const running = status === 'active' && Number(w.endTs) > 0;
+
+    const acts = [`<a class="ar-btn" href="${esc(href)}">Open duel →</a>`];
+    if (status === 'open') {
+      acts.push(`<button class="ar-btn" data-copy="${esc(absolute)}">Copy invite link</button>`);
+    }
+
+    return `<article class="ar-duelcard ${status === 'active' ? 'is-active' : ''}"
+      style="animation-delay:${Math.min((Number(index) || 0) * 40, 320)}ms">
+      <div class="ar-duelcard-head">
+        <h3 class="code">${esc(code)}</h3>
+        ${stateChip(status)}
+        <span class="spacer"></span>
+        ${duration ? `<span class="meta">${esc(duration)} window</span>` : ''}
+        ${running ? `<span class="meta">ends in ${clockHtml(w.endTs, 'window closed')}</span>` : ''}
+      </div>
+      <div class="ar-duelcard-body">
+        ${miniSide(view.challenger, view)}
+        <span class="ar-vs" aria-hidden="true">VS</span>
+        ${miniSide(view.opponent, view)}
+      </div>
+      ${tugHtml(view.challenger, view.opponent)}
+      ${footHtml(view)}
+      <div class="ar-duelcard-acts">${acts.join('')}</div>
+    </article>`;
+  }
+
+  /* ------------------------------------------------------------ my duels */
+
+  // Anything running comes first; a settled duel from last week can wait.
+  const SORT_RANK = { active: 0, awaiting: 1, open: 2, settled: 3, expired: 4 };
+
+  async function loadDuels() {
+    duelsEl.innerHTML = L.skeleton(3);
+    countEl.textContent = '';
+
+    let result;
+    try {
+      result = await L.api('/api/duel/mine');
+    } catch {
+      duelsEl.innerHTML = L.errorState('The Arena server is unreachable, so your duels are not ' +
+        'shown. Nothing here is cached — a duel card with a stale clock in it would be lying about ' +
+        'the one thing that matters.');
+      return;
+    }
+
+    if (result.status === 401) {
+      // Signed out is not an error state. It is a door.
+      duelsEl.innerHTML = L.empty('🔒', 'Sign in to see your duels.',
+        'A duel is between two accounts, not two browsers — that is what stops one person quietly ' +
+        'filling both seats. Signing in with X is the whole ceremony.<br><br>' +
+        signInButton('duels-signin'));
+      wireSignIn('duels-signin');
+      return;
+    }
+
+    const list = result.body && Array.isArray(result.body.duels) ? result.body.duels : null;
+    if (!list) {
+      duelsEl.innerHTML = L.errorState('The server answered with something this page cannot read, ' +
+        'so nothing is shown rather than a guess at what it meant.');
+      return;
+    }
+
+    if (!list.length) {
+      duelsEl.innerHTML = L.empty('⚔', 'No duels yet. That is a choice, not a rank.',
+        'Pick a window above, then hand the code to someone who talks a big trench. The clock ' +
+        'starts the second they accept, and this list only ever shows duels you are actually in — ' +
+        'there are no sample opponents to warm you up.');
+      return;
+    }
+
+    const sorted = list.slice().sort((a, b) => {
+      const rankA = SORT_RANK[a.status] === undefined ? 9 : SORT_RANK[a.status];
+      const rankB = SORT_RANK[b.status] === undefined ? 9 : SORT_RANK[b.status];
+      if (rankA !== rankB) return rankA - rankB;
+      return (Number(b.window && b.window.endTs) || 0) - (Number(a.window && a.window.endTs) || 0);
+    });
+
+    duelsEl.innerHTML = '<div class="ar-duellist">' +
+      sorted.map((view, index) => duelCard(view, index)).join('') +
+      '</div>';
+    tick();
+
+    const running = list.filter((d) => d.status === 'active').length;
+    const settled = list.filter((d) => d.status === 'settled').length;
+    countEl.textContent = list.length + ' shown · ' + running + ' running · ' + settled + ' settled';
+  }
+
+  duelsEl.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-copy]');
+    if (button) copyText(button.dataset.copy, button, '✓ Link copied');
+  });
+
+  loadDuels();
+})();
+</script>
+</body>
+</html>

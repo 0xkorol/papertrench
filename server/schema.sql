@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS records (
   status TEXT NOT NULL,               -- pending | verified | partial | rejected
   claim_mismatch INTEGER NOT NULL DEFAULT 0,
   stats_json TEXT NOT NULL,           -- ranking.recordStats output
+  badges_json TEXT,                   -- achievements.awarded output, recomputed
+                                      -- at submit and again after re-pricing
   pricing_json TEXT,                  -- pricing.recordVerdict output once done
   pricing_progress_json TEXT,         -- resumable priceRecord cursor state
   submitted_at INTEGER NOT NULL,
@@ -77,6 +79,36 @@ CREATE TABLE IF NOT EXISTS pools (
   mint TEXT PRIMARY KEY,
   pool_id TEXT,
   fetched_at INTEGER NOT NULL
+);
+
+-- Head-to-head duels. The window opens when the invite is accepted, so both
+-- players face the same clock from the same instant.
+CREATE TABLE IF NOT EXISTS duels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  challenger_id INTEGER NOT NULL REFERENCES users(id),
+  opponent_id INTEGER REFERENCES users(id),
+  duration_ms INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  accepted_at INTEGER,
+  start_ts INTEGER,
+  end_ts INTEGER,
+  settled_at INTEGER,
+  winner_handle TEXT,
+  result_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_duels_challenger ON duels(challenger_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_duels_opponent ON duels(opponent_id, created_at);
+
+-- Each side's window slice, recomputed whenever that player submits. Storing
+-- it keeps a duel view from re-walking two lifetime chains per page load;
+-- submitted_at is what decides whether the entry may settle the duel.
+CREATE TABLE IF NOT EXISTS duel_entries (
+  duel_id INTEGER NOT NULL REFERENCES duels(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  entry_json TEXT NOT NULL,
+  submitted_at INTEGER NOT NULL,
+  PRIMARY KEY (duel_id, user_id)
 );
 
 -- Fixed-window rate limiting (per user and per IP).

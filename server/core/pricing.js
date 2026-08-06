@@ -78,9 +78,23 @@ async function priceChain(links, getCandles, opts) {
     if (!cache.has(key)) {
       if (lookups >= maxLookups) { cursor = i; paused = true; break; }
       lookups++;
-      let candles = null;
-      try { candles = await getCandles(String(link.mint), minuteOf(Number(link.ts) || 0)); }
-      catch (err) { candles = null; }
+      let candles;
+      try {
+        candles = await getCandles(String(link.mint), minuteOf(Number(link.ts) || 0));
+      } catch (err) {
+        // Failing to ASK is not evidence of absence. A thrown lookup means
+        // exhausted budget, an upstream rate limit, or a network fault — none
+        // of which tell us anything about whether the token traded. Recording
+        // 'no-data' here would silently convert an infrastructure problem into
+        // a permanent claim about the market, and would skip the re-pricing
+        // gate that is the only real defence against fabricated fills. Pause
+        // instead and resume from this exact index next run.
+        cursor = i;
+        paused = true;
+        break;
+      }
+      // A null RESULT is different: the source answered, and there is no
+      // public candle for that mint-minute. That genuinely is 'no-data'.
       cache.set(key, candles);
     }
     verdicts.push({ index: i, id: link.id, verdict: judgeFill(link, cache.get(key), tolerance) });

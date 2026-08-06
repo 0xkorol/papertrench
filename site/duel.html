@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Duel</title>
+<meta name="description" content="One duel, one shared window, two hash-chained records. A duel settles only from a chain submitted after the window closed — live standings are provisional and decide nothing.">
+<!-- Static og values must be true for EVERY duel, because most unfurlers never
+     run the script that swaps in the two handles. -->
+<meta property="og:title" content="PaperTrench — Duel">
+<meta property="og:description" content="Head to head on one shared window. Both records replayed and re-priced server-side; live standings are provisional and never decide the result.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="arena.css">
+<style>
+/* duel.html — page-local extensions to the Arena system.
+ *
+ * Everything here is either a shape the shared system does not have (the empty
+ * seat, the verdict banner, the tale of the tape) or a marker that must NOT be
+ * confusable with one it does. The FINAL stamp is violet on purpose: green
+ * belongs to verification alone, and "submitted after the close" is a claim
+ * about timing, not about truth. A record can be final and still unverified.
+ */
+
+/* The pane bodies on this page are rendered into a container inside the pane,
+   so arena.css's `.ar-pane > .pad` cannot reach a `.pad` that arrives with the
+   markup. Same padding, one level deeper — nothing else here matches. */
+.ar-pane > div > .pad { padding: 20px 22px; }
+
+/* ---------------------------------------------------- the empty seat ---- */
+/* Dashed and hollow reads as a challenge. A filled placeholder would read as
+   an opponent, and there isn't one. */
+.ar-slot .face {
+  border-style: dashed;
+  border-color: rgba(255, 157, 69, 0.5);
+  background: transparent;
+  color: var(--orange2);
+  font-size: 24px;
+}
+.ar-slot .who { color: var(--muted); }
+.ar-slot .meta { max-width: 36ch; margin: 8px auto 0; line-height: 1.6; }
+.ar-slot .ar-btn { margin-top: 15px; }
+.ar-slot.lapsed .face { border-color: var(--line2); color: var(--dim); }
+
+/* Corner label above each fighter — the fight-card idiom, and it also names
+   which colour of the tug bar belongs to whom. */
+.ar-corner {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 10px;
+}
+.ar-duel-side a.who { transition: color var(--t-fast) linear; }
+.ar-duel-side a.who:hover { color: var(--orange2); }
+.ar-duel-side .meta b { color: var(--muted); font-weight: 700; }
+
+/* ------------------------------------------------------- tug legend ----- */
+.ar-tugkey {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin: 0 22px 18px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.7px;
+  color: var(--dim);
+}
+.ar-tugkey span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.ar-tugkey i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.ar-tugkey i.a { background: var(--grad-heat); }
+.ar-tugkey i.b { background: linear-gradient(100deg, var(--blue), #4b7fd1); }
+
+/* The card's own clock, centred under the fighters. Scoped to a wrapper so the
+   shared .ar-clock keeps its default alignment everywhere else. */
+.ar-cardclock {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0 22px 24px;
+}
+.ar-cardclock .ar-note { flex-basis: 100%; text-align: center; }
+
+/* --------------------------------------------------------- FINAL stamp -- */
+.ar-final {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--violet);
+  border: 1px solid rgba(167, 139, 250, 0.5);
+  background: rgba(167, 139, 250, 0.08);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+/* ------------------------------------------------------------ verdict --- */
+/* Every outcome type looks different, because "won on return" and "won because
+   the other side never filed" are not the same sentence and must not share a
+   badge. */
+.ar-verdict {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin: 22px 22px 4px;
+  padding: 18px 20px;
+  border: var(--edge);
+  border-left: 3px solid var(--line2);
+  border-radius: 14px;
+  background: var(--pane-lo);
+  animation: ar-rise var(--t-slow) var(--e-out) both;
+}
+.ar-verdict .vmark { font-size: 26px; line-height: 1.1; flex: none; }
+.ar-verdict .vkind {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ar-verdict .vwhy {
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  margin-top: 7px;
+}
+.ar-verdict .ar-note { margin-top: 9px; }
+.ar-verdict.by-return { border-left-color: var(--green); }
+.ar-verdict.by-return .vkind { color: var(--green); }
+.ar-verdict.forfeit { border-left-color: var(--orange); }
+.ar-verdict.forfeit .vkind { color: var(--orange2); }
+.ar-verdict.draw { border-left-color: var(--silver); }
+.ar-verdict.draw .vkind { color: var(--silver); }
+.ar-verdict.no-contest { border-left-color: var(--down); }
+.ar-verdict.no-contest .vkind { color: var(--down); }
+.ar-verdict.by-inaction {
+  border-left-color: var(--violet);
+  background: linear-gradient(100deg, rgba(167, 139, 250, 0.08), rgba(255, 255, 255, 0.012));
+}
+.ar-verdict.by-inaction .vkind { color: var(--violet); }
+
+/* The by-inaction lesson gets its own block: it is the one result in this
+   product that teaches more than a win does. */
+.ar-lesson {
+  margin: 12px 22px 22px;
+  padding: 14px 16px;
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  border-radius: 12px;
+  background: rgba(167, 139, 250, 0.05);
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.ar-lesson b { color: var(--text); font-weight: 750; }
+
+/* -------------------------------------------------- tale of the tape ---- */
+.ar-tape { width: 100%; border-collapse: collapse; }
+.ar-tape th, .ar-tape td { padding: 11px 8px; text-align: center; vertical-align: middle; }
+.ar-tape thead th {
+  border-bottom: var(--edge);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  width: 37%;
+}
+.ar-tape thead th .sub { display: block; margin-top: 6px; font-weight: 400; }
+.ar-tape thead .ar-tape-line {
+  width: 26%;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.ar-tape tbody th {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.ar-tape tbody td {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.ar-tape tbody tr + tr th, .ar-tape tbody tr + tr td { border-top: var(--rail); }
+/* Brighter = better on that line. Deliberately weight-and-colour only: an
+   arrow or a tick would read as a verdict, and a line is not a verdict. */
+.ar-tape tbody td.win { color: var(--text); font-weight: 800; }
+.ar-tape tbody td.up { color: var(--up); }
+.ar-tape tbody td.down { color: var(--down); }
+.ar-tape td.none {
+  font-family: var(--font);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--dim);
+  padding: 14px 12px;
+}
+
+/* --------------------------------------------------------- phase rail --- */
+.ar-phases { list-style: none; margin: 0; padding: 6px 0 10px; }
+.ar-phase {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  padding: 7px 16px;
+}
+.ar-phase i {
+  display: block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  border: 2px solid var(--line2);
+  background: transparent;
+}
+.ar-phase b { display: block; font-size: 12.5px; font-weight: 800; color: var(--dim); }
+.ar-phase span { display: block; font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+.ar-phase.done b { color: var(--muted); }
+.ar-phase.done i { background: var(--line2); }
+.ar-phase.on b { color: var(--text); }
+.ar-phase.on span { color: var(--muted); }
+.ar-phase.on i {
+  border-color: var(--orange);
+  background: var(--orange);
+  box-shadow: 0 0 0 4px rgba(255, 157, 69, 0.14);
+}
+.ar-phase.lapsed.on i { border-color: var(--down); background: var(--down); box-shadow: 0 0 0 4px rgba(224, 67, 58, 0.14); }
+
+/* ------------------------------------------------------------- share ---- */
+.ar-codeblock {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 2.5px;
+  color: var(--text);
+  word-break: break-all;
+}
+.ar-urlbox {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.28);
+  border: var(--edge);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.ar-urlbox:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+
+/* Two "what each player owes" cards for the awaiting state. */
+.ar-todo { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 14px; }
+.ar-todo-card { border: var(--edge); border-radius: 12px; background: var(--pane-lo); padding: 13px 14px; }
+.ar-todo-who { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-weight: 800; font-size: 13.5px; }
+.ar-todo-state { font-family: var(--mono); font-size: 11px; color: var(--orange2); margin-top: 8px; letter-spacing: 0.5px; }
+.ar-todo-state.ok { color: var(--violet); }
+.ar-todo-card .ar-note { margin-top: 4px; }
+
+.ar-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* --------------------------------------------------------- responsive --- */
+@media (max-width: 900px) {
+  /* The duel collapses to one column here (arena.css), so the tug bar reads
+     top-to-bottom instead of left-to-right — the legend carries the mapping. */
+  .ar-tugkey { justify-content: flex-start; }
+}
+@media (max-width: 720px) {
+  .ar-verdict, .ar-lesson { margin-left: 16px; margin-right: 16px; }
+  .ar-cardclock { padding-left: 16px; padding-right: 16px; }
+  .ar-tape th, .ar-tape td { padding: 10px 5px; }
+  .ar-tape tbody td { font-size: 12.5px; }
+  .ar-tape thead th { font-size: 13px; }
+  .ar-tape tbody th { font-size: 9px; letter-spacing: 0.8px; }
+}
+@media (max-width: 400px) {
+  .ar-verdict { flex-direction: column; gap: 10px; }
+  .ar-tape tbody td { font-size: 11.5px; }
+  .ar-codeblock { font-size: 15px; letter-spacing: 1.6px; }
+}
+
+/* ---------------------------------------------------- reduced motion ---- */
+/* The verdict is the only thing on this page that moves, and it must be fully
+   legible without the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .ar-verdict { animation: none; }
+}
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="sprint.html">Sprint</a>
+      <a href="duels.html" aria-current="page">Duels</a>
+      <a href="news.html">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="ar-hero">
+  <div class="wrap">
+    <div class="ar-hero-grid">
+      <div>
+        <span class="ar-eyebrow" id="eyebrow"><span class="dot"></span><span id="eyebrow-text">Loading this duel…</span></span>
+        <h1 class="ar-title" id="hero-title"><span class="line">Two records.</span><span class="line accent">One window.</span></h1>
+        <p class="ar-lede" id="hero-lede">A duel is the same committed chain both players already keep, sliced to one
+          shared window. It settles <strong>only from a chain submitted after that window closed</strong> — so nobody
+          can bank a good afternoon and go quiet when the trade turns.</p>
+
+        <div class="ar-spec" role="list" aria-label="Duel parameters" id="spec">
+          <div role="listitem"><div class="k">Code</div><div class="v" id="spec-code">—</div></div>
+          <div role="listitem"><div class="k">State</div><div class="v" id="spec-state">—</div></div>
+          <div role="listitem"><div class="k">Window</div><div class="v" id="spec-window">—</div></div>
+          <div role="listitem"><div class="k">Settles from</div><div class="v ok">Post-close chains</div></div>
+        </div>
+      </div>
+
+      <!-- The state machine, in the verifier's own console chrome. A duel has
+           five real states and which one you are in changes what every number
+           below is allowed to mean — so it belongs in the hero, not a footnote. -->
+      <aside class="ar-verifier" aria-labelledby="state-h">
+        <div class="bar">
+          <span class="bulbs"><i></i><i></i><i></i></span>
+          <span class="name" id="state-h">duel · state</span>
+          <span id="state-badge"></span>
+        </div>
+        <div class="pad" style="padding:14px 16px 4px">
+          <div class="k" style="font-family:var(--mono);font-size:9.5px;font-weight:800;letter-spacing:1.3px;color:var(--dim);text-transform:uppercase">Duel code</div>
+          <div class="ar-codeblock" id="state-code" style="margin-top:5px">—</div>
+        </div>
+        <ol class="ar-phases" id="phases"></ol>
+      </aside>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" style="padding-bottom:96px">
+  <div class="ar-shell">
+
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="card-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--orange2)">⚔</span><span id="card-h">The card</span>
+          <span class="spacer"></span>
+          <span class="ar-note" id="card-sub"></span>
+        </div>
+        <div id="card" aria-live="polite"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="tape-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--blue)">▤</span><span id="tape-h">Tale of the tape</span>
+          <span class="spacer"></span>
+          <span id="tape-stamp"></span>
+        </div>
+        <div id="tape" aria-live="polite"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="rules-h">
+        <div class="ar-pane-head"><span class="glyph">§</span><span id="rules-h">How a duel settles</span></div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:14px">Four rules. The third one is the entire design — everything else
+            follows from it.</p>
+          <ol style="list-style:none;counter-reset:p;display:grid;gap:14px">
+            <li>
+              <b style="font-size:13px">A mode is a window, not a book.</b>
+              <p class="ar-note">A duel is your existing committed chain sliced to one shared window — the same slice
+                the Sprint uses. There is no separate duel record to inflate, which is why the modes are uncheatable
+                as a set rather than one at a time.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">A round counts only if it opened and closed inside the window.</b>
+              <p class="ar-note">A bag carried in was decided before the window existed; a bag carried out has no honest
+                realized number yet. Returns are measured against equity at the window's open, so bankroll size is not
+                an advantage.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Only a post-close chain can settle it.</b>
+              <p class="ar-note">The chain is extend-only, so a losing round cannot be deleted — the hashes break, and a
+                swapped-in history is refused as <code style="font-family:var(--mono);font-size:11.5px;color:var(--orange2)">chain-replaced</code>.
+                That leaves one vector: submit while you are up, then go quiet. Settling only from chains submitted
+                after the close shuts it, because such a chain necessarily carries every fill made inside the window.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Silence is a forfeit, not a freeze.</b>
+              <p class="ar-note">A player who never submits after the close forfeits. Live standings during the window
+                are shown because they are the fun — and labeled <span class="ar-provisional" style="font-size:9px">provisional</span>
+                because they decide nothing.</p>
+            </li>
+          </ol>
+          <p class="ar-note" style="margin-top:16px">Full rule:
+            <a href="https://github.com/OnlyTerp/papertrench/blob/main/server/README.md" target="_blank" rel="noopener">server/README.md</a>
+            · <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">docs/LEADERBOARD.md</a></p>
+        </div>
+      </section>
+    </div>
+
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="seat-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--orange2)">◆</span><span id="seat-h">Your seat</span></div>
+        <div class="pad" id="seat" aria-live="polite"><p class="ar-note">Checking sign-in…</p></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="window-h">
+        <div class="ar-pane-head"><span class="glyph">◷</span><span id="window-h">The window</span></div>
+        <div class="pad" id="window"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="share-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--violet)">⇗</span><span id="share-h">Share this card</span></div>
+        <div class="pad">
+          <label class="ar-note" for="share-url" style="display:block;margin-bottom:7px">Link to this duel</label>
+          <input class="ar-urlbox" id="share-url" readonly value="">
+          <div class="ar-actions" style="margin-top:12px">
+            <button class="ar-btn" data-act="copy">Copy the link</button>
+          </div>
+          <p class="ar-note" style="margin-top:12px">Reading it out on stream? Duel codes never contain
+            <b>O</b>, <b>0</b>, <b>I</b> or <b>1</b> — if you heard one of those, it was something else.</p>
+        </div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="own-h">
+        <div class="ar-pane-head"><span class="glyph">＋</span><span id="own-h">Start your own</span></div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:12px">Duels cost nothing and risk nothing — no entry, no real money,
+            no wallet. You trade real charts on the real sites with paper size, and the server replays both chains.</p>
+          <div class="ar-actions">
+            <a class="ar-btn primary" href="duels.html">Open a duel invite</a>
+            <a class="ar-btn" href="index.html#install">Install the extension</a>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="sprint.html">Weekly Sprint</a>
+        <a href="duels.html">Duels</a>
+        <a href="news.html">News &amp; patch notes</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="arena.js"></script>
+<script>
+(() => {
+  'use strict';
+  const L = window.PTArena;
+  const { esc, fmt, signed, dirClass, ago, face, chipFor } = L;
+
+  const CODE = (new URLSearchParams(window.location.search).get('code') || '').trim();
+
+  const cardEl = document.getElementById('card');
+  const cardSubEl = document.getElementById('card-sub');
+  const tapeEl = document.getElementById('tape');
+  const tapeStampEl = document.getElementById('tape-stamp');
+  const seatEl = document.getElementById('seat');
+  const windowEl = document.getElementById('window');
+  const phasesEl = document.getElementById('phases');
+  const stateBadgeEl = document.getElementById('state-badge');
+
+  /* One interval drives the whole page: it ticks the countdown every second and
+   * refetches every thirtieth tick. Two timers would drift apart and give the
+   * clock and the standings different ideas of "now". */
+  const POLL_SECONDS = 30;
+  let timer = null;
+  let ticks = 0;
+
+  let view = null;
+  let session = null;
+  let lastSig = '';
+  let lastSeatSig = '';
+  let refreshing = false;
+  let nudgedAtClose = false;
+  let lastOkAt = 0;
+  let accepting = false;
+  let acceptMsg = '';
+
+  /* ------------------------------------------------------------ helpers -- */
+
+  const lower = (h) => String(h || '').toLowerCase();
+
+  function when(ts) {
+    const value = Number(ts);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  /** Human length of a window, or null when the server has not set one yet —
+   * an unaccepted invite has no window, and 0h is not an answer. */
+  function durationLabel(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    const minutes = Math.round(value / 60000);
+    if (minutes % 1440 === 0) { const d = minutes / 1440; return d + (d === 1 ? ' day' : ' days'); }
+    if (minutes % 60 === 0) { const h = minutes / 60; return h + (h === 1 ? ' hour' : ' hours'); }
+    return minutes + ' min';
+  }
+
+  const hasWindow = (v) => Boolean(v && v.window && Number(v.window.endTs) > 0 && Number(v.window.startTs) > 0);
+
+  /** Numbers a side is allowed to show as its own. A settled duel that a player
+   * never finalised must not display their mid-window snapshot as a result. */
+  const showsNumbers = (side, status) =>
+    Boolean(side && side.entry) && !(status === 'settled' && !side.final);
+
+  function stampFor(side, status) {
+    if (!side || !side.entry) return '';
+    if (status === 'active') return '<span class="ar-provisional">Provisional</span>';
+    if (status === 'awaiting') return '<span class="ar-provisional">Pre-close · not final</span>';
+    if (status === 'settled') {
+      return side.final
+        ? '<span class="ar-final">Final record</span>'
+        : '<span class="ar-provisional">Never finalised</span>';
+    }
+    return '';
+  }
+
+  /* --------------------------------------------------------------- hero -- */
+
+  const HERO = {
+    open: {
+      eyebrow: 'Open invite · nobody in the other corner',
+      dot: 'var(--orange2)',
+      lines: ['One record is in the ring.', 'The other seat is empty.'],
+      lede: 'Accepting starts a shared clock for both players at the same instant — that is the whole point of the ' +
+        'handshake. Until someone does, there is no window, no standings, and nothing on this page pretending there is.',
+    },
+    active: {
+      eyebrow: 'Window running · standings decide nothing yet',
+      dot: 'var(--green)',
+      lines: ['The window is open.', 'Nothing is decided.'],
+      lede: 'Both players are trading the same clock. Everything below is <strong>provisional</strong>: it is computed ' +
+        'from whatever chain each player has submitted so far, and a duel settles only from a chain submitted ' +
+        '<strong>after</strong> the window closes.',
+    },
+    awaiting: {
+      eyebrow: 'Window closed · waiting on final records',
+      dot: 'var(--orange2)',
+      lines: ['The window closed.', 'Now file the proof.'],
+      lede: 'A post-close chain necessarily carries every fill made inside the window, because the chain cannot skip ' +
+        'one — that is why it is the only thing allowed to settle a duel. Whoever does not submit forfeits.',
+    },
+    settled: {
+      eyebrow: 'Settled · decided from post-close records',
+      dot: 'var(--green)',
+      lines: ['It is settled.', 'Here is why.'],
+      lede: 'Both sides were replayed from their committed chains and re-priced against real market history. The ' +
+        'reason below is the server\'s, verbatim — this page does not editorialise a result.',
+    },
+    expired: {
+      eyebrow: 'Invite lapsed · no window ever started',
+      dot: 'var(--dim)',
+      lines: ['Nobody stepped up.', 'This invite lapsed.'],
+      lede: 'An invite nobody accepts expires on its own. No window ran, no records were compared, and nothing here ' +
+        'is being kept warm — opening a fresh invite takes one click.',
+    },
+  };
+
+  const PHASES = [
+    ['open', 'Invite open', 'Waiting for someone to take the other corner.'],
+    ['active', 'Window running', 'Both chains accrue. Standings are provisional.'],
+    ['awaiting', 'Window closed', 'Waiting on chains submitted after the close.'],
+    ['settled', 'Settled', 'Decided from post-close records, or forfeited.'],
+  ];
+
+  function paintHero(v) {
+    const hero = HERO[v.status];
+    const eyebrow = document.getElementById('eyebrow');
+    document.getElementById('eyebrow-text').textContent = hero ? hero.eyebrow : v.status;
+    const dot = eyebrow.querySelector('.dot');
+    if (dot && hero) {
+      dot.style.background = hero.dot;
+      // Only a running window gets a live pulse. A lapsed invite that blinks is
+      // a small lie told sixty times a minute.
+      dot.style.animation = v.status === 'active' ? '' : 'none';
+    }
+    if (hero) {
+      document.getElementById('hero-title').innerHTML =
+        `<span class="line">${esc(hero.lines[0])}</span><span class="line accent">${esc(hero.lines[1])}</span>`;
+      document.getElementById('hero-lede').innerHTML = hero.lede;
+    }
+
+    document.getElementById('spec-code').textContent = v.code || CODE || '—';
+    document.getElementById('state-code').textContent = v.code || CODE || '—';
+    const STATE_WORD = {
+      open: ['Open invite', ''], active: ['Live', 'ok'], awaiting: ['Awaiting finals', 'zero'],
+      settled: ['Settled', 'ok'], expired: ['Lapsed', 'zero'],
+    };
+    const word = STATE_WORD[v.status] || [v.status, ''];
+    const stateEl = document.getElementById('spec-state');
+    stateEl.className = 'v ' + word[1];
+    stateEl.textContent = word[0];
+    const length = durationLabel(v.durationMs);
+    document.getElementById('spec-window').textContent = length || 'Starts on accept';
+
+    stateBadgeEl.innerHTML = v.status === 'active'
+      ? '<span class="streaming"><span class="dot"></span>LIVE</span>'
+      : `<span class="name" style="margin-left:auto">${esc(word[0])}</span>`;
+
+    const lapsed = v.status === 'expired';
+    const index = lapsed ? 0 : PHASES.findIndex((p) => p[0] === v.status);
+    phasesEl.innerHTML = PHASES.map((p, i) => {
+      // An expired invite never entered the run — its rail stops at the first
+      // step and says so rather than greying out three states it never reached.
+      if (lapsed && i === 1) {
+        return `<li class="ar-phase lapsed on"><i></i><div>
+          <b>Invite lapsed</b><span>Nobody accepted, so no window ever started.</span></div></li>`;
+      }
+      if (lapsed && i > 1) return '';
+      const cls = lapsed ? 'done' : (i < index ? 'done' : (i === index ? 'on' : ''));
+      return `<li class="ar-phase ${cls}"><i></i><div>
+        <b>${esc(p[1])}</b><span>${esc(p[2])}</span></div></li>`;
+    }).join('');
+  }
+
+  /* --------------------------------------------------------------- card -- */
+
+  function cornerSide(side, corner, v) {
+    const status = v.status;
+    const classes = ['ar-duel-side'];
+    if (status === 'active' && v.leading && lower(v.leading) === lower(side.handle)) classes.push('leading');
+    if (status === 'settled' && v.result && v.result.winner && lower(v.result.winner) === lower(side.handle)) {
+      classes.push('won');
+    }
+
+    const show = showsNumbers(side, status);
+    const roi = show
+      ? `<div class="roi ${dirClass(side.entry.roiPct)}">${esc(signed(side.entry.roiPct, 1, '%'))}</div>`
+      : '<div class="roi" style="color:var(--dim)">—</div>';
+
+    let meta;
+    if (!side.entry) {
+      meta = 'No record submitted for this window.';
+    } else if (status === 'settled' && !side.final) {
+      meta = 'No record filed after the close, so nothing of theirs could settle this.';
+    } else {
+      const e = side.entry;
+      meta = `<b>${esc(fmt(e.rounds, 0))}</b> rounds · <b>${esc(fmt(e.wins, 0))}W ${esc(fmt(e.losses, 0))}L</b>`;
+    }
+    const received = Number(side.submittedAt) > 0
+      ? `<div class="meta" style="margin-top:2px">chain received ${esc(ago(side.submittedAt))}</div>` : '';
+
+    return `<div class="${classes.join(' ')}">
+      <div class="ar-corner">${esc(corner)}</div>
+      ${face(side, 'face')}
+      <a class="who" href="profile.html?handle=${encodeURIComponent(side.handle)}">@${esc(side.handle)}</a>
+      <div style="margin-top:9px">${chipFor(side.status)}</div>
+      ${roi}
+      <div class="meta">${meta}</div>
+      ${received}
+      <div style="margin-top:11px">${stampFor(side, status)}</div>
+    </div>`;
+  }
+
+  /** The tug bar encodes the GAP between two returns, not their magnitudes, and
+   * is clamped so neither side can disappear. It is a comparison you read at a
+   * glance; the actual numbers are one line above it and labeled provisional. */
+  function tugHtml(a, b) {
+    const x = Number(a.entry.roiPct) || 0;
+    const y = Number(b.entry.roiPct) || 0;
+    const spread = Math.abs(x) + Math.abs(y);
+    const raw = spread > 0 ? (x - y) / spread : 0;
+    const share = Math.round((0.5 + 0.4 * Math.max(-1, Math.min(1, raw))) * 100);
+    const label = `Provisional gap: @${a.handle} at ${signed(x, 1, '%')} against @${b.handle} at ${signed(y, 1, '%')}.`;
+    return `<div class="ar-tug" role="img" aria-label="${esc(label)}">
+        <i class="a" style="flex-basis:${share}%"></i><i class="b" style="flex-basis:${100 - share}%"></i>
+      </div>
+      <div class="ar-tugkey">
+        <span><i class="a"></i>@${esc(a.handle)}</span>
+        <span><i class="b"></i>@${esc(b.handle)}</span>
+        <span class="ar-provisional">Provisional</span>
+      </div>`;
+  }
+
+  function clockHtml(v) {
+    const long = Number(v.durationMs) >= 86400000;
+    const segs = (long ? ['d', 'h', 'm', 's'] : ['h', 'm', 's']).map((key) => {
+      const labels = { d: 'Days', h: 'Hours', m: 'Min', s: 'Sec' };
+      return `<div class="seg"><b data-seg="${key}">--</b><span>${labels[key]}</span></div>`;
+    }).join('');
+    return `<div class="ar-cardclock">
+      <div class="ar-clock" id="clock" role="timer" aria-label="Time left in this duel's window">${segs}</div>
+      <p class="ar-note">Time left in the window. When it hits zero, both players submit again — that submission is
+        the only one that counts.</p>
+    </div>`;
+  }
+
+  const OUTCOME = {
+    'by-return': ['🏆', 'Won on return', 'Both players filed a record after the close, and the higher window return took it.'],
+    forfeit: ['⏳', 'Won by forfeit', 'A duel settles only from a chain submitted after the window closed. One side never sent one, so there was nothing of theirs to compare. That is a forfeit by rule, not a technicality — a player who could go quiet and keep a flattering snapshot is exactly the hole this closes.'],
+    draw: ['⚖', 'Draw', 'Both players finished the window at the same return, so neither is credited with a win.'],
+    'no-contest': ['∅', 'No contest', 'Neither player submitted after the close. Nothing was compared and nobody is credited with anything — an empty result beats an invented one.'],
+    'by-inaction': ['🪑', 'Won by inaction', ''],
+  };
+
+  /* The by-inaction lesson is written from the data, not assumed: the server
+   * flags the outcome when EITHER side took no trades, so "the one who sat out
+   * won" is only sometimes the story. Both versions are worth telling. */
+  function lessonHtml(v) {
+    const sides = [v.challenger, v.opponent];
+    const idle = sides.filter((s) => s.entry && Number(s.entry.rounds) === 0);
+    if (!idle.length) return '';
+    const winner = v.result && v.result.winner;
+    const idleWon = winner && idle.some((s) => lower(s.handle) === lower(winner));
+    const body = idleWon
+      ? '<b>Sitting out is a position.</b> The winner here took no trades at all inside the window and still ' +
+        'finished ahead. Nothing forces you into the trench — the round you skip cannot stop you out, and on a bad ' +
+        'day a flat line is the best number on the board.'
+      : '<b>Sitting out is a position — and it can lose.</b> One of these players took no trades at all inside the ' +
+        'window, so a flat line is exactly what they finished with, and the other side beat it by actually trading. ' +
+        'Doing nothing is a decision with a result like any other; here it was the wrong one.';
+    return `<div class="ar-lesson">${body} It is one of the few results in this product that teaches more than a
+      win does, which is why it gets its own name instead of being filed as a normal victory.</div>`;
+  }
+
+  function verdictHtml(v) {
+    const result = v.result;
+    const kind = OUTCOME[result.outcome] ? result.outcome : 'by-return';
+    const [mark, title, note] = OUTCOME[kind];
+    // The reason is the server's sentence, rendered verbatim. This page does
+    // not rewrite a verdict it did not compute.
+    const reason = result.reason
+      ? `<p class="vwhy">${esc(result.reason)}</p>`
+      : '<p class="vwhy">The server recorded this duel as decided but sent no reason, so none is shown here.</p>';
+    return `<div class="ar-verdict ${esc(kind)}">
+        <span class="vmark" aria-hidden="true">${mark}</span>
+        <div style="min-width:0">
+          <div class="vkind">${esc(title)}</div>
+          ${reason}
+          ${note ? `<p class="ar-note">${esc(note)}</p>` : ''}
+        </div>
+      </div>
+      ${kind === 'by-inaction' ? lessonHtml(v) : ''}`;
+  }
+
+  function awaitingHtml(v) {
+    const todo = [v.challenger, v.opponent].map((side) => {
+      const state = side.final
+        ? '<div class="ar-todo-state ok">final record in</div>'
+        : '<div class="ar-todo-state">no post-close record yet</div>';
+      const detail = side.final
+        ? '<p class="ar-note">Nothing left to do.</p>'
+        : (Number(side.submittedAt) > 0
+          ? `<p class="ar-note">Last chain received ${esc(ago(side.submittedAt))} — before the close, so it cannot settle this.</p>`
+          : '<p class="ar-note">No chain has been received for this duel at all.</p>');
+      return `<div class="ar-todo-card">
+        <div class="ar-todo-who">${face(side)} @${esc(side.handle)} ${chipFor(side.status)}</div>
+        ${state}${detail}
+      </div>`;
+    }).join('');
+
+    return `<div class="pad" style="padding-top:0">
+      <p style="font-weight:750;font-size:15px;line-height:1.5">${esc(v.awaiting || 'The window is closed and this duel is waiting on records submitted after the close.')}</p>
+      <div class="ar-todo">${todo}</div>
+      <p class="ar-note" style="margin-top:16px"><strong style="color:var(--text)">Both players: submit now.</strong>
+        Open the PaperTrench dashboard in the extension, go to the <strong>Leaderboard</strong> tab, then either
+        <strong>Sync from site</strong> or <strong>Export record (JSON)</strong> and submit it on the leaderboard page.
+        The submission you make now carries every fill from inside the window — that is what makes it able to settle
+        anything.</p>
+      <p class="ar-note" style="margin-top:10px">Whoever never submits after the close <strong>forfeits</strong>. If
+        neither does, the duel is recorded as a no-contest and nobody gets a win.</p>
+      <div class="ar-actions" style="margin-top:14px">
+        <a class="ar-btn primary" href="leaderboard.html">Submit my record</a>
+      </div>
+    </div>`;
+  }
+
+  function slotActions(v) {
+    if (v.status === 'expired') {
+      return `<p class="ar-note" style="margin-top:12px">This invite lapsed with nobody in the other corner.</p>
+        <a class="ar-btn" href="duels.html" style="margin-top:14px">Open a fresh invite</a>`;
+    }
+    const msg = acceptMsg ? `<p class="ar-note" style="margin-top:12px;color:var(--down)">${esc(acceptMsg)}</p>` : '';
+    if (accepting) return '<button class="ar-btn primary" disabled>Accepting…</button>' + msg;
+    if (!session) return '<button class="ar-btn" disabled>Checking sign-in…</button>' + msg;
+    if (session.unreachable) {
+      return '<p class="ar-note" style="margin-top:12px">Sign-in is unreachable right now, so this seat cannot be ' +
+        'taken from here. Nothing about the invite has changed.</p>';
+    }
+    if (!session.signedIn) {
+      return '<button class="ar-btn primary" data-act="signin">𝕏 &nbsp;Sign in to accept</button>' +
+        '<p class="ar-note" style="margin-top:10px">One X account per record — that is what makes a duel expensive ' +
+        'to sybil.</p>' + msg;
+    }
+    if (lower(session.handle) === lower(v.challenger.handle)) {
+      return '<p class="ar-note" style="margin-top:12px">This is your invite. Send the link — the clock starts the ' +
+        'moment somebody accepts, not now.</p><button class="ar-btn" data-act="copy" style="margin-top:12px">Copy the link</button>' + msg;
+    }
+    return '<button class="ar-btn primary" data-act="accept">Accept the challenge</button>' +
+      '<p class="ar-note" style="margin-top:10px">Accepting starts the shared clock immediately, for both of you.</p>' + msg;
+  }
+
+  function openCardHtml(v) {
+    const lapsed = v.status === 'expired';
+    const a = v.challenger;
+    const copy = lapsed
+      ? 'Nobody accepted while the invite was open, so no window ever ran and there is nothing to compare.'
+      : 'Whoever takes this seat trades the same window, on the same clock, from the same instant.';
+    return `<div class="ar-duel">
+        <div class="ar-duel-side">
+          <div class="ar-corner">Challenger</div>
+          ${face(a, 'face')}
+          <a class="who" href="profile.html?handle=${encodeURIComponent(a.handle)}">@${esc(a.handle)}</a>
+          <div style="margin-top:9px">${chipFor(a.status)}</div>
+          <p class="meta" style="margin-top:14px">No window has run, so this player has no duel numbers yet — and
+            none are invented here.</p>
+        </div>
+        <div class="ar-vs">VS</div>
+        <div class="ar-duel-side ar-slot ${lapsed ? 'lapsed' : ''}">
+          <div class="ar-corner">${lapsed ? 'Nobody' : 'Open seat'}</div>
+          <span class="face" aria-hidden="true">?</span>
+          <div class="who">${lapsed ? 'Nobody accepted' : 'This seat is empty'}</div>
+          <p class="meta">${esc(copy)}</p>
+          ${slotActions(v)}
+        </div>
+      </div>
+      ${lapsed ? '' : `<div class="pad" style="padding-top:0"><p class="ar-note">${expiryLine(v)}</p></div>`}`;
+  }
+
+  /* The invite TTL is a published protocol constant (server/core/duel.js), but
+   * the deadline for THIS invite is a timestamp — and the open-state view does
+   * not currently carry one. So: state the rule always, and show a real
+   * deadline only if the response actually contains the moment it was minted.
+   * A countdown to a time we had to guess would be worse than no countdown. */
+  const INVITE_TTL_MS = 48 * 60 * 60 * 1000;
+
+  function expiryLine(v) {
+    const explicit = Number(v.expiresAt) > 0 ? Number(v.expiresAt) : 0;
+    const derived = Number(v.createdAt) > 0 ? Number(v.createdAt) + INVITE_TTL_MS : 0;
+    const lapseAt = explicit || derived;
+    if (lapseAt) {
+      return `This invite lapses <strong style="color:var(--text)">${esc(when(lapseAt) || '')}</strong> if nobody
+        accepts it, and cannot be accepted afterwards.`;
+    }
+    return 'An invite that nobody accepts lapses on its own after 48 hours and cannot be accepted afterwards. No ' +
+      'countdown is shown because this response does not carry the moment the invite was minted — and a clock ' +
+      'ticking down to a time this page had to guess would be worse than no clock.';
+  }
+
+  function paintCard(v) {
+    cardSubEl.textContent = v.code ? v.code : '';
+    if (v.status === 'open' || v.status === 'expired') {
+      cardEl.innerHTML = openCardHtml(v);
+      return;
+    }
+    const a = v.challenger;
+    const b = v.opponent;
+    if (!a || !b) { cardEl.innerHTML = malformed(); return; }
+
+    let html = '';
+    if (v.status === 'settled' && v.result) html += verdictHtml(v);
+    html += `<div class="ar-duel">${cornerSide(a, 'Challenger', v)}<div class="ar-vs">VS</div>${cornerSide(b, 'Opponent', v)}</div>`;
+    if (v.status === 'active' && a.entry && b.entry) html += tugHtml(a, b);
+    if (v.status === 'active') html += clockHtml(v);
+    if (v.status === 'awaiting') html += awaitingHtml(v);
+    cardEl.innerHTML = html;
+    tickClock();
+  }
+
+  /* --------------------------------------------------------------- tape -- */
+
+  const TAPE = [
+    { k: 'Rounds closed', get: (e) => fmt(e.rounds, 0) },
+    { k: 'Record', get: (e) => fmt(e.wins, 0) + 'W ' + fmt(e.losses, 0) + 'L' },
+    { k: 'Window return', get: (e) => signed(e.roiPct, 1, '%'), num: (e) => e.roiPct, better: 'high', dir: true },
+    { k: 'Realized P&L', get: (e) => signed(e.pnlSol, 2) + ' ◎', num: (e) => e.pnlSol, better: 'high', dir: true },
+    { k: 'Equity at open', get: (e) => fmt(e.equityAtStart, 2) + ' ◎' },
+    { k: 'Max drawdown', get: (e) => fmt(e.maxDrawdown * 100, 0) + '%', num: (e) => e.maxDrawdown, better: 'low' },
+    { k: 'Revenge re-entries', get: (e) => fmt(e.revengeRatio * 100, 0) + '%', num: (e) => e.revengeRatio, better: 'low' },
+    { k: 'Window score', get: (e) => fmt(e.score, 1), num: (e) => e.score, better: 'high' },
+  ];
+
+  function tapeCell(side, row, other, comparable) {
+    if (!side.entry) return null; // handled by the rowspan cell
+    const value = esc(row.get(side.entry));
+    const classes = [];
+    if (row.dir) classes.push(dirClass(row.num(side.entry)));
+    if (comparable && row.better && other && other.entry) {
+      const mine = Number(row.num(side.entry));
+      const theirs = Number(row.num(other.entry));
+      if (Number.isFinite(mine) && Number.isFinite(theirs) && mine !== theirs) {
+        if (row.better === 'high' ? mine > theirs : mine < theirs) classes.push('win');
+      }
+    }
+    return `<td class="${classes.join(' ')}">${value}</td>`;
+  }
+
+  function paintTape(v) {
+    tapeStampEl.innerHTML = '';
+    if (v.status === 'open' || v.status === 'expired') {
+      tapeEl.innerHTML = L.empty('⚖', 'No tape until there is a fight.',
+        'The tale of the tape compares two records over one window. This invite has one player and no window, so ' +
+        'there is nothing to compare — and nothing will be shown here until there is.');
+      return;
+    }
+    const a = v.challenger;
+    const b = v.opponent;
+    if (!a || !b) { tapeEl.innerHTML = malformed(); return; }
+    if (!a.entry && !b.entry) {
+      tapeEl.innerHTML = L.empty('⚖', 'Neither side has a record in this window.',
+        'Both players have chains, but neither has submitted one that covers this window yet. Zeros would be a ' +
+        'guess, so you get this instead.');
+      return;
+    }
+
+    if (v.status === 'active') tapeStampEl.innerHTML = '<span class="ar-provisional">Provisional</span>';
+    else if (v.status === 'awaiting') tapeStampEl.innerHTML = '<span class="ar-provisional">Pre-close · not final</span>';
+
+    const head = (side) => `<th scope="col">@${esc(side.handle)}
+      <span class="sub">${chipFor(side.status)}</span>
+      <span class="sub">${stampFor(side, v.status) || '<span class="ar-note">no record</span>'}</span></th>`;
+
+    /* Two columns are only comparable when they are the same KIND of number. In
+     * a settled duel where one side never filed after the close, their column is
+     * a pre-close snapshot that decided nothing — bolding it as "better" would
+     * argue against the verdict standing directly above it. */
+    const comparable = !(v.status === 'settled' && (!a.final || !b.final));
+
+    const rows = TAPE.map((row, i) => {
+      const left = tapeCell(a, row, b, comparable);
+      const right = tapeCell(b, row, a, comparable);
+      // A missing side gets ONE cell spanning the whole column saying so. Eight
+      // dashes down a column reads like a bad connection; "no record submitted"
+      // is the actual fact.
+      const missingCell = (side) => (i === 0
+        ? `<td class="none" rowspan="${TAPE.length}">@${esc(side.handle)} has<br>no record submitted<br>for this window.</td>`
+        : '');
+      return `<tr>${left || missingCell(a)}<th scope="row">${esc(row.k)}</th>${right || missingCell(b)}</tr>`;
+    }).join('');
+
+    const zeroBase = [a, b].filter((s) => s.entry && !(Number(s.entry.equityAtStart) > 0));
+    const note = zeroBase.length
+      ? `<p class="ar-note" style="padding:0 20px 16px">Return is measured against equity at the window's open. ${
+        zeroBase.map((s) => '@' + esc(s.handle)).join(' and ')} had none recorded at that moment, so the server
+        reports 0% rather than dividing by nothing.</p>`
+      : '';
+
+    tapeEl.innerHTML = `<div style="overflow-x:auto"><table class="ar-tape">
+        <thead><tr>${head(a)}<th scope="col" class="ar-tape-line">Line</th>${head(b)}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${note}
+      <p class="ar-note" style="padding:14px 20px 18px;border-top:var(--edge)">${comparable
+        ? 'The brighter value on a line is the better one — higher return, lower drawdown, fewer revenge re-entries. ' +
+          'A line is not a result; only the settlement rule decides a duel.'
+        : 'No line is marked as better here, because these two columns are not the same kind of number: one of them ' +
+          'is a pre-close snapshot that never became a final record. It is shown because it is true, not because it ' +
+          'was ever compared — nothing in that column counted toward the result.'}</p>`;
+  }
+
+  /* ------------------------------------------------------------- window -- */
+
+  function paintWindow(v) {
+    if (!hasWindow(v)) {
+      const length = durationLabel(v.durationMs);
+      windowEl.innerHTML = `<p class="ar-note">No window is running. The clock starts the instant someone accepts,
+        and both players get the same start and the same end.</p>
+        ${length ? `<p class="ar-note" style="margin-top:10px">Planned length: <strong style="color:var(--text)">${esc(length)}</strong>.</p>` : ''}`;
+      return;
+    }
+    const start = Number(v.window.startTs);
+    const end = Number(v.window.endTs);
+    const now = Date.now();
+    const progress = Math.max(0, Math.min(1, (now - start) / Math.max(1, end - start)));
+    const closed = now >= end;
+    const length = durationLabel(v.durationMs) || durationLabel(end - start);
+
+    windowEl.innerHTML = `
+      <div class="ar-stats">
+        <div class="ar-stat"><div class="num" style="font-size:15px">${esc(when(start) || '—')}</div><div class="lbl">Opened</div></div>
+        <div class="ar-stat"><div class="num" style="font-size:15px">${esc(when(end) || '—')}</div><div class="lbl">${closed ? 'Closed' : 'Closes'}</div></div>
+      </div>
+      <div class="ar-window" aria-hidden="true"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
+      <p class="ar-note" style="margin-top:12px">${length ? `Length <strong style="color:var(--text)">${esc(length)}</strong>. ` : ''}${
+        closed ? `Closed ${esc(ago(end))}.` : 'Times are shown in your local timezone; the window itself is one shared instant for both players.'}</p>
+      <p class="ar-note" style="margin-top:10px">Only rounds <strong>opened and closed inside</strong> this window
+        count, and only a chain submitted <strong>after</strong> it closed can settle the duel.</p>`;
+  }
+
+  /* --------------------------------------------------------------- seat -- */
+
+  function roleOf(v) {
+    if (!session || !session.signedIn) return 'visitor';
+    const me = lower(session.handle);
+    if (v.challenger && lower(v.challenger.handle) === me) return 'challenger';
+    if (v.opponent && lower(v.opponent.handle) === me) return 'opponent';
+    return 'spectator';
+  }
+
+  function paintSeat(v) {
+    const role = roleOf(v);
+    const sig = [v.status, role, session ? (session.unreachable ? 'x' : (session.signedIn ? 'in' : 'out')) : '?'].join('|');
+    if (sig === lastSeatSig) return;
+    lastSeatSig = sig;
+
+    if (!session) { seatEl.innerHTML = '<p class="ar-note">Checking sign-in…</p>'; return; }
+    if (session.unreachable) {
+      seatEl.innerHTML = '<p class="ar-note">Sign-in is unreachable, so this page cannot tell whether you are in this ' +
+        'duel. The card itself is unaffected — it came from the duel endpoint, which answered.</p>';
+      return;
+    }
+    if (!session.signedIn) {
+      seatEl.innerHTML = `<p class="ar-note" style="margin-bottom:12px">${v.status === 'open'
+        ? 'Sign in with X to take the empty seat. Nothing starts until you do.'
+        : 'Sign in with X to see whether you are in this duel and to submit your record.'}</p>
+        <button class="ar-btn primary" data-act="signin">𝕏 &nbsp;Sign in with X</button>`;
+      return;
+    }
+
+    const you = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      ${face(session, 'ar-face')}
+      <div style="min-width:0">
+        <div style="font-weight:800">@${esc(session.handle)}</div>
+        <a class="ar-note" style="color:var(--orange2)" href="profile.html?handle=${encodeURIComponent(session.handle)}">View public profile →</a>
+      </div></div>`;
+
+    let body;
+    if (v.status === 'open') {
+      body = role === 'challenger'
+        ? '<p class="ar-note">You opened this invite. Send the link and the clock starts when someone accepts — not ' +
+          'before, so there is no rush and no head start.</p><div class="ar-actions" style="margin-top:12px">' +
+          '<button class="ar-btn" data-act="copy">Copy the link</button></div>'
+        : '<p class="ar-note">The other corner is empty. Accepting starts a shared window for both of you, right ' +
+          'now.</p><div class="ar-actions" style="margin-top:12px"><button class="ar-btn primary" data-act="accept">Accept the challenge</button></div>';
+    } else if (v.status === 'active') {
+      body = role === 'spectator'
+        ? '<p class="ar-note">You are watching this one. Every number on the card is provisional until the window ' +
+          'closes and both players file a record.</p>'
+        : '<p class="ar-note">Trade the way you would trade anyway. Nothing you submit before the close can settle ' +
+          'this duel, so submitting now is only for the live view — the submission that counts is the one you make ' +
+          '<strong>after</strong> the window shuts.</p>';
+    } else if (v.status === 'awaiting') {
+      body = role === 'spectator'
+        ? '<p class="ar-note">The window is closed and both players owe a post-close record. This page will settle ' +
+          'itself as soon as one lands.</p>'
+        : '<p class="ar-note"><strong style="color:var(--text)">Submit now or forfeit.</strong> Open the extension ' +
+          'dashboard → Leaderboard tab → Sync from site (or Export record) and submit it on the leaderboard page. ' +
+          'Your post-close chain carries every fill from inside the window, which is exactly why it is the only ' +
+          'thing allowed to settle this.</p><div class="ar-actions" style="margin-top:12px">' +
+          '<a class="ar-btn primary" href="leaderboard.html">Submit my record</a></div>';
+    } else if (v.status === 'settled') {
+      body = '<p class="ar-note">This one is in the books and will read the same forever — the result was written ' +
+        'the first time it became decidable.</p><div class="ar-actions" style="margin-top:12px">' +
+        '<a class="ar-btn" href="duels.html">Start another</a></div>';
+    } else {
+      body = role === 'challenger'
+        ? '<p class="ar-note">Your invite lapsed before anyone accepted it. Nothing ran and nothing was recorded — ' +
+          'opening a new one takes a click.</p><div class="ar-actions" style="margin-top:12px">' +
+          '<a class="ar-btn primary" href="duels.html">Open a new invite</a></div>'
+        : '<p class="ar-note">This invite lapsed before anyone accepted it. There is nothing to join here.</p>' +
+          '<div class="ar-actions" style="margin-top:12px"><a class="ar-btn" href="duels.html">Open your own</a></div>';
+    }
+    seatEl.innerHTML = you + body;
+  }
+
+  /* -------------------------------------------------------------- clock -- */
+
+  function tickClock() {
+    const el = document.getElementById('clock');
+    if (!el || !view || !hasWindow(view)) return;
+    const left = Number(view.window.endTs) - Date.now();
+    const write = (key, value) => {
+      const node = el.querySelector('[data-seg="' + key + '"]');
+      if (node) node.textContent = String(value).padStart(2, '0');
+    };
+    if (left <= 0) {
+      write('d', 0); write('h', 0); write('m', 0); write('s', 0);
+      el.classList.add('urgent');
+      // The window closed while we were watching; ask the server what that
+      // means rather than deciding for it.
+      if (!nudgedAtClose && view.status === 'active') { nudgedAtClose = true; refresh(); }
+      return;
+    }
+    const total = Math.floor(left / 1000);
+    write('d', Math.floor(total / 86400));
+    write('h', el.querySelector('[data-seg="d"]') ? Math.floor(total % 86400 / 3600) : Math.floor(total / 3600));
+    write('m', Math.floor(total % 3600 / 60));
+    write('s', total % 60);
+    el.classList.toggle('urgent', left < 3600000);
+  }
+
+  /* ------------------------------------------------------------- render -- */
+
+  function malformed() {
+    return L.empty('⚠', 'This duel came back in a shape the page cannot read.',
+      'The server answered, but the card was missing a side. Rather than fill the gap with something plausible, ' +
+      'nothing is shown. Reloading is worth a try.');
+  }
+
+  function render() {
+    if (!view) return;
+    // The view carries no volatile fields, so its own JSON is an honest change
+    // detector: identical response, untouched DOM — which keeps the clock's
+    // nodes (and any focus in them) alive across a poll.
+    const sig = JSON.stringify(view);
+    if (sig !== lastSig) {
+      lastSig = sig;
+      paintHero(view);
+      paintCard(view);
+      paintTape(view);
+      paintWindow(view);
+      paintMeta(view);
+    }
+    paintSeat(view);
+    schedule(view);
+  }
+
+  function paintMeta(v) {
+    const a = v.challenger && v.challenger.handle;
+    const b = v.opponent && v.opponent.handle;
+    const pair = a && b ? '@' + a + ' vs @' + b : (a ? '@' + a : '');
+    document.title = (pair ? pair + ' — ' : '') + 'PaperTrench duel' + (v.code ? ' ' + v.code : '');
+    if (!pair) return;
+    const DESC = {
+      open: '@' + a + ' is waiting for an opponent. One shared window, both records replayed server-side.',
+      active: pair + ' — window open. Standings are provisional until it closes.',
+      awaiting: pair + ' — window closed, waiting on post-close records.',
+      settled: (v.result && v.result.reason) || (pair + ' — settled.'),
+      expired: '@' + a + '\'s invite lapsed with nobody in the other corner.',
+    };
+    const title = document.head.querySelector('meta[property="og:title"]');
+    const desc = document.head.querySelector('meta[property="og:description"]');
+    if (title) title.setAttribute('content', pair + ' — PaperTrench duel');
+    if (desc && DESC[v.status]) desc.setAttribute('content', DESC[v.status]);
+  }
+
+  function schedule(v) {
+    // Open and awaiting duels change without anyone touching this page (an
+    // opponent accepts, a record lands), so they keep polling too. Settled and
+    // expired are terminal — nothing can move again, so the timer stops.
+    const live = v.status === 'open' || v.status === 'active' || v.status === 'awaiting';
+    if (!live) { if (timer) { clearInterval(timer); timer = null; } return; }
+    if (!timer) { ticks = 0; timer = window.setInterval(onTick, 1000); }
+  }
+
+  function onTick() {
+    tickClock();
+    ticks += 1;
+    if (ticks % POLL_SECONDS === 0) refresh();
+  }
+
+  function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+  /* ------------------------------------------------------------- loading -- */
+
+  function fail(html) {
+    stop();
+    cardEl.innerHTML = html;
+    tapeEl.innerHTML = '';
+    windowEl.innerHTML = '';
+    tapeStampEl.innerHTML = '';
+    cardSubEl.textContent = '';
+  }
+
+  async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
+    let res;
+    try {
+      res = await L.api('/api/duel?code=' + encodeURIComponent(CODE));
+    } catch {
+      refreshing = false;
+      // Never paint a stale card as if it were live. If a card is already on
+      // screen it stays, labeled; if not, the page says plainly it has nothing.
+      if (!view) {
+        fail(L.errorState('The duel server is unreachable right now, so this duel is not shown. Nothing here is ' +
+          'cached or guessed — reload once it is back.'));
+      } else {
+        // A card is already on screen and it is now of unknown freshness. Say
+        // so on the card itself rather than letting stale numbers pass as live.
+        cardSubEl.innerHTML = `<span style="color:var(--down)">server unreachable · showing the last answer from ${
+          esc(ago(lastOkAt))}</span>`;
+      }
+      return;
+    }
+    refreshing = false;
+    const { status, body } = res;
+    if (status === 404 || (body && body.ok === false && body.reason === 'not-found')) {
+      view = null;
+      fail(L.empty('🕳', 'No duel answers to that code.',
+        'Either the code has a typo in it or the duel was deleted with its owner\'s account. Duel codes look like ' +
+        '<code style="font-family:var(--mono);color:var(--orange2)">TRENCH-XXXXXX</code> and never contain O, 0, I or 1. ' +
+        'Nothing is shown here rather than a guess at which duel you meant.'));
+      return;
+    }
+    if (body && body.ok === false) {
+      view = null;
+      fail(L.empty('⚠', 'The server refused that request.',
+        'It answered <code style="font-family:var(--mono);color:var(--orange2)">' + esc(String(body.reason || 'unknown')) +
+        '</code> instead of a duel, so there is nothing to show. This is the server\'s word, not a guess.'));
+      return;
+    }
+    if (!body || !body.status || !body.challenger) { view = null; fail(malformed()); return; }
+    lastOkAt = Date.now();
+    // Only re-arm the close nudge once the server agrees the window is over.
+    // Re-arming on every answer would spin one refresh per second whenever this
+    // machine's clock runs a few seconds ahead of the server's.
+    if (body.status !== 'active') nudgedAtClose = false;
+    view = body;
+    render();
+  }
+
+  /* ------------------------------------------------------------- actions -- */
+
+  const JOIN_PROBLEM = {
+    'not-signed-in': 'Sign in with X first, then accept.',
+    'invite-expired': 'This invite lapsed before you got here. Nothing was started.',
+    'already-accepted': 'Someone else took this seat first. Nothing was started for you.',
+    'cannot-duel-yourself': 'You opened this invite, so you cannot also accept it. Send the link to someone else.',
+    'not-found': 'No duel answers to this code any more.',
+  };
+
+  async function accept() {
+    if (accepting || !view) return;
+    accepting = true;
+    acceptMsg = '';
+    repaintCard();
+    let res;
+    try {
+      res = await L.api('/api/duel/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: CODE }),
+      });
+    } catch {
+      accepting = false;
+      acceptMsg = 'The server did not answer, so nothing was accepted. Try again.';
+      repaintCard();
+      return;
+    }
+    accepting = false;
+    const { status, body } = res;
+    if (body && body.ok) { acceptMsg = ''; lastSig = ''; await refresh(); return; }
+    const reason = (body && body.reason) || (status === 401 ? 'not-signed-in' : 'server-error');
+    acceptMsg = JOIN_PROBLEM[reason] || ('The server refused the join: ' + reason + '.');
+    repaintCard();
+  }
+
+  /** Re-render the card alone, bypassing the change detector — the accept
+   * button's own state lives outside the server's view of the world. */
+  function repaintCard() { if (view) paintCard(view); }
+
+  async function copyLink(button) {
+    const box = document.getElementById('share-url');
+    const url = window.location.href;
+    const original = button.textContent;
+    try {
+      await navigator.clipboard.writeText(url);
+      button.textContent = 'Link copied';
+      window.setTimeout(() => { button.textContent = original; }, 2200);
+    } catch {
+      // Clipboard access can be denied outright; select the field so the copy
+      // is one keystroke away instead of claiming a success that did not happen.
+      if (box) { box.focus(); box.select(); }
+      button.textContent = 'Selected — press Ctrl+C';
+      window.setTimeout(() => { button.textContent = original; }, 3200);
+    }
+  }
+
+  // Delegated once, at the document, because every panel on this page is
+  // re-rendered from scratch and per-node listeners would leak with it.
+  document.addEventListener('click', (event) => {
+    const el = event.target.closest && event.target.closest('[data-act]');
+    if (!el) return;
+    const act = el.getAttribute('data-act');
+    if (act === 'signin') { event.preventDefault(); L.signIn(); }
+    else if (act === 'accept') { event.preventDefault(); accept(); }
+    else if (act === 'copy') { event.preventDefault(); copyLink(el); }
+  });
+
+  /* ---------------------------------------------------------------- boot -- */
+
+  const shareBox = document.getElementById('share-url');
+  if (shareBox) shareBox.value = window.location.href;
+
+  if (!CODE) {
+    document.getElementById('eyebrow-text').textContent = 'No duel code in this link';
+    fail(L.empty('🔗', 'This link has no duel code in it.',
+      'A duel link carries its code in the address, like ' +
+      '<code style="font-family:var(--mono);color:var(--orange2)">duel.html?code=TRENCH-XXXXXX</code>. ' +
+      'Without one there is no duel to look up, and nothing is invented to fill the page. ' +
+      '<a href="duels.html" style="color:var(--orange2)">Your duels are here</a>.'));
+    seatEl.innerHTML = '<p class="ar-note">Nothing to join without a code.</p>';
+  } else {
+    document.getElementById('spec-code').textContent = CODE;
+    document.getElementById('state-code').textContent = CODE;
+    cardEl.innerHTML = L.skeleton(2);
+    tapeEl.innerHTML = L.skeleton(3);
+    windowEl.innerHTML = L.skeleton(1);
+    refresh();
+  }
+
+  (async () => {
+    session = await L.me();
+    // The card's accept button and the seat panel both depend on who is
+    // watching, and that answer lands after the duel does.
+    lastSeatSig = '';
+    if (view) { repaintCard(); paintSeat(view); }
+    else if (!CODE) seatEl.innerHTML = '<p class="ar-note">Nothing to join without a code.</p>';
+  })();
+})();
+</script>
+</body>
+</html>

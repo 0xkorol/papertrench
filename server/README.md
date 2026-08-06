@@ -25,24 +25,84 @@ Every submission runs the same gauntlet:
    never faked as a pass.
 
 Ranking is process-weighted (`ROI × ln(1+rounds) × discipline`) with a
-five-round floor — one lottery ticket does not top the board. The weekly
-Trench Sprint is a window slice of the same chain: rounds opened and closed
-inside a UTC Monday-to-Monday week, scored by ROI on window-start equity.
+five-round floor — one lottery ticket does not top the board.
+
+## Modes are windows, not books
+
+Every competitive mode is the SAME committed chain seen through a different
+time window (`core/window.js`). That is what makes the set of modes
+uncheatable rather than each one separately: there is no per-mode book to
+inflate, and a round counts only if it opened and closed inside the window.
+
+- **Season** — the whole chain.
+- **Weekly Trench Sprint** — the UTC Monday-to-Monday slice.
+- **Duels** — a 1-hour-to-1-week head-to-head slice, started when the invite
+  is accepted so both players face the same clock.
+
+### The duel settlement rule
+
+A duel settles only from a chain submitted **after** its window closed.
+
+The chain is append-only locally and extend-only on the server, so a player
+cannot delete a losing round from inside the window — the hashes break, and a
+swapped-in history is rejected as `chain-replaced`. That leaves exactly one
+vector: submit while you are up, then go quiet so the server's newest copy of
+your chain predates your losses. Settling only from post-close submissions
+closes it, because a post-close chain necessarily carries every fill made
+inside the window. Refusing to submit forfeits rather than freezing a
+flattering snapshot. Live standings during the window are shown and labeled
+provisional; they never decide the result.
+
+## Achievements
+
+`core/achievements.js` awards badges derived from committed fills alone,
+under the extension's own doctrine: **no profit badges, no win-streak badges,
+no volume badges.** A badge for making money rewards the coin flip. Every
+badge is a process claim (losses taken without chasing, a drawdown actually
+recovered, sizing that did not grow after a loss, distinct days of reps) and
+every award carries the evidence that earned it — a badge whose reasoning
+cannot be shown is a badge that cannot be trusted.
+
+## Activity feed
+
+`/api/activity` streams the verifier's real work: chains accepted, records
+verified, submissions rejected. Positive events carry the handle; **rejections
+never do.** An automated verdict can fire on thin candle data as easily as on
+fraud, and must not publicly brand a named person a cheat.
 
 ## Layout
 
 ```
 core/     pure logic — no fetch, no storage, runs under `node --test`
-  chain.js       re-exports extension/attest.js (single source of truth)
-  pricing.js     candle plausibility policy (three-state: ok/implausible/no-data)
-  ranking.js     rounds-from-chain, discipline metrics, season score
-  sprint.js      ISO-week windows and sprint entries
-  submission.js  the pipeline above, as pure orchestration
+  chain.js         re-exports extension/attest.js (single source of truth)
+  pricing.js       candle plausibility policy (ok / implausible / no-data)
+  ranking.js       rounds-from-chain, discipline metrics, season score
+  window.js        the shared window slice every mode is built from
+  sprint.js        ISO-week windows and sprint entries
+  duel.js          head-to-head state machine and the settlement rule
+  achievements.js  chain-derived badges, process-only by doctrine
+  submission.js    the trust pipeline above, as pure orchestration
 worker/   Cloudflare adapters — routing, D1, X OAuth (PKCE), sessions,
           edge caching, rate limits, candle cache, pricing cron
 test/     behavior locks, one cheat per test
 schema.sql, wrangler.toml
 ```
+
+## API
+
+| Route | Purpose |
+|---|---|
+| `GET /api/leaderboard` | season standings, edge-cached 60s |
+| `GET /api/sprint/current` | this week's Sprint window and standings |
+| `GET /api/profile?handle=` | one public record: stats, badges, chain head, sprint history |
+| `GET /api/activity` | recent verifier events (rejections anonymised) |
+| `POST /api/submit` | the trust pipeline; also refreshes sprint and duel slices |
+| `POST /api/duel/create` | mint a share-link invite |
+| `POST /api/duel/join` | accept an invite; starts the shared clock |
+| `GET /api/duel?code=` | live duel view, never edge-cached |
+| `GET /api/duel/mine` | the signed-in player's duels |
+| `GET /api/auth/x/start`, `/callback`, `POST /api/auth/logout` | X sign-in |
+| `GET /api/me`, `POST /api/me/delete` | session, and self-serve erasure |
 
 ## Running
 

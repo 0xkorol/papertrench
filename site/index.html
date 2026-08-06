@@ -26,6 +26,8 @@
       <a href="#replay">Replay</a>
       <a href="#journal">Journal</a>
       <a href="leaderboard.html">Leaderboard</a>
+      <a href="sprint.html">Sprint</a>
+      <a href="duels.html">Duels</a>
       <a href="news.html">News</a>
       <a href="#install">Install</a>
       <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
@@ -253,20 +255,27 @@
           <div class="feature-row"><div class="fi">🪪</div><div><h4>Verified identity</h4><p>One ranked record per verified account, making sybil entries expensive.</p></div></div>
         </div>
         <div class="reveal d3" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:26px">
-          <a class="btn btn-primary" href="leaderboard.html">🛡 Open the live leaderboard</a>
+          <a class="btn btn-primary" href="leaderboard.html">🛡 Enter the Arena</a>
           <a class="btn btn-ghost" href="sprint.html">⚡ This week's Sprint</a>
+          <a class="btn btn-ghost" href="duels.html">⚔ Duels</a>
         </div>
       </div>
       <div class="split-visual reveal d1">
+        <!-- The real board, live. This used to be a mock with invented
+             handles; a product whose whole claim is "no number on screen is
+             ever wrong" cannot show fictional traders on its front page.
+             It loads real standings, and says so plainly when there are
+             none or the verifier is unreachable. -->
         <div class="visual-card lb-mock">
-          <div class="lb-title"><span class="shield">🛡</span>Season standings <span style="margin-left:auto;font-size:11px;font-weight:800;letter-spacing:1px;color:var(--green);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:4px 10px;background:rgba(52,211,153,.08)">CHAIN-VERIFIED</span></div>
-          <div class="lb-row"><span class="rank">#1</span><span class="handle"><span class="avatar" style="background:rgba(255,157,69,.2);color:var(--orange2)">TD</span>trenchdigger <span class="verify">✓ VERIFIED</span></span><span class="pnl">+48.2 ◎</span><span class="win">71% W · 34 rds</span></div>
-          <div class="lb-row"><span class="rank">#2</span><span class="handle"><span class="avatar" style="background:rgba(106,169,255,.2);color:var(--blue)">SM</span>solmaxi_9 <span class="verify">✓ VERIFIED</span></span><span class="pnl">+31.7 ◎</span><span class="win">64% W · 51 rds</span></div>
-          <div class="lb-row"><span class="rank">#3</span><span class="handle"><span class="avatar" style="background:rgba(167,139,250,.2);color:var(--violet)">PJ</span>paperjack <span class="verify">✓ VERIFIED</span></span><span class="pnl">+22.4 ◎</span><span class="win">58% W · 68 rds</span></div>
-          <div class="lb-row"><span class="rank">#4</span><span class="handle"><span class="avatar" style="background:rgba(52,211,153,.2);color:var(--green)">NC</span>no.chase <span class="verify">✓ VERIFIED</span></span><span class="pnl">+18.9 ◎</span><span class="win">62% W · 29 rds</span></div>
-          <div class="lb-row"><span class="rank">#5</span><span class="handle"><span class="avatar" style="background:rgba(224,67,58,.2);color:#ff8a80">GV</span>gmi.vibes <span class="verify">✓ VERIFIED</span></span><span class="pnl">+12.1 ◎</span><span class="win">55% W · 44 rds</span></div>
-          <div class="lb-chain" id="chainTicker">hash: <span class="h">a41f…c92e</span> <span class="arrow">→</span> <span class="h">7b03…d114</span> <span class="arrow">→</span> <span class="h">e88a…20f7</span> <span class="arrow">→</span> <span class="h">verifying…</span></div>
-          <div style="font-size:11px;color:var(--dim);margin-top:10px;text-align:right">Illustration — <a href="leaderboard.html" style="color:var(--green)">the real board lives here</a></div>
+          <div class="lb-title"><span class="shield">🛡</span>Season standings
+            <span style="margin-left:auto;font-size:11px;font-weight:800;letter-spacing:1px;color:var(--green);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:4px 10px;background:rgba(52,211,153,.08)">LIVE</span></div>
+          <div id="homeBoard" aria-live="polite">
+            <div style="padding:26px 4px;color:var(--dim);font-size:13px">Loading the board…</div>
+          </div>
+          <div class="lb-chain" id="chainTicker"></div>
+          <div style="font-size:11.5px;margin-top:12px;text-align:right">
+            <a href="leaderboard.html" style="color:var(--green);font-weight:700">Open the full Arena →</a>
+          </div>
         </div>
       </div>
     </div>
@@ -411,6 +420,65 @@
   </div>
 </footer>
 
+<script src="arena.js"></script>
 <script src="main.js"></script>
+<script>
+/* The homepage board preview — real standings or an honest blank. */
+(() => {
+  'use strict';
+  const A = window.PTArena;
+  const boardEl = document.getElementById('homeBoard');
+  const tickerEl = document.getElementById('chainTicker');
+  if (!A || !boardEl) return;
+
+  const note = (text) =>
+    `<div style="padding:24px 4px;color:var(--dim);font-size:13px;line-height:1.6">${text}</div>`;
+
+  (async () => {
+    let entries;
+    try {
+      entries = (await A.getOrThrow('/api/leaderboard')).entries || [];
+    } catch {
+      boardEl.innerHTML = note('The verifier is unreachable right now, so no standings are shown — ' +
+        'nothing here is cached or guessed.');
+      return;
+    }
+    if (!entries.length) {
+      boardEl.innerHTML = note('No ranked records yet. Five closed rounds gets you on the board, and ' +
+        'nothing appears here until a real chain has been replayed and re-priced.');
+      return;
+    }
+    boardEl.innerHTML = entries.slice(0, 5).map((entry, i) => {
+      const s = entry.stats;
+      const [bg, fg] = A.tone(entry.handle);
+      return `<a class="lb-row" href="profile.html?handle=${encodeURIComponent(entry.handle)}" style="color:inherit">
+        <span class="rank">#${i + 1}</span>
+        <span class="handle"><span class="avatar" style="background:${bg};color:${fg}">${A.esc(A.initials(entry.handle))}</span>${A.esc(entry.handle)}
+          ${A.chipFor(entry.status)}</span>
+        <span class="pnl" style="color:${s.roiPct >= 0 ? 'var(--green)' : '#ff8a80'}">${A.esc(A.signed(s.roiPct, 1, '%'))}</span>
+        <span class="win">${A.esc(A.fmt(s.winRate * 100, 0))}% W · ${A.esc(A.fmt(s.rounds, 0))} rds</span>
+      </a>`;
+    }).join('');
+  })();
+
+  /* Real verifier events, rotating — replaces the old random-hex ticker. */
+  (async () => {
+    if (!tickerEl) return;
+    let events = [];
+    try { events = (await A.getOrThrow('/api/activity')).events || []; } catch { return; }
+    if (!events.length) return;
+    let index = 0;
+    const paint = () => {
+      const event = events[index % events.length];
+      const who = event.handle ? `<span class="h">@${A.esc(event.handle)}</span> ` : '';
+      tickerEl.innerHTML = `<span class="arrow">${A.esc(event.kind)}</span> ${who}${A.esc(event.detail)} ` +
+        `<span class="arrow">·</span> ${A.esc(A.ago(event.ts))}`;
+      index++;
+    };
+    paint();
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) setInterval(paint, 3200);
+  })();
+})();
+</script>
 </body>
 </html>

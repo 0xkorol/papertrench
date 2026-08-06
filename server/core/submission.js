@@ -66,6 +66,18 @@ async function fastChecks(payload, previous) {
     if (!anchor || anchor.hash !== previous.head) {
       return { accepted: false, reason: 'chain-replaced' };
     }
+    // The declared bankroll is the denominator of ROI and therefore of the
+    // whole score, and it is the ONE input the chain cannot prove. Left free,
+    // a resubmission of the same fills with a smaller bankroll multiplies the
+    // return arbitrarily — the cheapest possible way to top the board. So it
+    // is pinned at first submission; changing it means deleting the server
+    // record and starting over, which is self-serve and visible.
+    if (Number.isFinite(previous.startingSol) && previous.startingSol > 0) {
+      const declared = Number(payload.claim.startingBalanceSol);
+      if (Math.abs(declared - previous.startingSol) > 1e-9) {
+        return { accepted: false, reason: 'bankroll-changed' };
+      }
+    }
   }
 
   const start = Number(payload.claim.startingBalanceSol);

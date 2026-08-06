@@ -5,30 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PaperTrench — Leaderboard</title>
 <meta name="description" content="Season standings recomputed server-side from tamper-evident trade chains. Every fill re-checked against real market history — no self-reported numbers, ever.">
-<meta property="og:title" content="PaperTrench — Leaderboard">
-<meta property="og:description" content="A paper-trading leaderboard that can't be faked: hash-chained fills, server-side replay, prices re-verified against market history.">
+<meta property="og:title" content="PaperTrench — The Arena">
+<meta property="og:description" content="A paper-trading leaderboard that can't be faked: hash-chained fills, server-side replay, every price re-verified against real market history.">
 <meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="assets/icon128.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-<style>
-  .lb-page-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 22px; align-items: start; }
-  @media (max-width: 900px) { .lb-page-grid { grid-template-columns: 1fr; } }
-  .lb-board { padding: 22px; }
-  .lb-side { padding: 22px; }
-  .lb-side h3 { font-size: 15px; font-weight: 800; margin: 0 0 12px; }
-  .lb-side + .lb-side { margin-top: 22px; }
-  .lb-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
-  .lb-note { color: var(--dim); font-size: 12.5px; line-height: 1.65; }
-  .lb-status { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; word-break: break-all;
-               background: rgba(255,255,255,0.03); border: 1px solid var(--line);
-               border-radius: 10px; padding: 12px 14px; margin-top: 12px; display: none; }
-  .lb-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-  .lb-me { display: flex; align-items: center; gap: 10px; font-weight: 700; }
-  .lb-me img { width: 32px; height: 32px; border-radius: 50%; }
-</style>
+<link rel="stylesheet" href="arena.css">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -39,7 +25,8 @@
     <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
     <div class="nav-links">
       <a href="leaderboard.html" aria-current="page">Leaderboard</a>
-      <a href="sprint.html">Weekly Sprint</a>
+      <a href="sprint.html">Sprint</a>
+      <a href="duels.html">Duels</a>
       <a href="news.html">News</a>
       <a href="index.html#install">Install</a>
       <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
@@ -48,103 +35,329 @@
   </div>
 </nav>
 
-<header class="hero news-hero">
+<header class="ar-hero">
   <div class="wrap">
-    <span class="hero-badge reveal"><span class="dot"></span>Every row recomputed server-side · zero self-reported numbers</span>
-    <h1 class="reveal d1">Season <span class="grad-orange">standings.</span></h1>
-    <p class="hero-sub reveal d2">Every record here arrived as a <strong>hash chain of fills committed the moment they happened</strong>. The server re-hashes every link, replays the whole book itself, and re-checks every price against real market history. Rank comes from return on bankroll, sustained rounds, and discipline — <strong>not</strong> from one lottery ticket.</p>
+    <div class="ar-hero-grid">
+      <div>
+        <span class="ar-eyebrow"><span class="dot"></span>Global standings · re-verified server side</span>
+        <h1 class="ar-title"><span class="line">Every name up here</span><span class="line accent">earned it twice.</span></h1>
+        <p class="ar-lede">Once by trading it. Once by surviving the replay — every fill
+          <strong>hash-chained the moment it happened</strong>, then re-priced against the token's
+          real traded range in that exact minute. Rank is <strong>ROI × ln(1+rounds) × discipline</strong>.
+          A lottery ticket does not top this board, and it was never going to.</p>
+
+        <div class="ar-spec" role="list" aria-label="Board parameters">
+          <div role="listitem"><div class="k">Board</div><div class="v">Global · all-time</div></div>
+          <div role="listitem"><div class="k">Method</div><div class="v ok">Server replay</div></div>
+          <div role="listitem"><div class="k">Chain · extend-only</div><div class="v">SHA-256</div></div>
+          <div role="listitem"><div class="k">Self-reported</div><div class="v zero">Nothing</div></div>
+        </div>
+      </div>
+
+      <!-- The verifier's real work. This is the hero visual because it is the
+           only honest way to make "we check everything" visible: you watch it
+           check. Rejections appear without a handle, on purpose. -->
+      <aside class="ar-verifier" aria-label="Live verifier activity">
+        <div class="bar">
+          <span class="bulbs"><i></i><i></i><i></i></span>
+          <span class="name">verifier · stdout</span>
+          <span class="streaming"><span class="dot"></span>LIVE</span>
+        </div>
+        <ul class="ar-stream" id="stream" aria-live="polite"></ul>
+      </aside>
+    </div>
   </div>
 </header>
 
-<section style="padding:24px 0 80px">
-  <div class="wrap">
-    <div class="lb-page-grid">
+<main class="wrap" style="padding-bottom:96px">
+  <div class="ar-shell">
 
-      <div class="visual-card lb-board reveal">
-        <div class="lb-title"><span class="shield">🛡</span>Global standings
-          <span style="margin-left:auto;font-size:11px;font-weight:800;letter-spacing:1px;color:var(--green);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:4px 10px;background:rgba(52,211,153,.08)">CHAIN-VERIFIED</span></div>
-        <div class="lb-tabs">
-          <a class="filter-chip" href="leaderboard.html" aria-current="page" style="border-color:var(--orange);color:var(--orange2)">All-time</a>
-          <a class="filter-chip" href="sprint.html">This week's Sprint →</a>
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="board-h">
+        <div class="ar-pane-head">
+          <span class="glyph">🛡</span><span id="board-h">The podium</span>
+          <span class="spacer"></span>
+          <div class="ar-tabs">
+            <a class="ar-tab" href="leaderboard.html" aria-current="page">All-time</a>
+            <a class="ar-tab" href="sprint.html">This week</a>
+            <a class="ar-tab" href="duels.html">Duels</a>
+          </div>
         </div>
-        <div id="board"><p class="lb-note" style="padding:12px 6px">Loading standings…</p></div>
-      </div>
+        <div id="podium"></div>
+        <div id="plinth"></div>
+      </section>
 
-      <div>
-        <div class="visual-card lb-side reveal d1">
-          <h3>Your record</h3>
-          <div id="account"><p class="lb-note">Checking sign-in…</p></div>
-          <div class="lb-actions" id="submit-actions" style="display:none">
-            <button class="btn btn-primary" id="sync-btn">⛓ Sync from extension</button>
-            <label class="btn btn-ghost" style="cursor:pointer">Upload exported record
+      <section class="ar-pane" aria-labelledby="tower-h">
+        <div class="ar-pane-head">
+          <span class="glyph" style="color:var(--orange2)">▤</span><span id="tower-h">The tower</span>
+          <span class="spacer"></span>
+          <span class="ar-note" id="tower-count"></span>
+        </div>
+        <div id="tower"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="formula-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--violet)">ƒ</span>
+          <span id="formula-h">The formula is public</span></div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:14px">Three terms, no committee, no discretionary
+            weighting. Run it yourself over the raw fills and you get the number the server got —
+            that is the point of publishing it. Shown here for whoever currently leads:</p>
+          <div id="formula-demo"></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="rec-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--orange2)">◆</span>
+          <span id="rec-h">Your record</span></div>
+        <div class="pad">
+          <div id="account"><div class="ar-note">Checking sign-in…</div></div>
+          <div id="submit-actions" style="display:none;gap:10px;flex-wrap:wrap;margin-top:14px">
+            <button class="ar-btn primary" id="sync-btn">⛓ Sync from extension</button>
+            <label class="ar-btn" style="cursor:pointer">Upload export
               <input type="file" id="upload-input" accept="application/json,.json" style="display:none">
             </label>
           </div>
-          <div class="lb-status" id="submit-status"></div>
-          <p class="lb-note" style="margin-top:14px">Sync asks the extension for your committed chain — it only answers if you enabled
-            <strong>Site sync</strong> in the dashboard's Leaderboard tab, and no other site can ask. Or export the record as a file
-            there and upload it here; both paths carry identical evidence. The extension itself never phones home.</p>
+          <div id="submit-status" style="margin-top:14px"></div>
+          <p class="ar-note" style="margin-top:14px">Sync asks the extension for your committed chain
+            — it only answers if you enabled <strong>Site sync</strong> in the dashboard's Leaderboard
+            tab, and no other site can ask. Or export the record as a file there and upload it here;
+            both paths carry identical evidence. The extension itself never phones home.</p>
         </div>
+      </section>
 
-        <div class="visual-card lb-side reveal d2">
-          <h3>How ranking stays honest</h3>
-          <ul class="lb-note" style="margin:0;padding-left:18px">
-            <li><strong>Replayed, not trusted.</strong> Standings are computed from your raw fills server-side. The claimed P&amp;L is only compared against the replay — a mismatch is a signal, never a rank.</li>
-            <li><strong>Re-priced against history.</strong> Every fill is checked against the token's real traded range in that exact minute. Fabricated prices reject the record.</li>
-            <li><strong>Extend-only.</strong> A submitted chain must extend the one you already committed. Deleting a bad week and starting fresh breaks the anchor.</li>
-            <li><strong>Score = ROI × ln(1+rounds) × discipline.</strong> Return on declared bankroll, weighted by sustained rounds, discounted for revenge re-entries and drawdown. Five closed rounds minimum. One moonshot doesn't top this board.</li>
-            <li><strong>One record per X account.</strong> Sybils cost a real, public identity each.</li>
-          </ul>
-          <p class="lb-note" style="margin-top:12px">Full protocol: <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener" style="color:var(--orange2)">docs/LEADERBOARD.md</a></p>
+      <section class="ar-pane" aria-labelledby="protocol-h">
+        <div class="ar-pane-head"><span class="glyph">§</span>
+          <span id="protocol-h">The protocol</span></div>
+        <div class="pad">
+          <p class="ar-note" style="margin-bottom:14px">Six rules. All of them are things this board
+            refuses to do.</p>
+          <ol style="list-style:none;counter-reset:p;display:grid;gap:14px">
+            <li style="counter-increment:p">
+              <b style="font-size:13px">Replayed, not trusted.</b>
+              <p class="ar-note">Standings are computed from your raw fills server-side. A claimed
+                P&amp;L is only ever compared against the replay — a mismatch is a signal, never a rank.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Re-priced against history.</b>
+              <p class="ar-note">Every fill is checked against the token's real traded range in that
+                exact minute. Fabricated prices reject the record; missing candle data downgrades you
+                to <span class="ar-chip partial" style="font-size:8px">◐ Partial</span> — it never
+                invents coverage.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Extend-only.</b>
+              <p class="ar-note">A submitted chain must extend the one you already committed. Deleting
+                a bad week and starting fresh breaks the anchor and is refused by name.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Only committed numbers count.</b>
+              <p class="ar-note">Every ranked figure is built from the fields the hash covers —
+                gross out on a buy, net in on a sell. Fields a chain stores but does not commit to
+                are ignored here, so editing them changes nothing. That basis includes your fees,
+                which is why the board reads slightly under your dashboard.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Process over outcome.</b>
+              <p class="ar-note">The score rewards surviving a sample size and charges you for revenge
+                entries and drawdown. Five closed rounds minimum. One moonshot does not top this board.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Empty is empty.</b>
+              <p class="ar-note">If the verifier is unreachable, this page shows nothing rather than
+                something stale. There are no placeholder rows anywhere in this product, and there
+                never will be.</p>
+            </li>
+          </ol>
+          <p class="ar-note" style="margin-top:16px">Full protocol:
+            <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">docs/LEADERBOARD.md</a></p>
         </div>
-      </div>
-
+      </section>
     </div>
+
   </div>
-</section>
+</main>
 
 <footer>
   <div class="wrap">
     <div class="foot-inner">
       <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
       <div class="foot-links">
+        <a href="sprint.html">Weekly Sprint</a>
+        <a href="duels.html">Duels</a>
         <a href="news.html">News &amp; patch notes</a>
-        <a href="streams.html">Live on Twitch</a>
         <a href="privacy.html">Privacy</a>
         <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
         <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
-        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
       </div>
     </div>
   </div>
 </footer>
 
-<script src="lb.js"></script>
-<script src="reveal.js"></script>
+<script src="arena.js"></script>
 <script>
 (() => {
   'use strict';
-  const { me, signIn, logout, bridgePing, bridgeGetRecord, submit,
-          row, emptyState, esc, fmt, signed } = window.PTLB;
+  const L = window.PTArena;
+  const { esc, fmt, signed, dirClass, ago, face, chipFor } = L;
 
-  /* ---------------- board ---------------- */
+  const podiumEl = document.getElementById('podium');
+  const plinthEl = document.getElementById('plinth');
+  const towerEl = document.getElementById('tower');
+  const countEl = document.getElementById('tower-count');
+  const formulaEl = document.getElementById('formula-demo');
+  const streamEl = document.getElementById('stream');
+
+  let signedInHandle = null;
+
+  /* ---------------- the board ---------------- */
+
+  podiumEl.innerHTML = L.skeleton(1);
+  towerEl.innerHTML = L.skeleton(6);
+
+  function podiumCard(entry, rank) {
+    const s = entry.stats;
+    return `<a class="ar-pod rank-${rank}" href="profile.html?handle=${encodeURIComponent(entry.handle)}">
+      ${rank === 1 ? '<span class="crown" aria-hidden="true">👑</span>' : ''}
+      <span class="place">${rank === 1 ? 'CHAMPION' : 'RANK 0' + rank}</span>
+      ${face(entry, 'face')}
+      <div class="who">@${esc(entry.handle)}</div>
+      <div style="margin-top:7px;display:flex;align-items:center;gap:6px;justify-content:center;flex-wrap:wrap">
+        ${chipFor(entry.status)}${L.badgeChips(entry.badges, 4)}</div>
+      <div class="roi ${dirClass(s.roiPct)}" data-roi="${esc(String(s.roiPct))}">—</div>
+      <div class="roi-note">return on bankroll · ${esc(signed(s.realizedPnlSol, 2))} ◎</div>
+      <div class="triplet">
+        <div><div class="n">${esc(fmt(s.rounds, 0))}</div><div class="l">Rounds</div></div>
+        <div><div class="n">${esc(fmt(s.winRate * 100, 0))}%</div><div class="l">Win</div></div>
+        <div><div class="n">${esc(fmt(s.maxDrawdown * 100, 0))}%</div><div class="l">Max DD</div></div>
+      </div>
+      <div class="score-chip"><span>SCORE</span>${esc(fmt(s.score, 1))}</div>
+    </a>`;
+  }
+
+  function towerRow(entry, index, snapshot) {
+    const s = entry.stats;
+    const rank = index + 4;
+    const isYou = signedInHandle && entry.handle.toLowerCase() === signedInHandle.toLowerCase();
+    const discipline = L.scoreTerms(s).discipline;
+    return `<a class="ar-row ${isYou ? 'is-you' : ''}" style="animation-delay:${Math.min(index * 26, 320)}ms"
+       href="profile.html?handle=${encodeURIComponent(entry.handle)}">
+      <span class="pos">#${rank}</span>
+      <span class="c-delta">${L.deltaCell(snapshot, entry.handle, index + 3)}</span>
+      <span class="ar-who">
+        ${face(entry)}
+        <span class="ar-handle">@${esc(entry.handle)}</span>
+        ${isYou ? '<span class="ar-you-tag">YOU</span>' : ''}
+      </span>
+      <span class="c-status">${chipFor(entry.status)}</span>
+      <span class="val ${dirClass(s.roiPct)}">${esc(signed(s.roiPct, 1, '%'))}</span>
+      <span class="val dim c-pnl">${esc(signed(s.realizedPnlSol, 2))}</span>
+      <span class="val dim c-rounds">${esc(fmt(s.rounds, 0))}</span>
+      <span class="val dim c-win">${esc(fmt(s.winRate * 100, 0))}%</span>
+      <span class="ar-disc c-disc">
+        <span class="track"><span class="fill" style="width:${(discipline * 100).toFixed(0)}%"></span></span>
+        <span class="n">${esc(fmt(discipline, 2))}</span>
+      </span>
+      <span class="val score">${esc(fmt(s.score, 1))}</span>
+    </a>`;
+  }
+
+  const THEAD = `<div class="ar-thead">
+      <span>Pos</span>
+      <span class="c-delta" title="Movement since the last time you loaded this board">Δ</span>
+      <span>Trader</span>
+      <span class="c-status">Status</span>
+      <span class="r">ROI</span>
+      <span class="r c-pnl">P&amp;L ◎</span>
+      <span class="r c-rounds">Rds</span>
+      <span class="r c-win">Win</span>
+      <span class="r c-disc">Discipline</span>
+      <span class="r">Score</span>
+    </div>`;
 
   (async () => {
-    const el = document.getElementById('board');
+    let body;
     try {
-      const { body } = await window.PTLB.api('/api/leaderboard');
-      const entries = (body && body.entries) || [];
-      if (!entries.length) {
-        el.innerHTML = emptyState('No ranked records yet. Five closed rounds gets you on the board — the first verified chain in makes history.');
-        return;
-      }
-      el.innerHTML = entries.map((e, i) => row(e, i,
-        `<span style="color:${e.stats.roiPct >= 0 ? 'var(--green)' : '#ff8a80'}">${signed(e.stats.roiPct, 1, '%')}</span> <small style="opacity:.75">${signed(e.stats.realizedPnlSol, 2)} ◎</small>`,
-        `${e.stats.rounds} rds · ${fmt(e.stats.winRate * 100, 0)}% W · ${fmt(e.stats.score, 1)} pts`
-      )).join('');
+      body = await L.getOrThrow('/api/leaderboard');
     } catch {
-      el.innerHTML = emptyState('The leaderboard server is unreachable right now. Nothing is shown rather than something stale.');
+      podiumEl.innerHTML = L.errorState(
+        'The verifier is unreachable right now, so no standings are shown. Nothing here is cached or guessed.');
+      plinthEl.innerHTML = '';
+      towerEl.innerHTML = '';
+      return;
     }
+
+    const entries = (body && body.entries) || [];
+    if (!entries.length) {
+      podiumEl.innerHTML = L.empty('🏴',
+        'The board is empty. Someone has to be first.',
+        'Five closed rounds gets you ranked. Nothing is shown here until a real chain has been submitted, replayed, and re-priced — no seeded names, no demo traders.');
+      plinthEl.innerHTML = '';
+      towerEl.innerHTML = '';
+      countEl.textContent = '';
+      return;
+    }
+
+    const snapshot = L.readSnapshot('global');
+    const top = entries.slice(0, 3);
+    const rest = entries.slice(3);
+
+    // Order for display puts #1 in the middle when all three exist; with
+    // fewer, the podium simply narrows rather than inventing empty seats.
+    const order = top.length === 3 ? [top[1], top[0], top[2]] : top;
+    const ranks = top.length === 3 ? [2, 1, 3] : top.map((_, i) => i + 1);
+    podiumEl.innerHTML = `<div class="ar-podium seats-${order.length}">`
+      + order.map((e, i) => podiumCard(e, ranks[i])).join('') + '</div>';
+
+    if (top.length === 3) {
+      plinthEl.innerHTML = `<div class="ar-plinth">
+        <div class="p2">2</div><div class="p1">1</div><div class="p3">3</div></div>`;
+    }
+
+    podiumEl.querySelectorAll('.roi[data-roi]').forEach((el) => {
+      L.countUp(el, Number(el.dataset.roi), 1, '%');
+    });
+
+    if (rest.length) {
+      towerEl.innerHTML = THEAD + rest.map((e, i) => towerRow(e, i, snapshot)).join('');
+    } else {
+      towerEl.innerHTML = L.empty('▤', 'No one behind the podium yet.',
+        'Ranks four and below appear as more verified records land.');
+    }
+    countEl.textContent = entries.length + ' ranked · ' +
+      entries.filter((e) => e.status === 'verified').length + ' fully verified';
+
+    formulaEl.innerHTML = `<div style="font-weight:800;margin-bottom:10px">@${esc(entries[0].handle)}</div>`
+      + L.formulaHtml(entries[0].stats);
+
+    L.writeSnapshot('global', entries);
+  })();
+
+  /* ---------------- verifier stream ---------------- */
+
+  (async () => {
+    let events = [];
+    try { events = (await L.getOrThrow('/api/activity')).events || []; }
+    catch {
+      streamEl.innerHTML = '<li class="rejected"><span class="tag">offline</span>' +
+        '<span class="what">verifier unreachable — no events to show</span></li>';
+      return;
+    }
+    if (!events.length) {
+      streamEl.innerHTML = '<li><span class="tag" style="color:var(--dim)">idle</span>' +
+        '<span class="what">no submissions yet — the log starts with the first one</span></li>';
+      return;
+    }
+    streamEl.innerHTML = events.map((e, i) => {
+      const who = e.handle ? `<b>@${esc(e.handle)}</b> ` : '';
+      return `<li class="${esc(e.kind)}" style="animation-delay:${Math.min(i * 45, 500)}ms">
+        <span class="tag">${esc(e.kind)}</span>
+        <span class="what">${who}${esc(e.detail)}</span>
+        <span class="when">${esc(ago(e.ts))}</span>
+      </li>`;
+    }).join('');
   })();
 
   /* ---------------- account + submission ---------------- */
@@ -154,83 +367,119 @@
   const statusEl = document.getElementById('submit-status');
   let pendingPayload = null;
 
-  function status(html) { statusEl.style.display = 'block'; statusEl.innerHTML = html; }
+  const say = (html) => { statusEl.innerHTML = html; };
 
   (async () => {
-    const session = await me();
+    const session = await L.me();
     if (session.unreachable) {
-      accountEl.innerHTML = '<p class="lb-note">Server unreachable — sign-in and submissions are down. The board above may also be stale.</p>';
+      accountEl.innerHTML = '<p class="ar-note">Verifier unreachable — sign-in and submissions are ' +
+        'down right now. The board above is showing nothing rather than something stale.</p>';
       return;
     }
     if (!session.signedIn) {
       accountEl.innerHTML = `
-        <p class="lb-note" style="margin-bottom:12px">Sign in with X to rank. One record per account — that's what makes the board sybil-expensive.</p>
-        <button class="btn btn-primary" id="signin-btn">𝕏 Sign in with X</button>`;
-      document.getElementById('signin-btn').addEventListener('click', signIn);
+        <p class="ar-note" style="margin-bottom:12px">Sign in with X to rank. One record per account —
+          that is what makes this board expensive to sybil.</p>
+        <button class="ar-btn primary" id="signin-btn">𝕏 &nbsp;Sign in with X</button>`;
+      document.getElementById('signin-btn').addEventListener('click', L.signIn);
       return;
     }
+    signedInHandle = session.handle;
     accountEl.innerHTML = `
-      <div class="lb-me">${session.avatarUrl ? `<img src="${esc(session.avatarUrl)}" alt="" referrerpolicy="no-referrer">` : ''}@${esc(session.handle)}
-        <a href="profile.html?handle=${encodeURIComponent(session.handle)}" style="margin-left:auto;font-size:12.5px;color:var(--orange2)">Profile →</a></div>
-      <p class="lb-note" style="margin-top:10px">Signed in. Submit your record below — it re-verifies on every submission, and a new chain must extend the last one you sent.
-        <a href="#" id="logout-link" style="color:var(--dim)">(sign out)</a> ·
-        <a href="#" id="delete-link" style="color:var(--dim)">(delete my data)</a></p>`;
-    document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); logout(); });
+      <div style="display:flex;align-items:center;gap:10px">
+        ${face(session, 'ar-face')}
+        <div style="min-width:0">
+          <div style="font-weight:800">@${esc(session.handle)}</div>
+          <a class="ar-note" style="color:var(--orange2)" href="profile.html?handle=${encodeURIComponent(session.handle)}">View public profile →</a>
+        </div>
+      </div>
+      <p class="ar-note" style="margin-top:12px">Every submission re-verifies from scratch, and a new
+        chain must extend the last one you sent.
+        <a href="#" id="logout-link" style="color:var(--dim)">sign out</a> ·
+        <a href="#" id="delete-link" style="color:var(--dim)">delete my data</a></p>`;
+    document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); L.logout(); });
     document.getElementById('delete-link').addEventListener('click', async (e) => {
       e.preventDefault();
-      if (!window.confirm('Delete your account, record, and sprint history from the leaderboard server? Your local extension data is untouched. This cannot be undone.')) return;
-      await window.PTLB.api('/api/me/delete', { method: 'POST' });
+      if (!window.confirm('Delete your account, record, duels and sprint history from the leaderboard server? Your local extension data is untouched. This cannot be undone.')) return;
+      await L.api('/api/me/delete', { method: 'POST' });
       window.location.reload();
     });
     actionsEl.style.display = 'flex';
   })();
 
-  function previewPayload(payload, source) {
+  function preview(payload, source) {
     pendingPayload = payload;
-    const fills = payload.chain.length;
-    const head = String(payload.head || '').slice(0, 12);
-    status(`
-      <div>${source}: <strong>${fills} committed fills</strong>, head <span style="color:var(--orange2)">${esc(head)}…</span></div>
-      <div>claimed ${esc(signed(payload.claim.realizedPnlSol, 3))} ◎ on a ${esc(fmt(payload.claim.startingBalanceSol, 1))} ◎ bankroll — the server will replay and re-price all of it.</div>
-      <button class="btn btn-primary" id="confirm-submit" style="margin-top:10px">Submit to leaderboard</button>`);
+    say(`<div class="ar-console">
+      <div class="ln">${esc(source)}: <b>${payload.chain.length} committed fills</b></div>
+      <div class="ln">head <span class="ok">${esc(String(payload.head).slice(0, 16))}…</span></div>
+      <div class="ln">claims ${esc(signed(payload.claim.realizedPnlSol, 3))} ◎ on a
+        ${esc(fmt(payload.claim.startingBalanceSol, 1))} ◎ bankroll</div>
+      <div class="ln warn">nothing here is trusted until the server replays it</div>
+    </div>
+    <button class="ar-btn primary" id="confirm-submit" style="margin-top:12px;width:100%">Submit to the Arena</button>`);
     document.getElementById('confirm-submit').addEventListener('click', doSubmit);
   }
 
   async function doSubmit() {
     if (!pendingPayload) return;
-    status('Submitting — the server is re-hashing every link and replaying your book…');
-    const { status: code, body } = await submit(pendingPayload);
+    const payload = pendingPayload;
     pendingPayload = null;
+    say(`<div class="ar-console">
+      <div class="ln">re-hashing ${payload.chain.length} links…</div>
+      <div class="ln">replaying the book…</div>
+      <div class="ln warn">re-pricing against market history…</div></div>`);
+    const { status, body } = await L.submit(payload);
     if (body && body.ok) {
-      status(`✓ Accepted: ${body.stats.rounds} rounds, ${esc(signed(body.stats.roiPct, 1, '%'))} ROI, score ${esc(fmt(body.stats.score, 1))}.<br>
-        Prices are now being re-checked against market history — your row shows <strong>VERIFYING…</strong> until that lands.${body.claimMismatch ? '<br>⚠ Your displayed P&L differs from the chain-derived result; the replayed number is what ranks.' : ''}`);
-    } else if (code === 401) {
-      status('You need to sign in with X first — the button above.');
-    } else if (code === 429) {
-      status('Rate limit: six submissions an hour. Take a breath and resubmit later.');
+      say(`<div class="ar-console">
+        <div class="ln ok">chain verified · ${esc(fmt(body.stats.rounds, 0))} closed rounds</div>
+        <div class="ln ok">replayed ROI ${esc(signed(body.stats.roiPct, 1, '%'))} · score ${esc(fmt(body.stats.score, 1))}</div>
+        <div class="ln warn">re-pricing queued — your row reads VERIFYING until it lands</div>
+        ${body.claimMismatch ? '<div class="ln bad">your displayed P&amp;L differs from the chain replay; the replayed number is what ranks</div>' : ''}
+        ${body.sprint && body.sprint.rounds ? `<div class="ln ok">sprint ${esc(body.sprint.weekId)}: ${esc(String(body.sprint.rounds))} rounds counted</div>` : ''}
+      </div>
+      <p class="ar-note" style="margin-top:10px">Reload in a minute to see your row.</p>`);
+    } else if (status === 401) {
+      say('<p class="ar-note">Sign in with X first — the button above.</p>');
+    } else if (status === 429) {
+      say('<p class="ar-note">Rate limit: six submissions an hour. Take a breath and resubmit later.</p>');
     } else {
-      const reason = body && body.reason ? body.reason : 'server-error';
-      status(`✗ Rejected: <strong>${esc(reason)}</strong>${reason === 'chain-replaced' ? ' — a submission must extend the chain you already committed, not replace it. That includes after a local reset.' : ''}`);
+      const reason = (body && body.reason) || 'server-error';
+      const extra = reason === 'chain-replaced'
+        ? ' A submission must extend the chain you already committed, not replace it — that includes after a local reset. Delete your server record first if you meant to start over.'
+        : reason === 'chain-invalid'
+          ? ' One or more links did not re-hash to their committed value.'
+          : reason === 'bankroll-changed'
+            ? ' Your declared starting bankroll is the denominator of every return on this board, so it is pinned at your first submission. Change it in the dashboard if you like, then delete your server record here and submit again from scratch.'
+            : reason === 'chain-shrunk'
+              ? ' The submitted chain is shorter than the one already committed.'
+              : '';
+      say(`<div class="ar-console"><div class="ln bad">rejected: ${esc(reason)}</div></div>
+        <p class="ar-note" style="margin-top:8px">${esc(extra)}</p>`);
     }
   }
 
   document.getElementById('sync-btn').addEventListener('click', async () => {
-    status('Asking the extension…');
-    const ping = await bridgePing();
+    say('<div class="ar-console"><div class="ln">asking the extension…</div></div>');
+    const ping = await L.bridgePing();
     if (!ping) {
-      status('Extension not detected. If you installed from a release zip (unpacked), Chrome gives it a machine-specific id this site can\'t reach — use <strong>Export record (JSON)</strong> in the dashboard\'s Leaderboard tab and upload the file here instead.');
+      say('<p class="ar-note">Extension not detected. If you installed from a release zip (unpacked), ' +
+        'Chrome gives it a machine-specific id this site cannot reach — use <strong>Export record ' +
+        '(JSON)</strong> in the dashboard\'s Leaderboard tab and upload the file here instead.</p>');
       return;
     }
     if (!ping.bridgeEnabled) {
-      status('The extension answered, but <strong>Site sync is off</strong>. Enable it in the dashboard → Leaderboard → Site sync, then click Sync again. Off is the default on purpose.');
+      say('<p class="ar-note">The extension answered, but <strong>Site sync is off</strong>. Turn it on ' +
+        'in the dashboard → Leaderboard → Site sync, then click Sync again. Off is the default on purpose.</p>');
       return;
     }
-    const record = await bridgeGetRecord();
+    const record = await L.bridgeGetRecord();
     if (!record || !record.ok) {
-      status('The extension declined: ' + esc(record && record.reason || 'no response') + (record && record.reason === 'chain-empty' ? ' — make some paper trades first; your first fill anchors the chain.' : ''));
+      const reason = (record && record.reason) || 'no response';
+      say('<p class="ar-note">The extension declined: <strong>' + esc(reason) + '</strong>' +
+        (reason === 'chain-empty' ? ' — make some paper trades first; your first fill anchors the chain.' : '') + '</p>');
       return;
     }
-    previewPayload(record.payload, 'From extension');
+    preview(record.payload, 'From extension');
   });
 
   document.getElementById('upload-input').addEventListener('change', (event) => {
@@ -240,10 +489,11 @@
     reader.onload = () => {
       try {
         const payload = JSON.parse(String(reader.result));
-        if (!payload || !Array.isArray(payload.chain)) throw new Error('not a record');
-        previewPayload(payload, 'From file');
+        if (!payload || !Array.isArray(payload.chain) || !payload.claim) throw new Error('not a record');
+        preview(payload, 'From file');
       } catch {
-        status('That file isn\'t a PaperTrench record export. Use Export record (JSON) in the dashboard\'s Leaderboard tab.');
+        say('<p class="ar-note">That file is not a PaperTrench record export. Use <strong>Export record ' +
+          '(JSON)</strong> in the dashboard\'s Leaderboard tab.</p>');
       }
     };
     reader.readAsText(file);

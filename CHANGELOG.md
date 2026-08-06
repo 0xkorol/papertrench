@@ -39,9 +39,8 @@ whether any of this is real; that is what it is for.
   toggles off, nothing is injected anywhere (docs/PERMISSIONS.md has the
   full audit).
 
-The leaderboard goes live — the social half of PaperTrench, operated
-entirely through the website so the extension stays lightweight and
-disconnected.
+The Arena — PaperTrench gets a social half, operated entirely through the
+website so the extension stays lightweight, open-source and disconnected.
 
 - **A real leaderboard server** (`server/`, Cloudflare Workers + D1). Your
   submitted chain is re-hashed link by link, replayed from the raw fills,
@@ -52,12 +51,40 @@ disconnected.
   ranked record per verified account. Rank is process-weighted: ROI on
   your declared bankroll × sustained rounds × discipline (revenge
   re-entries and drawdown cost you). Five closed rounds minimum; one
-  lottery ticket does not top this board.
+  lottery ticket does not top this board. A podium for the top three, a
+  timing tower for everyone else, and your own row highlighted wherever it
+  lands.
+- **Watch it verify.** The hero of the board is the verifier's live output:
+  chains accepted, records verified, submissions rejected, as they happen.
+  "We check everything" is a claim; watching the checks is evidence.
+  Rejections are shown **without a handle** — an automated verdict can fire
+  on thin candle data as easily as on fraud, and must never publicly brand
+  a named person a cheat.
 - **The weekly Trench Sprint** — UTC Monday-to-Monday, only rounds opened
   AND closed inside the window, scored by ROI on window-start equity so a
   10 ◎ bankroll races a whale evenly. Your normal practice is your entry.
-- **Public profiles** with verification status stated plainly (verified /
-  verifying / partial data), chain head, and sprint history.
+- **Duels.** Challenge anyone with a share link: one opponent, one shared
+  clock, 1 hour to 1 week. The interesting part is settlement — a duel
+  settles only from a chain submitted AFTER the window closes. The chain is
+  append-only and extend-only, so you cannot delete a losing round; that
+  leaves exactly one trick, submitting while you are up and then going
+  quiet, and post-close settlement kills it. Refusing to submit forfeits
+  instead of freezing a flattering snapshot. Live standings during the
+  window are shown and labeled provisional; they decide nothing. And
+  because the window is just a slice of the same chain, there is no duel
+  book to inflate.
+- **Achievements, on the house doctrine.** Badges derived from your
+  committed fills — and, exactly as in the extension, **none for profit,
+  win streaks, or volume.** Losses taken without chasing the mint that took
+  them. A drawdown you actually traded back from. Sizing that did not grow
+  after a loss. Every badge shows the evidence that earned it, and a badge
+  you could earn by never being tested is not a badge: "Clean Hands" counts
+  losses not chased, because a record with no losses has demonstrated
+  nothing about revenge discipline.
+- **Public profiles** with verification stated plainly (verified /
+  verifying / partial data), the chain head, the score broken down into its
+  three terms, the badge case, sprint history, and a share card you can
+  download or copy.
 - **Two ways to submit, both yours to initiate.** Export your record as a
   JSON file from the dashboard's Leaderboard tab, or flip the new
   **Site sync** toggle (off by default) and click Sync on the site — the
@@ -65,6 +92,11 @@ disconnected.
 - **Self-serve deletion** on the leaderboard page, and an updated privacy
   policy that states the split precisely: extension fully local, website
   leaderboard opt-in only.
+- **The homepage stopped pretending.** Its leaderboard card used to show
+  five invented traders and a ticker of random hex dressed as hash links.
+  Both now render real standings and real verifier events — and say so
+  plainly when there are none. A product whose whole claim is that its
+  numbers are never wrong cannot open with fictional ones.
 
 ## v2.11.1 — 2026-08-05
 
