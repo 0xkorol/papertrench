@@ -210,16 +210,16 @@ verifier API — unlike the extension work above, which is committed but not
 yet released. The two were sharing one "Unreleased" heading, which made a
 shipped feature and an untagged one look like the same state.
 
-> **Two exceptions, honestly flagged.** A GitHub Pages incident has held the
+> **One exception, honestly flagged.** A GitHub Pages incident has held the
 > *site* deploy since 06:36 UTC today (`arena.js` in production still carries
 > that timestamp; Pages has been in major outage with three failed runs and one
-> hung). The **worker/API half of everything below is deployed** — but two
-> bullets describe *page* behaviour that is in `main` and not yet on
-> papertrench.com: the cross-domain sign-in message ("the page now tells you
-> that is what happened") and the clan roster's *not counted* label. They go
-> live with the next successful Pages run. A heading that promises "you can use
-> this today" has to mean it, so they are named here rather than left to read
-> as shipped.
+> hung). Everything else below is live, including the clan roster's *not
+> counted* label — that one shipped before the outage. The single bullet
+> describing *page* behaviour that is in `main` and not yet on papertrench.com
+> is the cross-domain sign-in message ("the page now tells you that is what
+> happened"); it goes live with the next successful Pages run. A heading that
+> promises "you can use this today" has to mean it, so the exception is named
+> here rather than left to read as shipped.
 
 The Arena — PaperTrench gets a social half, operated entirely through the
 website so the extension stays lightweight, open-source and disconnected.
