@@ -23,6 +23,22 @@ npx wrangler d1 execute papertrench --remote \
   --command "ALTER TABLE records ADD COLUMN badges_json TEXT"
 ```
 
+**Clans add three tables** (`clans`, `clan_members`, `clan_entries`) and no
+columns to existing ones, so an already-deployed database needs nothing but a
+re-run of the idempotent schema:
+
+```bash
+npx wrangler d1 execute papertrench --remote --file=schema.sql
+```
+
+> **Run this BEFORE `wrangler deploy`, not after.** The `[TAG]` chip on the
+> leaderboard and Sprint comes from a `LEFT JOIN clan_members` inside those
+> boards' own queries, and SQLite fails a statement that names a missing table
+> at prepare time — a LEFT JOIN does not degrade to nulls, it errors. Deploying
+> the Worker against an un-migrated database therefore takes down `/api/
+> leaderboard` and `/api/sprint/current`, not just the clan routes. Verified
+> failure: `no such table: clan_members`.
+
 ### Why workers.dev and not api.papertrench.com
 
 papertrench.com's nameservers are at GoDaddy (`domaincontrol.com`), and
@@ -94,7 +110,7 @@ serve the previous version briefly and produce a confusing mix.
 
 ```bash
 API=https://papertrench-api.onerobby.workers.dev
-for p in /api/leaderboard /api/sprint/current /api/activity; do
+for p in /api/leaderboard /api/sprint/current /api/activity /api/clans; do
   for i in 1 2 3 4 5; do
     curl -s -o /dev/null -w "$p %{http_code}\n" -H "Origin: https://papertrench.com" "$API$p"
   done
@@ -119,6 +135,18 @@ done   # every line must read 200
       both sides show as provisional until the window closes
 - [ ] A duel whose window has closed shows `awaiting` until a post-close
       submission lands, then settles with a plain-language reason
+- [ ] `/api/leaderboard` still returns 200 after the clan migration — this is
+      the check that catches a Worker deployed ahead of the schema
+- [ ] Found a clan on clans.html; the `[TAG]` appears beside your handle on
+      the leaderboard once the 60s edge cache expires
+- [ ] The new clan reads **forming · 1 of 5**, with no score anywhere — not a
+      zero, on the board or the clan page
+- [ ] Joining with the invite code from a second X account works, and joining
+      a second clan is refused `already-in-a-clan`
+- [ ] A member's clan contribution starts at 0 rounds even when their record
+      already has hundreds — the since-join rule, visible on the clan page
+- [ ] Leaving as founder passes the clan to the longest-standing member;
+      leaving as the last member disbands it (`/api/clan?tag=` then 404s)
 
 ## Costs, honestly
 

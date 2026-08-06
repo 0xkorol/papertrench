@@ -110,8 +110,14 @@ function side(player, window, now) {
     entry,
     submittedAt,
     // Provisional while the window runs; final once a post-close submission
-    // has landed. Anything else cannot settle.
-    final: Boolean(entry) && submittedAt >= window.endTs,
+    // has landed AND survived re-pricing. Settlement writes a permanent
+    // result, and a record the re-pricer could not check takes no position
+    // here, exactly as on the boards — attest.js is public, so a fabricated
+    // chain of unlisted mints hashes fine and lands 'partial', which must
+    // not be a way to win a duel. Honest timing is safe: pricing completes
+    // in minutes, and forfeits only fire once the grace period is up.
+    final: Boolean(entry) && submittedAt >= window.endTs
+      && player.status === 'verified',
     provisional: Boolean(entry) && !closed,
     missing: !entry,
   };
@@ -127,15 +133,15 @@ function side(player, window, now) {
 function settle(a, b) {
   if (!a.final && !b.final) {
     return { decided: true, winner: null, outcome: 'no-contest',
-             reason: 'Neither player submitted a record after the window closed, so there is nothing to compare.' };
+             reason: 'Neither player filed a verified record after the window closed, so there is nothing to compare.' };
   }
   if (a.final && !b.final) {
     return { decided: true, winner: a.handle, outcome: 'forfeit',
-             reason: `${b.handle} never submitted a final record after the window closed.` };
+             reason: `${b.handle} never filed a verified final record after the window closed.` };
   }
   if (b.final && !a.final) {
     return { decided: true, winner: b.handle, outcome: 'forfeit',
-             reason: `${a.handle} never submitted a final record after the window closed.` };
+             reason: `${a.handle} never filed a verified final record after the window closed.` };
   }
 
   const diff = a.entry.roiPct - b.entry.roiPct;
@@ -204,8 +210,8 @@ function view(duel, challenger, opponent, now) {
     // What the UI should tell players to do next, when there is something to do.
     awaiting: closed && !result
       ? (a.final || b.final
-        ? `${a.final ? b.handle : a.handle} still needs to submit a record from after the window closed.`
-        : 'Both players still need to submit a record from after the window closed.')
+        ? `${a.final ? b.handle : a.handle} still needs a verified record from after the window closed.`
+        : 'Both players still need a verified record from after the window closed.')
       : null,
   };
 }

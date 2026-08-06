@@ -38,6 +38,21 @@ inflate, and a round counts only if it opened and closed inside the window.
 - **Weekly Trench Sprint** — the UTC Monday-to-Monday slice.
 - **Duels** — a 1-hour-to-1-week head-to-head slice, started when the invite
   is accepted so both players face the same clock.
+- **Clans** — the same slices again, intersected with each member's join
+  date (`core/clan.js`).
+
+### Clans store a roster, never a record
+
+`clan_members.joined_at` is the only new fact clans introduce, and its whole
+job is to bound an existing chain: a member's contribution window opens when
+they joined, so a lifetime record cannot be recruited in and donated, and a
+round counts for exactly one clan. A clan's score is the mean of its five best
+member scores and it needs five qualified members to rank at all — summing
+would make it a recruiting contest, and averaging the whole roster would charge
+a clan for every beginner it takes in. The property that makes this safe to
+play: **cutting a struggling member can never raise the score**, only cost the
+clan its five-member minimum. Under five, the clan has no score rather than a
+zero.
 
 ### The duel settlement rule
 
@@ -80,6 +95,7 @@ core/     pure logic — no fetch, no storage, runs under `node --test`
   window.js        the shared window slice every mode is built from
   sprint.js        ISO-week windows and sprint entries
   duel.js          head-to-head state machine and the settlement rule
+  clan.js          since-join contribution windows, top-five aggregation
   achievements.js  chain-derived badges, process-only by doctrine
   submission.js    the trust pipeline above, as pure orchestration
 worker/   Cloudflare adapters — routing, D1, X OAuth (PKCE), sessions,

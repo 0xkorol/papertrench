@@ -196,10 +196,29 @@ test('a rejected record cannot hide inside a roster', () => {
   assert.ok(!s.counting.some((m) => m.handle === 'rejected_one'));
 });
 
-test('pending and partial records still count — verification tier is not a filter', () => {
-  const roster = [90, 80, 70, 60, 50].map((v, i) =>
-    member('p' + i, entryOf(v, 10), { status: i % 2 ? 'pending' : 'partial' }));
-  assert.equal(C.standing(roster).ranked, true);
+test('below verified, a member contributes NOTHING — not score, not volume', () => {
+  // This test used to assert the opposite ("verification tier is not a
+  // filter"), faithfully mirroring the season board of its day. The board
+  // moved: attest.js is public, so fabricated fills hash fine, and a chain
+  // of unlisted mints re-prices to all 'no-data' → 'partial' with nothing
+  // disproved. If partial counted here, the clan mean would be the
+  // laundering path for exactly the records the boards stopped ranking.
+  const five = [90, 80, 70, 60, 50].map((v, i) => member('v' + i, entryOf(v, 10)));
+  const s0 = C.standing(five);
+
+  const fabricated = member('fab', entryOf(9999, 40), { status: 'partial' });
+  const unpriced = member('pend', entryOf(500, 20), { status: 'pending' });
+  const s = C.standing([...five, fabricated, unpriced]);
+
+  assert.equal(s.score, s0.score, 'a partial monster record must not move the mean');
+  assert.ok(!s.counting.some((m) => m.handle === 'fab' || m.handle === 'pend'));
+  assert.equal(s.rounds, s0.rounds, 'nor pad the printed activity lines');
+  assert.equal(s.pnlSol, s0.pnlSol);
+  assert.equal(s.qualified, 5, 'qualified counts records that can rank, only');
+  assert.equal(s.roster, 7, 'they are still on the roster — labeled, not hidden');
+
+  // And a below-verified record cannot be the qualifying fifth member either.
+  assert.equal(C.standing([...five.slice(0, 4), fabricated]).ranked, false);
 });
 
 test('the five that make the number are named, best first', () => {

@@ -97,6 +97,23 @@ website so the extension stays lightweight, open-source and disconnected.
   Both now render real standings and real verifier events — and say so
   plainly when there are none. A product whose whole claim is that its
   numbers are never wrong cannot open with fictional ones.
+- **Only fully verified records take a position — anywhere.** Reported by
+  a user who edited an exported file to hand themselves an absurd P&L: the
+  hash chain proves a history is *consistent*, not that it *happened*, and
+  attest.js is open source, so a fabricated history can hash perfectly.
+  Re-pricing against real market data is the check that catches it — which
+  made a record the re-pricer *could not* check (`partial`: unlisted
+  mints, thin candle data) exactly the record a fabricator would choose.
+  Now the season board, the Sprint, clan means and their volume lines, and
+  duel settlement all count **verified records only**; anything less shows
+  on your own profile, labeled, and decides nothing. Closed by the same
+  report: a first submission can no longer declare a bankroll smaller than
+  its own fills prove spending (`bankroll-too-small` — you cannot have
+  spent 4 ◎ from a 0.01 ◎ balance).
+- **Provenance note.** The clan backend (worker routes, `core/clan.js`,
+  schema) reached `main` across 710aa1e, bfd2b65 and this commit; 710aa1e's
+  message describes only the ranking-security work it was meant to carry.
+  The clan UI lands separately.
 
 ## v2.11.1 — 2026-08-05
 

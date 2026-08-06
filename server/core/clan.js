@@ -180,8 +180,15 @@ function memberEntry(links, startingSol, joinedAt, window) {
  *
  * `members` is [{ handle, userId, status, joinedAt, entry }] where `entry` is
  * `memberEntry` output (or null). `status` is the verification tier of that
- * member's own record — a rejected record ranks nowhere, and it does not get
- * to rank by hiding inside a clan either.
+ * member's own record, and only 'verified' contributes — the boards' rule
+ * (worker: WHERE r.status = 'verified'), enforced here for the same reason:
+ * attest.js is open source, so fabricated fills can carry valid hashes, and
+ * a chain of unlisted mints re-prices to all 'no-data' → 'partial' with
+ * nothing disproved. A tier below verified is the one class of record the
+ * server could not check; admitting it to the clan mean — or to the clan
+ * page's printed volume lines — would make clans the laundering path for
+ * exactly the records the boards stopped ranking. Unverified members still
+ * appear on the roster, labeled; they take no position in any aggregate.
  *
  * An unranked clan gets `score: null`, never a zero. Zero is a result; not
  * having fielded five qualified members yet is an absence, and this product
@@ -193,7 +200,7 @@ function standing(members, options) {
     ? Number(opts.minRounds) : MIN_SEASON_ROUNDS;
   const roster = Array.isArray(members) ? members : [];
 
-  const eligible = roster.filter((m) => m && m.entry && m.status !== 'rejected');
+  const eligible = roster.filter((m) => m && m.entry && m.status === 'verified');
   const active = eligible.filter((m) => Number(m.entry.rounds) > 0);
   const qualified = eligible
     .filter((m) => (Number(m.entry.rounds) || 0) >= minRounds)

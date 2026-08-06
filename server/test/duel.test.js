@@ -106,7 +106,7 @@ test('going quiet after a good start forfeits — the snapshot is not a result',
   const result = D.settle(D.side(sniper, WINDOW, now), D.side(honest, WINDOW, now));
   assert.equal(result.winner, 'submits_after');
   assert.equal(result.outcome, 'forfeit');
-  assert.match(result.reason, /never submitted a final record/);
+  assert.match(result.reason, /never filed a verified final record/);
 });
 
 test('a forfeit cannot be STOLEN by filing first at the bell', async () => {
@@ -135,7 +135,7 @@ test('a forfeit cannot be STOLEN by filing first at the bell', async () => {
   };
   const gap = D.view(duel, quick, betterNotYet, WINDOW.endTs + 5 * 60000);
   assert.equal(gap.result, null, 'one filing must not settle the duel');
-  assert.match(gap.awaiting, /traded_better still needs to submit/);
+  assert.match(gap.awaiting, /traded_better still needs a verified record/);
 
   // Twenty minutes later they file, and the better trader wins on returns —
   // not the faster one.
@@ -266,7 +266,7 @@ test('after the close with no final records, the view asks for them instead of i
   const v = D.view(duel, a, b, WINDOW.endTs + H);
   assert.equal(v.status, D.STATUS.AWAITING);
   assert.equal(v.result, null);
-  assert.match(v.awaiting, /submit a record from after the window closed/);
+  assert.match(v.awaiting, /verified record from after the window closed/);
 });
 
 test('a duel nobody settles becomes a no-contest instead of hanging forever', async () => {
@@ -319,4 +319,30 @@ test('a stored entry and a freshly derived one produce the identical side', asyn
     WINDOW, now
   );
   assert.deepEqual(stored, derived);
+});
+
+test('an unverified record cannot file final — partial is not a way to win a duel', async () => {
+  // attest.js is public: a fabricated chain of unlisted mints hashes fine
+  // and re-prices to 'partial' (all no-data, nothing disproved). If that
+  // counted as filing, a fabricator would beat every honest record here —
+  // and settlement persists, so the win would read the same forever.
+  const fabricator = await mixedPlayer('fabricator', 1);
+  fabricator.status = 'partial';
+  fabricator.submittedAt = WINDOW.endTs + H;      // filed post-close, on time
+  const honest = await mixedPlayer('honest_one', 2);
+  honest.submittedAt = WINDOW.endTs + H;
+
+  const inGrace = WINDOW.endTs + 2 * H;
+  const fab = D.side(fabricator, WINDOW, inGrace);
+  assert.equal(fab.final, false, 'a partial record must not be a final filing');
+
+  // Inside the grace window nothing settles on it — their pricing may still
+  // genuinely be running. Once grace is up, the unverified side forfeits.
+  const duel = { code: 'TRENCH-1234', createdAt: START, acceptedAt: WINDOW.startTs,
+                 settledAt: null, startTs: WINDOW.startTs, endTs: WINDOW.endTs };
+  assert.equal(D.view(duel, fabricator, honest, inGrace).result, null,
+    'an in-flight verification must not be rushed into a forfeit');
+  const after = D.view(duel, fabricator, honest, WINDOW.endTs + D.SETTLE_GRACE_MS + H);
+  assert.equal(after.result.winner, 'honest_one');
+  assert.equal(after.result.outcome, 'forfeit');
 });
