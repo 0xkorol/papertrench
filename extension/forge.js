@@ -153,7 +153,11 @@
         const det = adapter && typeof adapter.detect === 'function' ? adapter.detect() : null;
         if (det && det.address) {
           facts.mint = det.address;
-          facts.chain = det.kind === 'pair' ? '' : 'solana';
+          // Adapters name the chain themselves since the multichain pass
+          // (d51210a). Trust what the adapter says over assuming Solana — a
+          // banner brief that calls a Base token "solana" is a wrong fact
+          // handed to the model.
+          facts.chain = det.chain || (det.kind === 'pair' ? '' : 'solana');
         }
       }
     } catch (_) { /* adapters never block the panel */ }
@@ -468,9 +472,17 @@
       const brief = res.brief;
       if (brief && brief.subject && !subj.value) subj.value = brief.subject;
       subj.placeholder = 'Describe the art, or leave it to the narrative AI';
-      if (brief && Array.isArray(brief.sources) && brief.sources.length) {
+      // Citations are MODEL output, and the model was fed page text an
+      // attacker wrote (a token's own name and description). The scheme is
+      // re-checked at the sink as well as at the parse boundary: this is the
+      // one place in Forge where untrusted text becomes something clickable.
+      const cites = (brief && Array.isArray(brief.sources) ? brief.sources : [])
+        .map((u) => F.safeHttpUrl(u))
+        .filter(Boolean)
+        .slice(0, 4);
+      if (cites.length) {
         srcLine.textContent = 'Read: ';
-        brief.sources.slice(0, 4).forEach((u, i) => {
+        cites.forEach((u, i) => {
           const a = document.createElement('a');
           a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer';
           a.textContent = `[${i + 1}]`;

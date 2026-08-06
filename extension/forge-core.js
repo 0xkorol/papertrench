@@ -234,6 +234,26 @@
     return out;
   }
 
+  /**
+   * The only URL that may ever reach an href.
+   *
+   * Citations arrive from a MODEL, and a model's output is attacker-influenced
+   * here by construction: the token name and description we feed it come off
+   * a dex page, and whoever launched the coin wrote those. A citation is
+   * therefore untrusted text that we render as something clickable — so it is
+   * checked for scheme, not merely for looking like a link. `javascript:` and
+   * `data:` are the two that turn a citation into code wearing our chrome.
+   */
+  function safeHttpUrl(raw) {
+    try {
+      const u = new URL(String(raw == null ? '' : raw));
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+      return u.href;
+    } catch (_) {
+      return null;   // relative, malformed, or not a URL at all
+    }
+  }
+
   /* -------------------- reading the box in front of the user -------------------- */
 
   /**
@@ -561,7 +581,8 @@
           if (typeof part.text === 'string') text += part.text;
           const notes = Array.isArray(part.annotations) ? part.annotations : [];
           for (const note of notes) {
-            if (note && note.url) sources.push(note.url);
+            const url = note && safeHttpUrl(note.url);
+            if (url) sources.push(url);
           }
         }
       }
@@ -584,7 +605,7 @@
     // citation the user can click.
     if (Array.isArray(j.citations)) {
       for (const c of j.citations) {
-        const url = typeof c === 'string' ? c : (c && c.url) || '';
+        const url = safeHttpUrl(typeof c === 'string' ? c : (c && c.url) || '');
         if (url) sources.push(url);
       }
     }
@@ -840,7 +861,7 @@
     VERSION,
     ASSET_KINDS, DEFAULT_KIND, STYLES, DEFAULT_STYLE, styleById,
     BRAINS, HANDS, brainById, handsById,
-    redact,
+    redact, safeHttpUrl,
     readSpecFromText, readKindFromText, resolveSpec, planFit, requestSize,
     buildResearchMessages, parseBrief, buildImagePrompt,
     buildResearchRequest, parseResearch,
