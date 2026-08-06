@@ -62,9 +62,24 @@ function readCookie(request, name) {
   return null;
 }
 
+/**
+ * Session cookie, correct under both deployment topologies.
+ *
+ * Same-site (api.papertrench.com under papertrench.com, which needs the zone
+ * on Cloudflare) can use SameSite=Lax and scope the cookie to the parent
+ * domain. A workers.dev deploy is CROSS-site to the pages, where Lax would
+ * silently drop the session on every fetch and sign-in would appear to work
+ * and then not — so there it must be None.
+ *
+ * SameSite=None re-opens the CSRF door that Lax closes, which is why every
+ * state-changing route independently enforces the Origin allowlist
+ * (requireOrigin in worker/index.js). Setting COOKIE_DOMAIN is what selects
+ * the stricter mode.
+ */
 function cookieHeader(name, value, maxAgeSec, env) {
   const domain = env.COOKIE_DOMAIN ? `; Domain=${env.COOKIE_DOMAIN}` : '';
-  return `${name}=${value}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; Secure; SameSite=Lax${domain}`;
+  const sameSite = env.COOKIE_DOMAIN ? 'Lax' : 'None';
+  return `${name}=${value}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; Secure; SameSite=${sameSite}${domain}`;
 }
 
 /** The signed-in user for a request, or null. */

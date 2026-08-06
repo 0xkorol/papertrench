@@ -45,6 +45,23 @@ function corsHeaders(request, env) {
   return headers;
 }
 
+/**
+ * Every state-changing request must come from a page we ship.
+ *
+ * With a same-site deploy, SameSite=Lax already blocks cross-site POSTs. With
+ * a workers.dev deploy the session cookie has to be SameSite=None, so the
+ * browser WILL attach it to a cross-site POST and this check becomes the only
+ * thing standing between a random page and a submission made in the visitor's
+ * name. Enforced for both topologies rather than the one that needs it —
+ * a guard that only exists in one configuration is a guard nobody remembers
+ * when the configuration changes.
+ */
+function requireOrigin(request, env) {
+  const origin = request.headers.get('Origin') || '';
+  const allowed = [env.SITE_ORIGIN, env.SITE_ORIGIN_ALT].filter(Boolean);
+  return allowed.includes(origin);
+}
+
 function json(data, status, extra) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
@@ -74,7 +91,13 @@ async function allowRate(env, key, perHour) {
 async function edgeCached(request, ctx, ttlSec, compute) {
   const cache = caches.default;
   const hit = await cache.match(request);
-  if (hit) return hit;
+  // A Response handed back by the Cache API has IMMUTABLE headers, and the
+  // caller applies CORS headers to whatever this returns. Returning the cached
+  // object directly therefore threw on every cache hit — the first request
+  // after a deploy succeeded (a miss) and the next sixty seconds of requests
+  // died as Worker error 1101, which is exactly the shape that survives a
+  // smoke test run against a cold cache. Hand back a mutable copy.
+  if (hit) return new Response(hit.body, hit);
   const response = await compute();
   if (response.status === 200) {
     const cacheable = new Response(response.clone().body, response);
@@ -553,6 +576,14 @@ export default {
 
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
+    // The OAuth callback is a top-level navigation from x.com and carries no
+    // Origin; everything else that changes state must prove where it came from.
+    if (request.method === 'POST' && !requireOrigin(request, env)) {
+      const denied = json({ ok: false, reason: 'bad-origin' }, 403);
+      for (const [key, value] of Object.entries(cors)) denied.headers.set(key, value);
+      return denied;
+    }
+
     let response;
     try {
       if (path === '/api/health') response = json({ ok: true });
@@ -602,7 +633,17 @@ export default {
       response = json({ ok: false, reason: 'server-error' }, 500);
     }
 
-    for (const [key, value] of Object.entries(cors)) response.headers.set(key, value);
+    // Belt and braces: if any future response arrives with immutable headers,
+    // fall back to a fresh copy rather than throwing a 1101 at the visitor.
+    // Set-Cookie is preserved by copying onto the existing Headers object,
+    // which a `new Headers(res.headers)` round-trip would fold into one value.
+    try {
+      for (const [key, value] of Object.entries(cors)) response.headers.set(key, value);
+    } catch {
+      const copy = new Response(response.body, response);
+      for (const [key, value] of Object.entries(cors)) copy.headers.set(key, value);
+      return copy;
+    }
     return response;
   },
 

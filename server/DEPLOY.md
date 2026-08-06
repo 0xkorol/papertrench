@@ -10,7 +10,7 @@ cd server
 npx wrangler login
 npx wrangler d1 create papertrench
 # → paste the printed database_id into wrangler.toml (database_id = "…")
-npx wrangler d1 execute papertrench --file=schema.sql --remote
+npx wrangler d1 execute papertrench --remote --file=schema.sql
 npx wrangler secret put SESSION_SECRET     # paste output of: openssl rand -hex 32
 ```
 
@@ -23,19 +23,30 @@ npx wrangler d1 execute papertrench --remote \
   --command "ALTER TABLE records ADD COLUMN badges_json TEXT"
 ```
 
-The `[[routes]]` block in wrangler.toml binds `api.papertrench.com/*`. For
-that to resolve, add a DNS record in the papertrench.com Cloudflare zone:
-`api` → AAAA `100::` (proxied) — a placeholder the Worker route intercepts.
-(The zone must be on Cloudflare; if the site stays on GitHub Pages that's
-fine — only the `api` subdomain routes to the Worker.)
+### Why workers.dev and not api.papertrench.com
+
+papertrench.com's nameservers are at GoDaddy (`domaincontrol.com`), and
+Cloudflare can only route a zone it hosts — so a Worker route on
+`api.papertrench.com` is not available without moving the whole domain's DNS,
+which would take the live GitHub Pages site with it. The API therefore answers
+on `papertrench-api.<subdomain>.workers.dev`, which needs no DNS at all.
+
+The cost is that the API is **cross-site** to the pages, which is why
+`COOKIE_DOMAIN` is deliberately unset (auth.js then selects `SameSite=None`,
+because `Lax` would silently drop the session on every cross-site fetch) and
+why every state-changing request independently enforces the Origin allowlist.
+
+To move to `api.papertrench.com` later, no code changes are needed: put the
+zone on Cloudflare, add a `[[routes]]` block, set `COOKIE_DOMAIN`, and change
+the one `API` constant in `site/arena.js`.
 
 ## 2. X (Twitter) OAuth app
 
 1. <https://developer.x.com> → create a project + app (free tier is fine —
    the server only calls `GET /2/users/me` at sign-in).
 2. User authentication settings:
-   - Type: **Public client** (the Worker uses PKCE; no client secret needed)
-   - Callback URI: `https://api.papertrench.com/api/auth/x/callback`
+   - Type: **Public client** (PKCE; there is no client secret and the flow does not use one)
+   - Callback URI: `https://papertrench-api.onerobby.workers.dev/api/auth/x/callback`
    - Website: `https://papertrench.com`
    - Scopes: `users.read tweet.read` (X requires tweet.read for /users/me)
 3. Paste the OAuth 2.0 Client ID into `wrangler.toml` → `X_CLIENT_ID`.
@@ -44,7 +55,7 @@ fine — only the `api` subdomain routes to the Worker.)
 
 ```bash
 npx wrangler deploy
-curl https://api.papertrench.com/api/health   # → {"ok":true}
+curl https://papertrench-api.onerobby.workers.dev/api/health   # → {"ok":true}
 ```
 
 The cron trigger (every minute) starts draining pricing work automatically;
@@ -70,6 +81,26 @@ record to a PNG the user downloads or copies, which is how traders actually
 post results anyway.
 
 ## 5. Smoke checklist (after deploy)
+
+**Hit every edge-cached route at least three times.** This is not padding. The
+first request after a deploy is a cache MISS and takes a different code path
+from every request after it; a bug that only appears on cache hits will pass a
+single-shot smoke test and then break the site for the next sixty seconds of
+real visitors. That is exactly what shipped once already — `caches.default`
+hands back a Response with immutable headers, the CORS pass then threw, and
+every hit died as Worker error 1101 while the cold-cache smoke test read
+green. Wait ~15s after `wrangler deploy` before judging results, too: edges
+serve the previous version briefly and produce a confusing mix.
+
+```bash
+API=https://papertrench-api.onerobby.workers.dev
+for p in /api/leaderboard /api/sprint/current /api/activity; do
+  for i in 1 2 3 4 5; do
+    curl -s -o /dev/null -w "$p %{http_code}\n" -H "Origin: https://papertrench.com" "$API$p"
+  done
+done   # every line must read 200
+```
+
 
 - [ ] `GET /api/health` returns ok over the custom domain
 - [ ] Sign in with X on papertrench.com/leaderboard.html round-trips and
