@@ -3,7 +3,25 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
-## Unreleased
+## v3.0.0 — 2026-08-06
+
+A major version because the product gained a second asset class. Perps can
+take your whole position in a single move, which is a different lesson from
+spot and deserves to be announced as one — so the perps notes below lead with
+what is *not* modelled yet. The version also carries the extension half of the
+Arena, Forge, Turbo II, market-cap alerts, and chart take-profit/stop orders.
+
+Two things worth stating up front. **Older attestation chains keep verifying** —
+the record format now commits which chain a fill belongs to, and the deployed
+verifier accepts both the old and new formats, so nobody's submitted history is
+invalidated. And **multichain does not ship in this release**; see What's next.
+
+- **The Game tab actually shows up now.** v2.11.0 wired the tab's button,
+  content, and renderer — but not the one hardcoded list that controls
+  section visibility, so the tab rendered into an invisible container and
+  the screen stayed empty. One line, plus a generic test so no future tab
+  can repeat it. (This was written up as "v2.11.1", which was never
+  released; it ships here.)
 
 **Paper perps on Hyperliquid and Jupiter.** Leverage, on the venues you
 actually use, with the venue's own costs. This is the first release with an
@@ -387,14 +405,6 @@ website so the extension stays lightweight, open-source and disconnected.
   instead of pretending you never signed in; Chrome, Edge and Brave hold the
   session meanwhile. Moving the API onto papertrench.com fixes it properly
   and is a DNS change we have not made yet.
-
-## v2.11.1 — 2026-08-05
-
-- **The Game tab actually shows up now.** v2.11.0 wired the tab's button,
-  content, and renderer — but not the one hardcoded list that controls
-  section visibility, so the tab rendered into an invisible container and
-  the screen stayed empty. One line, plus a generic test so no future tab
-  can repeat it.
 
 ## v2.11.0 — 2026-08-05
 
