@@ -439,8 +439,12 @@
     try {
       entries = (await A.getOrThrow('/api/leaderboard')).entries || [];
     } catch {
-      boardEl.innerHTML = note('The verifier is unreachable right now, so no standings are shown — ' +
-        'nothing here is cached or guessed.');
+      boardEl.innerHTML = note(A.API_LIVE
+        ? 'The verifier is unreachable right now, so no standings are shown — nothing here is ' +
+          'cached or guessed.'
+        : '<strong style="color:var(--orange2)">Opening soon.</strong> The verifier isn\'t deployed ' +
+          'yet, so there are no standings to show. Your extension is already hash-committing every ' +
+          'fill, so the record you build now is the record that ranks on day one.');
       return;
     }
     if (!entries.length) {

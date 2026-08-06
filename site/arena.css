@@ -125,6 +125,21 @@
 
 .ar-hero { padding: 118px 0 26px; position: relative; }
 
+/* Pre-launch notice. Deliberately calm rather than alarming — nothing here is
+ * broken, the thing simply has not started yet. */
+#ar-prelaunch {
+  border: 1px solid rgba(255, 157, 69, 0.32);
+  background: linear-gradient(180deg, rgba(255, 157, 69, 0.09), rgba(255, 157, 69, 0.03));
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin-bottom: 28px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--muted);
+  max-width: 820px;
+}
+#ar-prelaunch strong { color: var(--orange2); font-weight: 800; }
+
 .ar-hero-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);

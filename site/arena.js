@@ -13,6 +13,22 @@
   'use strict';
 
   const API = 'https://api.papertrench.com';
+
+  /**
+   * Is the verifier deployed yet?
+   *
+   * Flip to true in the same change that deploys the Worker
+   * (server/DEPLOY.md). Until then the Arena pages must not say the server is
+   * "unreachable": that describes a service that exists and is down, and
+   * claiming an outage we are not having is the same class of wrong number
+   * this product refuses to print. Pre-launch is a different fact and gets
+   * different words.
+   *
+   * This is a build-time flag rather than a probe on purpose — once the
+   * Arena IS live, a failed request genuinely does mean an outage, and the
+   * two states must never be conflated in either direction.
+   */
+  const API_LIVE = false;
   // The stable id the Chrome Web Store assigns the published extension.
   // Unpacked developer installs get per-machine ids the site cannot know —
   // those users use the exported-file path instead (server/DEPLOY.md).
@@ -108,17 +124,27 @@
    * would be rendered as a fact.
    */
   async function getOrThrow(path) {
+    // Pre-launch there is nothing at the other end, so skip the request
+    // rather than filling every visitor's console with failed fetches.
+    if (!API_LIVE) throw new Error('api not live');
     const { status, body } = await api(path);
     if (status < 200 || status >= 300 || !body) throw new Error('api ' + status);
     return body;
   }
 
   async function me() {
+    // `unreachable` is the flag every page already branches on to hide its
+    // sign-in button; pre-launch reuses it so no page offers a control that
+    // would navigate to a host that does not resolve.
+    if (!API_LIVE) return { signedIn: false, unreachable: true };
     try { return (await api('/api/me')).body || { signedIn: false }; }
     catch { return { signedIn: false, unreachable: true }; }
   }
 
-  function signIn() { window.location.href = API + '/api/auth/x/start'; }
+  function signIn() {
+    if (!API_LIVE) return;
+    window.location.href = API + '/api/auth/x/start';
+  }
 
   async function logout() {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
@@ -214,8 +240,45 @@
   }
 
   function errorState(body) {
+    // Pre-launch the caller's copy is discarded on purpose: every page words
+    // its own outage message, and none of them are true before the verifier
+    // has ever run. One accurate sentence beats five well-written wrong ones.
+    if (!API_LIVE) {
+      return `<div class="ar-empty"><div class="mark">⛓</div>
+        <h4>The Arena hasn't opened yet.</h4>
+        <p>The verifier that replays and re-prices every record isn't deployed yet, so there is
+        nothing to show here — not an outage, just a thing that hasn't started. The extension is
+        already committing your fills to the chain, so whatever you trade between now and opening
+        day counts: nothing has to be reconstructed later.</p></div>`;
+    }
     return `<div class="ar-empty error"><div class="mark">⚠</div>
       <h4>Can't reach the verifier</h4><p>${body}</p></div>`;
+  }
+
+  /**
+   * Pre-launch notice, placed once at the top of an Arena page.
+   *
+   * The per-pane states above explain the local absence; this explains the
+   * page. Injected from here so a single flag governs every surface and no
+   * page can be forgotten when the Arena opens.
+   */
+  function mountPreLaunchBanner() {
+    if (API_LIVE) return;
+    const hero = document.querySelector('.ar-hero .wrap');
+    if (!hero || document.getElementById('ar-prelaunch')) return;
+    const note = document.createElement('div');
+    note.id = 'ar-prelaunch';
+    note.setAttribute('role', 'note');
+    note.innerHTML = `<strong>Opening soon.</strong> Everything here is built and tested, but the
+      verifier isn't deployed yet — so there are no standings to show and sign-in is closed. Your
+      extension is already hash-committing every fill, so the record you build now is the record
+      that ranks on day one.`;
+    hero.insertBefore(note, hero.firstChild);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountPreLaunchBanner);
+  } else {
+    mountPreLaunchBanner();
   }
 
   /** Score contribution split, for the formula bar. */
@@ -274,7 +337,7 @@
   }
 
   window.PTArena = {
-    API, EXTENSION_IDS,
+    API, API_LIVE, EXTENSION_IDS,
     esc, fmt, signed, dirClass, ago, initials, tone, face,
     CHIP, chipFor,
     api, getOrThrow, me, signIn, logout, submit,

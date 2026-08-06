@@ -61,7 +61,7 @@
         <div class="bar">
           <span class="bulbs"><i></i><i></i><i></i></span>
           <span class="name">verifier · stdout</span>
-          <span class="streaming"><span class="dot"></span>LIVE</span>
+          <span class="streaming" id="stream-state"><span class="dot"></span>LIVE</span>
         </div>
         <ul class="ar-stream" id="stream" aria-live="polite"></ul>
       </aside>
@@ -338,11 +338,19 @@
   /* ---------------- verifier stream ---------------- */
 
   (async () => {
+    // A "LIVE" badge over a stream that has never run would be the page's
+    // own lie, so the badge tracks the same flag the copy does.
+    const stateEl = document.getElementById('stream-state');
+    if (!L.API_LIVE && stateEl) stateEl.innerHTML = 'NOT YET RUNNING';
+
     let events = [];
     try { events = (await L.getOrThrow('/api/activity')).events || []; }
     catch {
-      streamEl.innerHTML = '<li class="rejected"><span class="tag">offline</span>' +
-        '<span class="what">verifier unreachable — no events to show</span></li>';
+      streamEl.innerHTML = L.API_LIVE
+        ? '<li class="rejected"><span class="tag">offline</span>' +
+          '<span class="what">verifier unreachable — no events to show</span></li>'
+        : '<li><span class="tag" style="color:var(--dim)">pending</span>' +
+          '<span class="what">the verifier has not been deployed yet — this fills in on opening day</span></li>';
       return;
     }
     if (!events.length) {
@@ -372,8 +380,12 @@
   (async () => {
     const session = await L.me();
     if (session.unreachable) {
-      accountEl.innerHTML = '<p class="ar-note">Verifier unreachable — sign-in and submissions are ' +
-        'down right now. The board above is showing nothing rather than something stale.</p>';
+      accountEl.innerHTML = L.API_LIVE
+        ? '<p class="ar-note">Verifier unreachable — sign-in and submissions are down right now. ' +
+          'The board above is showing nothing rather than something stale.</p>'
+        : '<p class="ar-note">Sign-in opens with the verifier. In the meantime the export button in ' +
+          'the dashboard\'s Leaderboard tab already produces the exact file this page will accept — ' +
+          'your record is accumulating either way.</p>';
       return;
     }
     if (!session.signedIn) {
