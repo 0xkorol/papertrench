@@ -65,6 +65,16 @@
     return (n >= 10 ? n.toFixed(1) : n.toFixed(2)) + '%';
   }
 
+  /* At 1x the liquidation price really is ~0: nothing but the asset going to
+   * zero can liquidate you. Printing "0.000000" is arithmetically true and
+   * reads as a broken field, so say what it means instead. The threshold is
+   * deliberately extreme — anything a real move could reach still prints as
+   * a number. */
+  function liqIsUnreachable(liqPx, liqDistPct) {
+    if (!isNum(liqPx) || liqPx <= 0) return true;
+    return isNum(liqDistPct) && liqDistPct >= 99;
+  }
+
   /* o: { venue, market, side, marginUsd, leverage, price, t, cashUsd,
    *      params, carry: { fundingHourlyFrac? (hl) | borrowRateFrac? (jup) } }
    * → { ok:false, reason, text } | { ok:true, rows, warnings } */
@@ -116,10 +126,10 @@
         feeText: fmtUsd(pos.feesUsd),
         feeLabel: o.venue === 'hyperliquid' ? 'taker fee' : 'base + impact fee',
         liqPx: pos.liqPx,
-        liqText: fmtPx(pos.liqPx),
+        liqText: liqIsUnreachable(pos.liqPx, liqDistPct) ? 'none at this leverage' : fmtPx(pos.liqPx),
         liqDistPct,
-        liqDistText: fmtPct(liqDistPct)
-          + (liqDistAtr !== null ? ' · ' + liqDistAtr.toFixed(1) + ' ATR' : ''),
+        liqDistText: liqIsUnreachable(pos.liqPx, liqDistPct) ? '—'
+          : fmtPct(liqDistPct) + (liqDistAtr !== null ? ' · ' + liqDistAtr.toFixed(1) + ' ATR' : ''),
         liqDistAtr,
         carryPerHourUsd,
         carryText: fmtUsd(Math.abs(carryPerHourUsd)) + '/hr'
@@ -149,6 +159,8 @@
       const uPnlPct = (m.uPnlUsd / pos.marginUsd0) * 100;
       const rowAtr = isNum(o.atr) && o.atr > 0 && isNum(m.liqPx)
         ? Math.abs(o.px - m.liqPx) / o.atr : null;
+      const rowDistPct = isNum(m.liqPx) ? (Math.abs(o.px - m.liqPx) / o.px) * 100 : null;
+      const rowUnreachable = liqIsUnreachable(m.liqPx, rowDistPct);
       rows.push({
         id: pos.id,
         label: (pos.side === 1 ? 'LONG' : 'SHORT') + ' ' + pos.leverage + 'x',
@@ -157,8 +169,9 @@
         uPnlUsd: m.uPnlUsd,
         uPnlText: fmtUsd(m.uPnlUsd, { signed: true }) + ' (' + fmtPct(Math.abs(uPnlPct)) + ')',
         equityText: fmtUsd(m.equityUsd),
-        liqText: fmtPx(m.liqPx) + (rowAtr !== null ? ' · ' + rowAtr.toFixed(1) + ' ATR' : ''),
-        liqDistPct: isNum(m.liqPx) ? (Math.abs(o.px - m.liqPx) / o.px) * 100 : null,
+        liqText: rowUnreachable ? 'no liq at this leverage'
+          : fmtPx(m.liqPx) + (rowAtr !== null ? ' · ' + rowAtr.toFixed(1) + ' ATR' : ''),
+        liqDistPct: rowDistPct,
         liqDistAtr: rowAtr,
         liquidatable: m.liquidatable,
         gapNote: pos.unverifiedGapSec > 0

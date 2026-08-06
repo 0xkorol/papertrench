@@ -165,6 +165,21 @@ test('an unverified-gap position carries its honesty note into the row', () => {
   assert.match(rows[0].gapNote, /real borrow would be higher/);
 });
 
+test('at 1x the liquidation field says what it means, not "0.000000"', () => {
+  // At 1x the liquidation price really is ~0 — nothing short of the asset
+  // reaching zero can liquidate you. Printing 0.000000 is arithmetically
+  // true and reads as a broken field.
+  const pv = T.buildPreview(Object.assign({}, HL_ARGS, { leverage: 1 }));
+  assert.equal(pv.ok, true, 'a 1x position is perfectly valid on Hyperliquid');
+  assert.match(pv.rows.liqText, /none at this leverage/);
+  assert.equal(pv.rows.liqDistText, '—', 'and no distance is claimed');
+
+  // A leverage that CAN be liquidated still prints a real number.
+  const real = T.buildPreview(Object.assign({}, HL_ARGS, { leverage: 20 }));
+  assert.match(real.rows.liqText, /^9[0-9]\./, 'a reachable liq price is still a price');
+  assert.notEqual(real.rows.liqDistText, '—');
+});
+
 test('the ATR × leverage bridge: liq distance in noise units when a warm ATR exists', () => {
   // $10 at 20x from 100: liq 97.4359, distance 2.5641. ATR 0.5 → 5.1 ATR.
   const pv = T.buildPreview(Object.assign({}, HL_ARGS, { atr: 0.5 }));
