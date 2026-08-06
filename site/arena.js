@@ -150,8 +150,33 @@
 
   /* ------------------------------------------------------------- network */
 
+  /**
+   * The session rides two transports at once: the cross-site cookie (kept
+   * for a future same-site deploy) and a bearer token in localStorage. The
+   * token is the one that works everywhere — the workers.dev API is
+   * cross-site to these pages, and Safari blocks, Firefox partitions, and
+   * Brave/incognito Chrome drop third-party cookies, which made a completed
+   * sign-in render as signed-out ("the website doesn't read that you made
+   * an account", live field report). localStorage over sessionStorage so
+   * the sign-in survives the tab; the token expires server-side in 30 days
+   * and dies instantly when the account's session epoch bumps.
+   */
+  const TOKEN_KEY = 'pt_session_token';
+  function sessionToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || null; } catch { return null; }
+  }
+  function storeSessionToken(token) {
+    try { localStorage.setItem(TOKEN_KEY, token); } catch {}
+  }
+  function dropSessionToken() {
+    try { localStorage.removeItem(TOKEN_KEY); } catch {}
+  }
+
   async function api(path, options) {
-    const res = await fetch(API + path, Object.assign({ credentials: 'include' }, options || {}));
+    const opts = Object.assign({ credentials: 'include' }, options || {});
+    const token = sessionToken();
+    if (token) opts.headers = Object.assign({}, opts.headers, { Authorization: 'Bearer ' + token });
+    const res = await fetch(API + path, opts);
     const body = await res.json().catch(() => null);
     return { status: res.status, body };
   }
@@ -174,12 +199,16 @@
     return body;
   }
 
-  // The OAuth callback lands here with #authed: the server just wrote a
-  // session cookie. Read once, then strip — the marker is a fact about THIS
-  // navigation, and leaving it in the URL would let a copied link carry the
-  // claim to someone it was never true for.
-  const returnedFromAuth = window.location.hash === '#authed';
+  // The OAuth callback lands here with #authed=<token> (older workers send
+  // a bare #authed): the server wrote a session cookie AND handed the same
+  // signed token in the fragment for the browsers whose cookie policies
+  // drop it. Read once, store, then strip — the fragment never reached any
+  // server, and leaving it in the URL would let a copied link hand the
+  // session to someone it was never meant for.
+  const authReturn = window.location.hash.match(/^#authed(?:=(.+))?$/);
+  const returnedFromAuth = Boolean(authReturn);
   if (returnedFromAuth) {
+    if (authReturn[1]) storeSessionToken(authReturn[1]);
     history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 
@@ -189,12 +218,21 @@
     // would navigate to a host that does not resolve.
     if (!API_LIVE) return { signedIn: false, unreachable: true };
     try {
-      const session = (await api('/api/me')).body || { signedIn: false };
-      // Signed out, but the callback JUST set a cookie: the browser refused
-      // to send it cross-site (Safari blocks, Firefox partitions). Without
-      // this flag that state is pixel-identical to "never signed in", and
-      // the page would render a silent lie over a sign-in that worked.
-      // `unreachable` stays separate — a dead API is a different fact.
+      const reply = await api('/api/me');
+      const session = reply.body || { signedIn: false };
+      // A definite signed-out answer while we were sending a token means
+      // the token is dead (30-day expiry, or an epoch bump revoked it).
+      // Keep-and-resend would just repeat the same dead claim forever. A
+      // non-200 is NOT that answer — a transient server error must never
+      // cost a working sign-in.
+      if (reply.status === 200 && !session.signedIn && sessionToken()) dropSessionToken();
+      // Signed out, but the callback JUST completed: with the bearer
+      // transport this should no longer happen — its remaining causes are
+      // an old worker (no token in the fragment) plus a cookie the browser
+      // refused cross-site. Without this flag that state is pixel-identical
+      // to "never signed in", and the page would render a silent lie over a
+      // sign-in that worked. `unreachable` stays separate — a dead API is a
+      // different fact.
       if (!session.signedIn && returnedFromAuth) session.cookieBlocked = true;
       return session;
     }
@@ -208,6 +246,9 @@
 
   async function logout() {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+    // The server clears the cookie; the token is ours to clear. Doing it
+    // after the POST so the logout request itself still authenticates.
+    dropSessionToken();
     window.location.reload();
   }
 

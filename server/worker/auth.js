@@ -82,9 +82,29 @@ function cookieHeader(name, value, maxAgeSec, env) {
   return `${name}=${value}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; Secure; SameSite=${sameSite}${domain}`;
 }
 
+/**
+ * The session token can arrive two ways: the cookie, or an Authorization:
+ * Bearer header carrying the SAME signed payload.
+ *
+ * The header exists because the workers.dev topology makes the cookie
+ * third-party to the pages — and Safari blocks, Firefox partitions, and
+ * Brave/incognito/strict-Chrome profiles drop third-party cookies. On those
+ * browsers the OAuth dance completed, the user record was written, and then
+ * every /api/me read signed-out ("your website doesn't read that you made an
+ * account" — live field report). The callback therefore also hands the token
+ * to the page in its redirect FRAGMENT (never reaches a server or a log,
+ * stripped from the URL on arrival) and the page sends it back as a header,
+ * which no cookie policy can drop. A bearer header is also CSRF-inert; the
+ * Origin allowlist on state-changing routes stays for both transports.
+ */
+function bearerToken(request) {
+  const header = request.headers.get('Authorization') || '';
+  return header.startsWith('Bearer ') ? header.slice(7) : null;
+}
+
 /** The signed-in user for a request, or null. */
 async function sessionUser(request, env) {
-  const token = readCookie(request, SESSION_COOKIE);
+  const token = readCookie(request, SESSION_COOKIE) || bearerToken(request);
   if (!token) return null;
   const session = await verifyPayload(env.SESSION_SECRET, token);
   if (!session || !session.uid || session.exp < Date.now()) return null;
@@ -166,14 +186,19 @@ async function finishLogin(request, env) {
   const session = await signPayload(env.SESSION_SECRET, {
     uid: user.id, epoch: user.session_epoch, exp: now + SESSION_TTL_MS,
   });
-  // The #authed fragment tells the page "a session cookie was just written",
-  // which is the one fact it cannot otherwise learn: Safari blocks and
-  // Firefox partitions cross-site cookies, so on those browsers this
-  // sign-in succeeds and every later /api/me still reads signed-out. With
-  // the marker the page can say that plainly instead of silently rendering
-  // the signed-out state over a sign-in that worked. A fragment, not a
-  // query param, so it never reaches any server log and dies in the client.
-  const headers = new Headers({ Location: env.SITE_ORIGIN + '/leaderboard.html#authed' });
+  // The #authed=<token> fragment carries the signed session token to the
+  // page itself, because on a cross-site (workers.dev) deploy the cookie
+  // alone is not enough: Safari blocks, Firefox partitions, and
+  // Brave/incognito Chrome drop third-party cookies, so the cookie-only
+  // flow "worked" and then every later /api/me read signed-out. The page
+  // stores the token and sends it back as an Authorization header (see
+  // bearerToken above). A fragment, not a query param, so it never reaches
+  // any server log and dies in the client — the page strips it from the URL
+  // on arrival. The token is base64url + '.' + base64url, fragment-safe
+  // verbatim. The bare '#authed' marker semantics remain for pages served
+  // before this change: token or not, the fragment still means "a sign-in
+  // just completed".
+  const headers = new Headers({ Location: env.SITE_ORIGIN + '/leaderboard.html#authed=' + session });
   headers.append('Set-Cookie', cookieHeader(SESSION_COOKIE, session, SESSION_TTL_MS / 1000, env));
   headers.append('Set-Cookie', cookieHeader(OAUTH_COOKIE, '', 0, env));
   return new Response(null, { status: 302, headers });

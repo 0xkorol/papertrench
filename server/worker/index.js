@@ -43,7 +43,10 @@ function corsHeaders(request, env) {
   const allowed = [env.SITE_ORIGIN, env.SITE_ORIGIN_ALT].filter(Boolean);
   const headers = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    // Authorization: the bearer-token session transport (auth.js) — without
+    // it here the preflight rejects the header and every token-carrying
+    // request dies before it leaves the browser.
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     Vary: 'Origin',
   };
   if (allowed.includes(origin)) {

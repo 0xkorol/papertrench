@@ -3,7 +3,25 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
-## v3.0.0 — 2026-08-06
+## Unreleased
+
+- **Brand-new coins are tradeable the moment you land on them — whatever
+  launchpad they came from.** The instant path used to exist only for
+  pump.fun coins. Now every pending address is probed on-chain once: a pool
+  we can decode (pump curve, Whirlpool/CLMM, Raydium/PumpSwap
+  constant-product) becomes a live price feed with an immediate first quote,
+  and a bare mint gives up its real supply — which is what lets the site's
+  own market-cap feed price a letsbonk/Believe/Moonshot launch honestly
+  before any aggregator has heard of it. The probe also retries while the
+  coin stays unindexed, so landing a few seconds early no longer costs the
+  window. Same discipline as always: a number is refused unless exactly one
+  honest reading of it exists.
+
+- **X sign-in on papertrench.com now sticks in every browser.** The session
+  used to ride a cross-domain cookie that Safari blocks, Firefox partitions,
+  and Brave/private-mode Chrome drops — so sign-in completed and the site
+  still showed you signed out. The sign-in now hands the session token to
+  the page directly (needs the updated worker deployed).
 
 A major version because the product gained a second asset class. Perps can
 take your whole position in a single move, which is a different lesson from

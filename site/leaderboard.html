@@ -397,11 +397,11 @@
       // here would be a lie — they DID sign in. Name what happened and whose
       // fault it is (ours: the page and the API live on different domains).
       const blockedNote = session.cookieBlocked
-        ? `<p class="ar-note" style="margin-bottom:12px"><strong>You did sign in — your browser
-            declined to keep the session.</strong> This page and its API live on different domains
-            for now, and Safari and Firefox refuse cross-domain session cookies by default — a
-            reasonable privacy stance our current setup trips over. A Chromium browser (Chrome,
-            Edge, Brave) will hold your sign-in in the meantime.</p>`
+        ? `<p class="ar-note" style="margin-bottom:12px"><strong>You did sign in — the session
+            just didn't stick.</strong> Sign-in no longer depends on cross-domain cookies, so
+            this state should not happen anymore; seeing it usually means a stale page or a
+            mid-deploy server. Try signing in once more, and if it persists, tell us on
+            Discord — it is our bug, not yours.</p>`
         : `<p class="ar-note" style="margin-bottom:12px">Sign in with X to rank. One record per account —
             that is what makes this board expensive to sybil.</p>`;
       accountEl.innerHTML = blockedNote +
