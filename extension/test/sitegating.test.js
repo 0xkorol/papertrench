@@ -64,11 +64,13 @@ const MATRIX = [
   // GMGN
   ['https://gmgn.ai/sol/token/' + MINT, 'gmgn', 'mint', MINT, 'token route'],
   ['https://gmgn.ai/sol/address/' + WALLET, 'gmgn', null, null, 'wallet analysis must not mount (O-10)'],
-  // MULTICHAIN (2026-08-06): GMGN's EVM chains mount now. O-11's protection
-  // is unchanged in substance and stronger in form — this address is the one
-  // whose hex passes base58, and it may only ever be priced as ETHEREUM.
-  // test/chainrouting.test.js owns the full per-chain matrix.
-  ['https://gmgn.ai/eth/token/' + EVM_B58ISH, 'gmgn', 'mint', EVM_B58ISH, 'a base58-passing EVM address routes to its OWN chain, never Solana (O-11)'],
+  // Foreign chains are GATED OFF for v3.0.0 (per-chain native balances land
+  // first — see MULTICHAIN_ENABLED in sites.js). This address is the one
+  // whose hex passes base58, and it is refused because we recognise the
+  // chain and decline it, not because a parse failed. The full per-chain
+  // matrix, including proof that flipping the gate resolves these to their
+  // real chains, lives in test/chainrouting.test.js.
+  ['https://gmgn.ai/eth/token/' + EVM_B58ISH, 'gmgn', null, null, 'EVM chains are gated off; refused by CHAIN, never mistaken for a Solana mint (O-11)'],
   // BullX
   ['https://neo.bullx.io/terminal?chainId=1399811149&address=' + PAIR, 'bullx', 'pair', PAIR, 'solana terminal'],
   ['https://neo.bullx.io/terminal?address=' + PAIR, 'bullx', 'pair', PAIR, 'no chainId defaults to accepting solana'],
@@ -77,7 +79,7 @@ const MATRIX = [
   ['https://neo.bullx.io/portfolio/' + WALLET, 'bullx', null, null, 'portfolio must not mount (O-10)'],
   // Dexscreener
   ['https://dexscreener.com/solana/' + PAIR, 'dexscreener', 'pair', PAIR, 'solana pair page'],
-  ['https://dexscreener.com/ethereum/' + EVM_B58ISH, 'dexscreener', 'pair', EVM_B58ISH, 'EVM route prices on ETHEREUM, never Solana (O-11 preserved by routing)'],
+  ['https://dexscreener.com/ethereum/' + EVM_B58ISH, 'dexscreener', null, null, 'EVM chains gated off; refused by chain, never reaching the Solana resolver (O-11)'],
   ['https://dexscreener.com/watchlist', 'dexscreener', null, null, 'watchlist is not a token page'],
   // Birdeye
   ['https://birdeye.so/token/' + MINT + '?chain=solana', 'birdeye', 'mint', MINT, 'token route'],
@@ -97,10 +99,14 @@ const MATRIX = [
   ['https://fomo.family/tokens/solana/' + MINT + '?ref=abc', 'fomo', 'mint', MINT, 'query strings do not change the route'],
   // MULTICHAIN (maintainer order, docs/MULTICHAIN.md): every corpus slug
   // mounts — with O-11 surviving as strict per-chain shape validation.
-  ['https://fomo.family/tokens/robinhood/0xdc29db7d4396ed738710a5373a30afc197e7268a', 'fomo', 'mint', '0xdc29db7d4396ed738710a5373a30afc197e7268a', 'live-captured robinhood token mounts with its chain'],
-  ['https://fomo.family/tokens/bnb/0xfe189e97832da1573e4e4ff034f4ffc3a15c7777', 'fomo', 'mint', '0xfe189e97832da1573e4e4ff034f4ffc3a15c7777', 'live-corpus bnb token mounts'],
-  ['https://fomo.family/tokens/ethereum/0x32708538a107253b51a735a724330a23106ca4ca', 'fomo', 'mint', '0x32708538a107253b51a735a724330a23106ca4ca', 'live-corpus ethereum token mounts'],
-  ['https://fomo.family/tokens/base/' + EVM_B58ISH, 'fomo', 'mint', EVM_B58ISH, 'a valid 0x40-hex address under an EVM slug mounts (multichain)'],
+  // GATED for v3.0.0: these live-corpus EVM pages parse correctly and are
+  // declined by chain until per-chain native balances ship. The addresses
+  // stay here on purpose — they are the real corpus, and the rows invert
+  // back when the gate opens (see sites.js MULTICHAIN_ENABLED).
+  ['https://fomo.family/tokens/robinhood/0xdc29db7d4396ed738710a5373a30afc197e7268a', 'fomo', null, null, 'live-captured robinhood token is recognised and declined (gated)'],
+  ['https://fomo.family/tokens/bnb/0xfe189e97832da1573e4e4ff034f4ffc3a15c7777', 'fomo', null, null, 'live-corpus bnb token declined (gated)'],
+  ['https://fomo.family/tokens/ethereum/0x32708538a107253b51a735a724330a23106ca4ca', 'fomo', null, null, 'live-corpus ethereum token declined (gated)'],
+  ['https://fomo.family/tokens/base/' + EVM_B58ISH, 'fomo', null, null, 'a base58-passing EVM address is declined by CHAIN, never read as a mint (O-11)'],
   ['https://fomo.family/tokens/base/0x' + 'gg'.repeat(20), 'fomo', null, null, 'non-hex under an EVM slug is refused (O-11, shape-strict)'],
   ['https://fomo.family/tokens/base/0x' + 'ab'.repeat(19), 'fomo', null, null, 'a short 0x run is refused (O-11, shape-strict)'],
   ['https://fomo.family/tokens/ethereum/' + MINT, 'fomo', null, null, 'a base58 mint under an EVM slug is still refused (O-11, shape-strict)'],

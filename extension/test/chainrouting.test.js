@@ -1,28 +1,29 @@
-/* The OTHER terminals go multichain (maintainer order, 2026-08-06).
+/* Chain routing across the terminals — and the gate that is currently shut.
  *
- * docs/MULTICHAIN.md took fomo across chains. Terp's follow-up order was
- * "same thing on terminal, and padre, and gmgn, and axiom" — so the rest of
- * the supported terminals must stop refusing their own non-Solana token
- * pages. Every route shape below was verified against the LIVE site on
- * 2026-08-06 through the in-app browser; nothing here is inferred:
+ * MAINTAINER DECISION 2026-08-06: v3.0.0 ships with foreign-chain DETECTION
+ * OFF. Multichain is fully built and live-probed, but it was built on design
+ * A (one SOL-denominated book, foreign fills converted from USD at fill time)
+ * and Terp has since chosen design B: PER-CHAIN NATIVE BALANCES. Because
+ * multichain never shipped — it is in main but absent from the v2.11.0 zip —
+ * not one user has written a foreign-chain fill, so the model can still be
+ * switched with no migration and no ambiguous records. It waits one release
+ * and lands once, correctly.
  *
- *   GMGN        gmgn.ai/{sol,eth,bsc,base}/token/<addr>   all four rendered
- *   Birdeye     birdeye.so/<chain>/token/<addr>           NEW scheme — the
- *               old ?chain= form 308-redirects onto it, which had quietly
- *               turned our chain gate into dead code (see below)
- *   DexScreener dexscreener.com/<chain>/<pairAddress>     slug vocabulary
- *               harvested from DexScreener's own chain nav
+ * This file therefore does two jobs at once:
  *
- * Two safety properties are locked here because both were live defects:
+ *   1. It PINS THE REFUSAL, so nobody re-enables foreign chains by accident
+ *      before the per-chain wallet exists. Every EVM row below expects null.
+ *   2. It keeps the live-probed route knowledge under test, so the research
+ *      does not rot while it waits. Route shapes were verified against the
+ *      LIVE sites through the in-app browser on 2026-08-06:
+ *        GMGN        gmgn.ai/{sol,eth,bsc,base}/token/<addr>  (all rendered)
+ *        Birdeye     birdeye.so/<chain>/token/<addr>          (NEW scheme)
+ *        DexScreener dexscreener.com/<chain>/<pairAddress>
  *
- *   1. Birdeye's gate was UNREACHABLE. It read ?chain=, which the site no
- *      longer emits, so the only thing keeping an EVM address out of the
- *      Solana resolver was hex accidentally failing base58 — which by our
- *      own O-11 note fails for ~13% of EVM addresses.
- *   2. An unknown chain must FAIL CLOSED. quote.js resolved
- *      `CHAIN_MAP[chain] || 'solana'`, so a slug it did not recognise was
- *      silently priced on Solana — a wrong-chain price is exactly the class
- *      of wrong number this product refuses to show.
+ * The safety properties below are NOT gated and must hold either way: a
+ * foreign page is refused because we recognise its chain and decline it,
+ * never because an address accidentally failed base58; and a chain the price
+ * layer cannot name is never silently priced on Solana.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -70,41 +71,47 @@ function sitesApi() {
 
 /* [href, site id, kind|null, address|null, chain|null, why] */
 const MATRIX = [
-  // ---- GMGN: all four chains rendered live ----
-  [`https://gmgn.ai/sol/token/${SOL_MINT}`, 'gmgn', 'mint', SOL_MINT, 'solana', 'the Solana route still works exactly as before'],
-  [`https://gmgn.ai/eth/token/${USDT_ETH}`, 'gmgn', 'mint', USDT_ETH, 'ethereum', 'live-verified ethereum token page'],
-  [`https://gmgn.ai/bsc/token/${USDT_BSC}`, 'gmgn', 'mint', USDT_BSC, 'bsc', 'live-verified bsc token page'],
-  [`https://gmgn.ai/base/token/${USDC_BASE}`, 'gmgn', 'mint', USDC_BASE, 'base', 'live-verified base token page'],
-  // Shape strictness per slug survives multichain (O-11): a chain never
-  // accepts the other family's address shape.
-  [`https://gmgn.ai/sol/token/${USDT_ETH}`, 'gmgn', null, null, null, 'an EVM address under the solana slug is not ours'],
-  [`https://gmgn.ai/eth/token/${SOL_MINT}`, 'gmgn', null, null, null, 'a base58 mint under an EVM slug is not ours'],
-  [`https://gmgn.ai/eth/token/${EVM_B58ISH}`, 'gmgn', 'mint', EVM_B58ISH, 'ethereum', 'a base58-passing EVM address routes to ETHEREUM, never Solana'],
-  [`https://gmgn.ai/sol/address/${WALLET}`, 'gmgn', null, null, null, 'wallet routes never mount (O-10)'],
-  [`https://gmgn.ai/tron/token/${USDT_ETH}`, 'gmgn', null, null, null, 'an unsupported chain slug fails closed rather than guessing'],
-
-  // ---- Birdeye: the NEW path scheme, plus the legacy query form ----
-  [`https://birdeye.so/solana/token/${SOL_MINT}`, 'birdeye', 'mint', SOL_MINT, 'solana', 'live scheme, solana'],
-  [`https://birdeye.so/ethereum/token/${USDT_ETH}`, 'birdeye', 'mint', USDT_ETH, 'ethereum', 'live scheme, ethereum'],
-  [`https://birdeye.so/base/token/${USDC_BASE}`, 'birdeye', 'mint', USDC_BASE, 'base', 'live scheme, base'],
+  // ---- Solana: unchanged, and must stay exactly as it was ----
+  [`https://gmgn.ai/sol/token/${SOL_MINT}`, 'gmgn', 'mint', SOL_MINT, 'solana', 'the Solana route is untouched by any of this'],
+  [`https://birdeye.so/solana/token/${SOL_MINT}`, 'birdeye', 'mint', SOL_MINT, 'solana', 'Birdeye live scheme, solana'],
   [`https://birdeye.so/token/${SOL_MINT}?chain=solana`, 'birdeye', 'mint', SOL_MINT, 'solana', 'legacy query form still resolves (old links, bookmarks)'],
-  // THE defect: this shape reached the Solana resolver because ?chain= was
-  // gone and the hex happened to pass base58.
-  [`https://birdeye.so/ethereum/token/${EVM_B58ISH}`, 'birdeye', 'mint', EVM_B58ISH, 'ethereum', 'a base58-passing EVM address must route to ETHEREUM, never Solana'],
-  [`https://birdeye.so/profile/${WALLET}`, 'birdeye', null, null, null, 'profile routes never mount (O-10)'],
-
-  // ---- DexScreener: pair pages across its own chain vocabulary ----
   [`https://dexscreener.com/solana/${SOL_MINT}`, 'dexscreener', 'pair', SOL_MINT, 'solana', 'solana pair page, unchanged'],
-  [`https://dexscreener.com/ethereum/${WETH_PAIR}`, 'dexscreener', 'pair', WETH_PAIR, 'ethereum', 'live-verified ethereum pair page'],
-  [`https://dexscreener.com/bsc/${USDT_BSC}`, 'dexscreener', 'pair', USDT_BSC, 'bsc', 'bsc pair page'],
-  [`https://dexscreener.com/base/${USDC_BASE}`, 'dexscreener', 'pair', USDC_BASE, 'base', 'base pair page'],
-  [`https://dexscreener.com/ethereum/${EVM_B58ISH}`, 'dexscreener', 'pair', EVM_B58ISH, 'ethereum', 'base58-passing EVM address routes to ETHEREUM, never Solana'],
-  ['https://dexscreener.com/gainers', 'dexscreener', null, null, null, 'utility routes are not token pages (O-10)'],
-  ['https://dexscreener.com/watchlist', 'dexscreener', null, null, null, 'utility routes are not token pages (O-10)'],
+
+  // ---- Foreign chains: GATED OFF for v3.0.0 ----
+  // These pages parse perfectly and are refused ON PURPOSE. When per-chain
+  // native balances land, flip MULTICHAIN_ENABLED and invert these rows.
+  [`https://gmgn.ai/eth/token/${USDT_ETH}`, 'gmgn', null, null, null, 'GATED: ethereum is understood and declined, not misparsed'],
+  [`https://gmgn.ai/bsc/token/${USDT_BSC}`, 'gmgn', null, null, null, 'GATED: bsc'],
+  [`https://gmgn.ai/base/token/${USDC_BASE}`, 'gmgn', null, null, null, 'GATED: base'],
+  [`https://birdeye.so/ethereum/token/${USDT_ETH}`, 'birdeye', null, null, null, 'GATED: ethereum'],
+  [`https://birdeye.so/base/token/${USDC_BASE}`, 'birdeye', null, null, null, 'GATED: base'],
+  [`https://dexscreener.com/ethereum/${WETH_PAIR}`, 'dexscreener', null, null, null, 'GATED: ethereum'],
+  [`https://dexscreener.com/bsc/${USDT_BSC}`, 'dexscreener', null, null, null, 'GATED: bsc'],
+  [`https://fomo.family/tokens/bnb/${USDT_BSC}`, 'fomo', null, null, null, 'GATED: fomo is the chain-densest terminal, so this branch matters most'],
+
+  // ---- The O-11 hazard, refused for the RIGHT reason ----
+  // This address is the dangerous one: its hex passes base58. Before
+  // multichain it could reach the SOLANA resolver on a bad day. It must now
+  // be refused because we recognise the chain, not because a parse failed.
+  [`https://gmgn.ai/eth/token/${EVM_B58ISH}`, 'gmgn', null, null, null, 'a base58-passing EVM address is refused by CHAIN, never mistaken for a mint'],
+  [`https://birdeye.so/ethereum/token/${EVM_B58ISH}`, 'birdeye', null, null, null, 'the defect case: Birdeye moved schemes, so the old ?chain= gate could not see this'],
+  [`https://dexscreener.com/ethereum/${EVM_B58ISH}`, 'dexscreener', null, null, null, 'same hazard, same refusal'],
+
+  // ---- Shape strictness per slug, independent of the gate ----
+  [`https://gmgn.ai/sol/token/${USDT_ETH}`, 'gmgn', null, null, null, 'an EVM address under the solana slug is never a mint'],
+  [`https://gmgn.ai/eth/token/${SOL_MINT}`, 'gmgn', null, null, null, 'a base58 mint under an EVM slug is a contradiction'],
+  [`https://birdeye.so/token/${SOL_MINT}?chain=ethereum`, 'birdeye', null, null, null, 'same contradiction through the legacy form'],
+
+  // ---- Routes that must never mount, gate or no gate (O-10) ----
+  [`https://gmgn.ai/sol/address/${WALLET}`, 'gmgn', null, null, null, 'wallet routes never mount'],
+  [`https://birdeye.so/profile/${WALLET}`, 'birdeye', null, null, null, 'profile routes never mount'],
+  ['https://dexscreener.com/gainers', 'dexscreener', null, null, null, 'utility routes are not token pages'],
+  ['https://dexscreener.com/watchlist', 'dexscreener', null, null, null, 'utility routes are not token pages'],
+  [`https://gmgn.ai/tron/token/${USDT_ETH}`, 'gmgn', null, null, null, 'a chain the terminal does not serve fails closed'],
   [`https://dexscreener.com/notachain/${USDT_ETH}`, 'dexscreener', null, null, null, 'an unknown chain slug fails closed'],
 ];
 
-test('multichain overlay matrix: every live-verified route gates correctly', () => {
+test('chain matrix: Solana mounts, every foreign chain is refused while the gate is shut', () => {
   for (const [href, id, kind, address, chain, why] of MATRIX) {
     const got = detectAt(href);
     assert.equal(got.id, id, `${href} must route to the ${id} adapter`);
@@ -115,27 +122,89 @@ test('multichain overlay matrix: every live-verified route gates correctly', () 
     assert.ok(got.token, `${href}: ${why}`);
     assert.equal(got.token.kind, kind, `${href}: wrong kind — ${why}`);
     assert.equal(got.token.address, address, `${href}: wrong address — ${why}`);
-    assert.equal(got.token.chain, chain,
-      `${href}: the chain must be carried, or the price layer prices it on the wrong chain — ${why}`);
+    assert.equal(got.token.chain, chain, `${href}: wrong chain — ${why}`);
   }
 });
 
-test('no adapter may report a chain the price layer cannot map', () => {
-  // A chain string that quote.js does not know resolves to Solana under the
-  // old `|| 'solana'` fallback. Every chain any adapter can emit must be in
-  // the map, or that token gets priced on the wrong chain.
+test('the gate is one explicit, reversible switch — not scattered special cases', () => {
+  // "Temporarily disabled" is exactly the state that rots. A future reader
+  // must find one named constant, a stated reason, and the way back.
+  assert.match(SITES, /const MULTICHAIN_ENABLED = false;/,
+    'the gate must be a single named constant');
+  assert.match(SITES, /PER-CHAIN NATIVE/,
+    'the code must say WHY it is shut, not just that it is');
+  assert.match(SITES, /function chainTradable/,
+    'one predicate decides tradability, so flipping the switch cannot miss an adapter');
+
+  // Every adapter that can parse a foreign chain must consult it.
+  const gateUses = (SITES.match(/chainTradable\(/g) || []).length;
+  assert.ok(gateUses >= 3,
+    `every foreign-chain branch must go through the gate (found ${gateUses} uses)`);
+});
+
+test('the route knowledge survives the gate: shapes are still parsed, then declined', () => {
+  // The distinction that matters: we refuse a Base token because we know it
+  // is Base, not because its address failed a Solana regex. Proof — flipping
+  // the gate in a copy of the shipped source makes the same URLs resolve to
+  // their real chains, with no other change.
+  const opened = SITES.replace('const MULTICHAIN_ENABLED = false;', 'const MULTICHAIN_ENABLED = true;');
+  const detectWithGateOpen = (href) => {
+    const url = new URL(href);
+    const sandbox = {
+      window: {}, self: {},
+      location: { href, hostname: url.hostname, pathname: url.pathname, search: url.search },
+      URLSearchParams, console,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(opened, sandbox, { filename: 'sites.js' });
+    return sandbox.window.PaperTrenchSites.currentSite().detect();
+  };
+
+  // Field-wise: these records are built inside a vm realm, so their
+  // prototype is not the host's and deepStrictEqual would compare realms
+  // rather than values.
+  const sameRecord = (got, want, why) => {
+    assert.ok(got, `${why}: expected a detection, got none`);
+    assert.equal(got.kind, want.kind, `${why}: kind`);
+    assert.equal(got.address, want.address, `${why}: address`);
+    assert.equal(got.chain, want.chain, `${why}: chain`);
+  };
+  sameRecord(detectWithGateOpen(`https://gmgn.ai/eth/token/${USDT_ETH}`),
+    { kind: 'mint', address: USDT_ETH, chain: 'ethereum' }, 'gmgn ethereum');
+  sameRecord(detectWithGateOpen(`https://gmgn.ai/bsc/token/${USDT_BSC}`),
+    { kind: 'mint', address: USDT_BSC, chain: 'bsc' }, 'gmgn bsc');
+  sameRecord(detectWithGateOpen(`https://birdeye.so/ethereum/token/${USDT_ETH}`),
+    { kind: 'mint', address: USDT_ETH, chain: 'ethereum' }, 'birdeye ethereum');
+  sameRecord(detectWithGateOpen(`https://dexscreener.com/ethereum/${WETH_PAIR}`),
+    { kind: 'pair', address: WETH_PAIR, chain: 'ethereum' }, 'dexscreener ethereum');
+  // And the hazard address routes to ETHEREUM even then — never to Solana.
+  assert.equal(detectWithGateOpen(`https://gmgn.ai/eth/token/${EVM_B58ISH}`).chain, 'ethereum');
+  // Shape strictness is not what the gate was doing, so it still holds.
+  assert.equal(detectWithGateOpen(`https://gmgn.ai/sol/token/${USDT_ETH}`), null);
+});
+
+test('no chain any adapter can emit is missing from the price layer', () => {
+  // Gate-independent by construction: this reads the adapters' slug maps
+  // rather than what detection currently returns, so the coupling holds
+  // while the gate is shut AND the moment it opens.
   const quote = fs.readFileSync(path.join(ROOT, 'quote.js'), 'utf8');
-  const mapBlock = quote.slice(quote.indexOf('CHAIN_MAP = {'), quote.indexOf('};', quote.indexOf('CHAIN_MAP = {')));
+  const mapStart = quote.indexOf('CHAIN_MAP = {');
+  const mapBlock = quote.slice(mapStart, quote.indexOf('};', mapStart));
   const mapped = new Set([...mapBlock.matchAll(/^\s*([a-z0-9]+)\s*:/gm)].map((m) => m[1]));
 
-  const emitted = new Set();
-  for (const [href, , kind] of MATRIX) {
-    if (kind === null) continue;
-    const got = detectAt(href);
-    if (got.token && got.token.chain) emitted.add(got.token.chain);
+  const declared = new Set();
+  for (const name of ['GMGN_CHAIN_BY_SLUG', 'BIRDEYE_CHAIN_BY_SLUG']) {
+    const start = SITES.indexOf(`const ${name} = {`);
+    assert.ok(start > -1, `${name} must exist in sites.js`);
+    const block = SITES.slice(start, SITES.indexOf('};', start));
+    for (const m of block.matchAll(/:\s*'([a-z0-9]+)'/g)) declared.add(m[1]);
   }
-  assert.ok(emitted.size >= 4, 'the matrix must actually exercise several chains');
-  for (const chain of emitted) {
+  const dexStart = SITES.indexOf('const DEXSCREENER_CHAINS = [');
+  const dexBlock = SITES.slice(dexStart, SITES.indexOf('];', dexStart));
+  for (const m of dexBlock.matchAll(/'([a-z0-9]+)'/g)) declared.add(m[1]);
+
+  assert.ok(declared.size >= 6, 'the adapters must declare a real chain vocabulary');
+  for (const chain of declared) {
     assert.ok(mapped.has(chain),
       `sites.js can emit chain "${chain}" but quote.js CHAIN_MAP has no entry for it — `
       + 'it would be priced on Solana');
@@ -151,31 +220,20 @@ test('an unknown chain fails CLOSED instead of being priced on Solana', () => {
     'chain resolution must go through one named, testable function');
 });
 
-test('a positions-bar chip returns to the RIGHT chain, not always Solana', () => {
+test('a positions-bar chip returns to the RIGHT chain', () => {
+  // Link building is not gated: it is inert without foreign positions, and
+  // design B needs it intact. A chip that returns to the wrong chain is a
+  // link to a different token.
   const S = sitesApi();
-  // A BSC position opened on GMGN must not build a /sol/ URL, and a fomo
-  // chip must not build /tokens/solana/ for an EVM token (MULTICHAIN.md
-  // flagged this as the assumption to revisit once other terminals moved).
-  const gmgn = S.tokenUrlFor(USDT_BSC, { siteId: 'gmgn', chain: 'bsc' });
-  assert.match(gmgn, /gmgn\.ai\/bsc\/token\//, `GMGN chip must return to bsc, got ${gmgn}`);
-  assert.ok(gmgn.includes(USDT_BSC));
+  assert.match(S.tokenUrlFor(USDT_BSC, { siteId: 'gmgn', chain: 'bsc' }), /gmgn\.ai\/bsc\/token\//);
+  assert.match(S.tokenUrlFor(USDT_ETH, { siteId: 'birdeye', chain: 'ethereum' }), /birdeye\.so\/ethereum\/token\//);
+  assert.match(S.tokenUrlFor(USDT_ETH, { siteId: 'dexscreener', chain: 'ethereum' }), /dexscreener\.com\/ethereum\//);
+  assert.ok(!/\/tokens\/solana\//.test(S.tokenUrlFor(USDT_BSC, { siteId: 'fomo', chain: 'bsc' })),
+    'a BSC token must never be linked as a fomo solana route');
+  assert.ok(!/dexscreener\.com\/solana\//.test(S.tokenUrlFor(USDT_ETH, { siteId: 'nope', chain: 'ethereum' })),
+    'the universal fallback must not send an ethereum token to /solana/');
 
-  const fomo = S.tokenUrlFor(USDT_BSC, { siteId: 'fomo', chain: 'bsc' });
-  assert.ok(!/\/tokens\/solana\//.test(fomo),
-    `a BSC token must never be linked as a fomo solana route, got ${fomo}`);
-
-  const birdeye = S.tokenUrlFor(USDT_ETH, { siteId: 'birdeye', chain: 'ethereum' });
-  assert.match(birdeye, /birdeye\.so\/ethereum\/token\//, `Birdeye chip must use the live scheme, got ${birdeye}`);
-
-  const dex = S.tokenUrlFor(USDT_ETH, { siteId: 'dexscreener', chain: 'ethereum' });
-  assert.match(dex, /dexscreener\.com\/ethereum\//, `DexScreener chip must carry the chain, got ${dex}`);
-
-  // The universal fallback must not claim Solana for a foreign token either.
-  const unknownSite = S.tokenUrlFor(USDT_ETH, { siteId: 'not-a-real-site', chain: 'ethereum' });
-  assert.ok(!/dexscreener\.com\/solana\//.test(unknownSite),
-    `the fallback link must not send an ethereum token to /solana/, got ${unknownSite}`);
-
-  // Solana keeps its exact existing behaviour.
+  // Solana keeps its exact existing behaviour, chain or no chain.
   assert.match(S.tokenUrlFor(SOL_MINT, { siteId: 'gmgn' }), /gmgn\.ai\/sol\/token\//);
   assert.match(S.tokenUrlFor(SOL_MINT, { siteId: 'fomo' }), /fomo\.family\/tokens\/solana\//);
 });

@@ -28,6 +28,43 @@
   const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
   const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
+  /* ---------------- the multichain gate ----------------
+   *
+   * MAINTAINER DECISION, 2026-08-06: v3.0.0 ships with foreign-chain
+   * DETECTION OFF. This is not an oversight and not a bug — read this before
+   * flipping it.
+   *
+   * Multichain is fully built and live-probed (docs/MULTICHAIN.md), but it
+   * has never shipped: it is in main and absent from the v2.11.0 zip, so no
+   * user has ever created a foreign-chain fill. It was built on design A — a
+   * single SOL-denominated book that converts non-Solana fills from USD at a
+   * recorded rate — and Terp has since chosen design B: PER-CHAIN NATIVE
+   * BALANCES (SOL on Solana, ETH on Base/Ethereum, BNB on BSC). Shipping A
+   * now would write user records under a model we have already decided to
+   * replace, so the feature waits one release and lands once, correctly.
+   *
+   * What stays ON while the gate is closed, deliberately:
+   *   - Every route SHAPE is still parsed. A foreign page is refused because
+   *     we recognise its chain and decline it, never because an address
+   *     accidentally failed base58. That is strictly safer than the pre-
+   *     multichain behaviour and it keeps O-11 explicit.
+   *   - The whole pricing path (quote.js chain handling, resolver chain
+   *     filtering, multichain.test.js) is untouched and still tested. Design
+   *     B reuses it verbatim; only the wallet model changes.
+   *
+   * To re-enable: land per-chain native balances first, then flip this and
+   * invert the refusal tests in test/chainrouting.test.js and
+   * test/sitegating.test.js. The route corpus in docs/MULTICHAIN.md remains
+   * valid live-probed research — design B needs it as-is.
+   */
+  const MULTICHAIN_ENABLED = false;
+
+  /** A chain we are not currently trading is refused at DETECTION, so the
+   *  panel never mounts somewhere it cannot honestly keep a book. */
+  function chainTradable(chain) {
+    return chain === 'solana' || MULTICHAIN_ENABLED;
+  }
+
   // GMGN (live-verified 2026-08-06: all four token pages rendered).
   const GMGN_CHAIN_BY_SLUG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base' };
   const GMGN_SLUG_BY_CHAIN = { solana: 'sol', ethereum: 'eth', bsc: 'bsc', base: 'base' };
@@ -74,6 +111,10 @@
       ? SOLANA_ADDRESS_RE.test(address)
       : EVM_ADDRESS_RE.test(address);
     if (!shapeOk) return null;
+    // Shape is validated BEFORE the gate on purpose: while the gate is closed
+    // this is a deliberate, chain-named refusal rather than a lucky parse
+    // failure, and when it opens nothing about the shape rules changes.
+    if (!chainTradable(chain)) return null;
     return { kind: kind || 'mint', address, chain };
   }
 
@@ -336,6 +377,10 @@
         const EVM_SLUGS = ['base', 'monad', 'bnb', 'ethereum', 'hyperliquid', 'robinhood'];
         if (EVM_SLUGS.indexOf(chain) < 0) return null;
         if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return null;
+        // Gated off for v3.0.0 — see MULTICHAIN_ENABLED above. fomo is the
+        // chain-densest terminal (its own /token entry lands users on EVM
+        // pages routinely), so this branch is where the gate is felt most.
+        if (!chainTradable(chain)) return null;
         return { kind: 'mint', address: addr, chain };
       },
     },
