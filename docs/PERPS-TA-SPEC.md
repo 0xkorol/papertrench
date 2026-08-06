@@ -7,8 +7,22 @@
 > Bitfinex, …). The remaining §10 recommendations are adopted as defaults
 > pending objection: TA-first landing order (C→A→B→D→E), separate perps book
 > + rank track, venue-mirrored leverage tiers with guardrail nudges,
-> venue-native margin currency, synthetic drills deferred. Pass C is
-> underway.
+> venue-native margin currency, synthetic drills deferred. Pass C pure core
+> landed (a050d1d); Pass A perps engine landed (7c755f5, liq fixed-point
+> fix in 1a83822); Pass B landed through 1173c97 — adapters (HL + Jupiter
+> live-probed; Axiom pending logged-in recon), on-wake reconciler, ticket.
+>
+> **Pass B execution notes (2026-08-05):** the reconciler runs ON WAKE
+> (page load), not on a background alarm — the permission contract bans
+> `alarms` ("no external polling") and the privacy story wins; a 3 AM
+> liquidation is discovered at the next observation. The HL feed fetches
+> api.hyperliquid.xyz directly from the content script (verified
+> `Access-Control-Allow-Origin: *`) so background.js carries zero perps
+> coupling. Jupiter's live borrow rate is read from the venue's own
+> displayed number (price-bridge doctrine) pending an on-chain custody
+> decode; Jupiter candle history has no verified source yet, so gap
+> survival is recorded as unobserved time with borrow explicitly
+> UNCHARGED and said so, per the honesty table below.
 
 ---
 
