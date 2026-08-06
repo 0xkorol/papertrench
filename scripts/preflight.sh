@@ -21,6 +21,27 @@ if grep -Eq 'papertrench-[0-9]+\.[0-9]+\.[0-9]+\.zip' site/index.html; then
   fail "site/index.html contains a version-pinned papertrench-X.Y.Z.zip URL (must use /releases/latest)"
 fi
 
+# Every page's nav must reach every destination.
+#
+# This drifted twice. The Arena shipped five pages and fifteen others kept a
+# nav that predated them — first pointing "Leaderboard" at the marketing
+# anchor instead of the board, then reaching the board but not Sprint or
+# Duels. Both times the site advertised features two thirds of it could not
+# navigate to, and both times it was caught by a person rather than a check.
+# Same failure mode as the version-pinned download link above: a rule that
+# lives only in someone's memory.
+NAV_DESTS="leaderboard.html sprint.html duels.html"
+NAV_MISSING=""
+for page in site/*.html; do
+  # Article pages and the Arena family all carry the same nav block.
+  grep -q 'class="nav-links"' "$page" || continue
+  for dest in $NAV_DESTS; do
+    grep -q "href=\"$dest\"" "$page" || NAV_MISSING="$NAV_MISSING $(basename "$page"):$dest"
+  done
+done
+[ -z "$NAV_MISSING" ] || fail "nav is missing destinations —$NAV_MISSING"
+echo "nav OK ($(ls site/*.html | wc -l) pages reach leaderboard, sprint and duels)"
+
 # The manifest must never regress to <all_urls> content scripts (DEFECT O-09).
 if grep -q '"<all_urls>"' extension/manifest.json; then
   # host_permissions may legitimately stay broad (user-configured AI/RPC
