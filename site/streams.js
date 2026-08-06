@@ -15,6 +15,11 @@
   // Hand-maintained roster. Entries here always show, and they win over a
   // sheet row with the same login — useful for pinning or fixing a blurb.
   const STREAMERS = [
+    {
+      login: 'onlyterp',                 // twitch.tv/<login> — lowercase
+      name: 'OnlyTerp',                  // display name on the card
+      blurb: 'Builds PaperTrench and trades the same paper wallet as everyone else — live launches, real charts, zero real money.',
+    },
     // {
     //   login: 'thetrenchking',            // twitch.tv/<login> — lowercase
     //   name: 'The Trench King',           // display name on the card
@@ -245,12 +250,12 @@
   }
 
   /* ---------- roster grid ---------- */
-  function renderGrid() {
-    const grid = $('streamerGrid');
 
-    if (!roster.length) {
-      // Intentional-looking empty slots instead of a bare page.
-      grid.innerHTML = [0, 1, 2].map(() => `
+  // Intentional-looking empty slot instead of a half-empty row. The grid is
+  // three-up, so we pad to a full row while the roster is still forming.
+  const OPEN_SLOTS = 3;
+  function openSlot() {
+    return `
         <a class="s-card" href="${esc(SIGNUP_URL)}" target="_blank" rel="noopener"
            style="display:block;border-style:dashed;border-color:rgba(145,70,255,0.35)">
           <div class="s-thumb"><div class="ph">?</div></div>
@@ -259,11 +264,13 @@
             <div class="s-handle">twitch.tv/you</div>
             <div class="s-blurb">Open slot on the challenge roster — sign up below and it's yours.</div>
           </div>
-        </a>`).join('');
-      return;
-    }
+        </a>`;
+  }
 
-    grid.innerHTML = roster.map((s) => {
+  function renderGrid() {
+    const grid = $('streamerGrid');
+
+    const cards = roster.map((s) => {
       const status = live.get(s.login);
       const isUp = status === true;
       const badge = status === true
@@ -283,7 +290,10 @@
             ${s.blurb ? `<div class="s-blurb">${esc(s.blurb)}</div>` : ''}
           </div>
         </button>`;
-    }).join('');
+    });
+
+    while (cards.length < OPEN_SLOTS) cards.push(openSlot());
+    grid.innerHTML = cards.join('');
 
     grid.querySelectorAll('.s-card[data-login]').forEach((card) => {
       card.addEventListener('click', () =>
