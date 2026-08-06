@@ -174,12 +174,30 @@
     return body;
   }
 
+  // The OAuth callback lands here with #authed: the server just wrote a
+  // session cookie. Read once, then strip — the marker is a fact about THIS
+  // navigation, and leaving it in the URL would let a copied link carry the
+  // claim to someone it was never true for.
+  const returnedFromAuth = window.location.hash === '#authed';
+  if (returnedFromAuth) {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+
   async function me() {
     // `unreachable` is the flag every page already branches on to hide its
     // sign-in button; pre-launch reuses it so no page offers a control that
     // would navigate to a host that does not resolve.
     if (!API_LIVE) return { signedIn: false, unreachable: true };
-    try { return (await api('/api/me')).body || { signedIn: false }; }
+    try {
+      const session = (await api('/api/me')).body || { signedIn: false };
+      // Signed out, but the callback JUST set a cookie: the browser refused
+      // to send it cross-site (Safari blocks, Firefox partitions). Without
+      // this flag that state is pixel-identical to "never signed in", and
+      // the page would render a silent lie over a sign-in that worked.
+      // `unreachable` stays separate — a dead API is a different fact.
+      if (!session.signedIn && returnedFromAuth) session.cookieBlocked = true;
+      return session;
+    }
     catch { return { signedIn: false, unreachable: true }; }
   }
 

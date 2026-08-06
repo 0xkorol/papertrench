@@ -166,7 +166,14 @@ async function finishLogin(request, env) {
   const session = await signPayload(env.SESSION_SECRET, {
     uid: user.id, epoch: user.session_epoch, exp: now + SESSION_TTL_MS,
   });
-  const headers = new Headers({ Location: env.SITE_ORIGIN + '/leaderboard.html' });
+  // The #authed fragment tells the page "a session cookie was just written",
+  // which is the one fact it cannot otherwise learn: Safari blocks and
+  // Firefox partitions cross-site cookies, so on those browsers this
+  // sign-in succeeds and every later /api/me still reads signed-out. With
+  // the marker the page can say that plainly instead of silently rendering
+  // the signed-out state over a sign-in that worked. A fragment, not a
+  // query param, so it never reaches any server log and dies in the client.
+  const headers = new Headers({ Location: env.SITE_ORIGIN + '/leaderboard.html#authed' });
   headers.append('Set-Cookie', cookieHeader(SESSION_COOKIE, session, SESSION_TTL_MS / 1000, env));
   headers.append('Set-Cookie', cookieHeader(OAUTH_COOKIE, '', 0, env));
   return new Response(null, { status: 302, headers });

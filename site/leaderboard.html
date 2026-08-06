@@ -392,10 +392,20 @@
       return;
     }
     if (!session.signedIn) {
-      accountEl.innerHTML = `
-        <p class="ar-note" style="margin-bottom:12px">Sign in with X to rank. One record per account —
-          that is what makes this board expensive to sybil.</p>
-        <button class="ar-btn primary" id="signin-btn">𝕏 &nbsp;Sign in with X</button>`;
+      // cookieBlocked: the OAuth callback just set a session cookie and the
+      // browser refused to send it back cross-site. Saying "sign in to rank"
+      // here would be a lie — they DID sign in. Name what happened and whose
+      // fault it is (ours: the page and the API live on different domains).
+      const blockedNote = session.cookieBlocked
+        ? `<p class="ar-note" style="margin-bottom:12px"><strong>You did sign in — your browser
+            declined to keep the session.</strong> This page and its API live on different domains
+            for now, and Safari and Firefox refuse cross-domain session cookies by default — a
+            reasonable privacy stance our current setup trips over. A Chromium browser (Chrome,
+            Edge, Brave) will hold your sign-in in the meantime.</p>`
+        : `<p class="ar-note" style="margin-bottom:12px">Sign in with X to rank. One record per account —
+            that is what makes this board expensive to sybil.</p>`;
+      accountEl.innerHTML = blockedNote +
+        `<button class="ar-btn primary" id="signin-btn">𝕏 &nbsp;Sign in with X</button>`;
       document.getElementById('signin-btn').addEventListener('click', L.signIn);
       return;
     }
