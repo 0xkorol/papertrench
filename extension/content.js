@@ -1777,14 +1777,37 @@
   /**
    * Every buy — the big BUY button or a one-click preset tap — comes through
    * here so the pending-token arming and the in-flight guard apply equally.
+   * `amt` is in PANEL units: SOL normally, dollars on a foreign-chain panel.
    */
   function requestBuy(amt) {
-    if (!(amt > 0)) return toast('Pick a SOL amount first');
+    if (!(amt > 0)) return toast(panelUsd() ? 'Pick a dollar amount first' : 'Pick a SOL amount first');
     if (buyInFlight) return toast('Buy already in progress…');
+    // Dollar panels convert to SOL book units at the recorded rate before
+    // anything else sees the amount — the engine and guardrails only ever
+    // speak the book's currency.
+    let solAmount = amt;
+    let quotedUsd = null;
+    if (panelUsd()) {
+      quotedUsd = amt;
+      const rate = panelUsdRate();
+      if (rate) {
+        solAmount = amt / rate;
+      } else if (token && token.priceNative) {
+        // A resolved foreign token always carries its rate (the resolver
+        // refuses rateless records) — reaching here means the record is
+        // malformed. Refuse; never fill at a guessed rate.
+        return toast('No SOL/USD rate for this chain — paper buy refused');
+      } else {
+        solAmount = null; // still resolving: arm in dollars, convert at fire
+      }
+    }
     // Guardrails: the trader's own opt-in rules, enforced while the money is
-    // fake so the habit exists before the money is real.
-    const guard = E.guardCheck(state, settings, { solAmount: amt });
-    if (!guard.ok) return toast(guard.message);
+    // fake so the habit exists before the money is real. A dollar-armed buy
+    // has no SOL amount yet; flushArmedBuy re-checks at fire time.
+    if (solAmount != null) {
+      const guard = E.guardCheck(state, settings, { solAmount });
+      if (!guard.ok) return toast(guard.message);
+    }
     // Rug guard (maintainer request): when chain state says the float is in
     // a handful of wallets, say RUG WARNING and refuse, before arming.
     const rugRefusal = rugRefusalMessage();
@@ -1797,16 +1820,16 @@
     // "waiting", and it is what makes sniping a fresh launch feel possible.
     if (!token || !token.priceNative) {
       if (!token) return toast('No token detected on this page');
-      armedBuy = { amount: amt, at: Date.now(), mint: token.mint };
+      armedBuy = { amount: solAmount, usd: quotedUsd, at: Date.now(), mint: token.mint };
       renderBuyButton();
       toast('Buy armed — fires the instant the first quote lands');
       return;
     }
     buyInFlight = true;
-    doBuy(amt).finally(() => { buyInFlight = false; });
+    doBuy(solAmount, quotedUsd).finally(() => { buyInFlight = false; });
   }
 
-  async function doBuy(solAmount) {
+  async function doBuy(solAmount, quotedUsd) {
     if (!token) return toast('No token detected on this page');
     // The armed path skips requestBuy, and the verdict may have landed after
     // arming — re-check at fire time. Sells are never gated.
@@ -1824,6 +1847,9 @@
           priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
           chain: token.chain || 'solana',
           solAmount,
+          // The dollar amount the trader actually tapped on a foreign-chain
+          // panel — recorded so receipts echo the order as it was placed.
+          quotedUsd: quotedUsd || undefined,
         });
         // Commit the fill to the evidence chain before persisting the wallet,
         // so the committed record never lags the balance a crash would leave.
@@ -1853,9 +1879,13 @@
         }).catch(() => {});
         runTradeEffect('buy');
         playTradeSound('buy');
-        // Confirm the fill in the unit the trader thinks in: "at 240K".
+        // Confirm the fill in the unit the trader thinks in: "at 240K",
+        // and in the currency they ordered in ("$100" on a dollar panel).
         const atMcap = mcapAtPrice(result.trade.priceNative);
-        toast(`Bought ${E.fmt(solAmount, 3)} SOL of ${token.symbol}${atMcap ? ` at ${fmtMoney(atMcap)} MC` : ''} (paper)`);
+        const boughtText = quotedUsd
+          ? `$${E.fmt(quotedUsd, quotedUsd < 10 ? 2 : 0)}`
+          : `${E.fmt(solAmount, 3)} SOL`;
+        toast(`Bought ${boughtText} of ${token.symbol}${atMcap ? ` at ${fmtMoney(atMcap)} MC` : ''} (paper)`);
       }
     } catch (err) { toast(err.message || 'Buy failed'); }
     renderAll();
@@ -3430,8 +3460,10 @@
     els.btnBuy.addEventListener('click', () => {
       const custom = Number(els.custom.value);
       const sel = els.buyPresets.querySelector('.pt-preset.sel');
+      // Panel units throughout — dollars on a foreign-chain panel, SOL
+      // otherwise; requestBuy owns the conversion.
       const amt = custom > 0 ? custom : sel ? Number(sel.dataset.amt) : 0;
-      if (!(amt > 0)) return toast('Pick a SOL amount first');
+      if (!(amt > 0)) return toast(panelUsd() ? 'Pick a dollar amount first' : 'Pick a SOL amount first');
       requestBuy(amt);
     });
     // Enter in the amount box IS the buy — in compact focus mode the big
@@ -3528,7 +3560,12 @@
     if (els.btnBuy) els.btnBuy.style.display = sectionOn ? '' : 'none';
     if (els.buyPresets) els.buyPresets.style.display = presetsOn ? '' : 'none';
 
-    const list = settings.presetsBuy || [0.1, 0.5, 1, 2];
+    // Chips carry PANEL units: SOL on Solana, dollars on foreign chains
+    // (requestBuy converts at the recorded rate).
+    const usdMode = panelUsd();
+    const list = usdMode
+      ? (settings.presetsBuyUsd || USD_PRESETS_DEFAULT)
+      : (settings.presetsBuy || [0.1, 0.5, 1, 2]);
     const instant = settings.instantBuyEnabled !== false;
     if (sectionOn && els.buyLabel) els.buyLabel.textContent = buyLabelText();
     renderCosts();
@@ -3537,7 +3574,7 @@
     // one the user never chose made "selected" and "tap = buy" conflicting
     // claims on the same pixel. Selection exists only in two-step mode.
     els.buyPresets.innerHTML = list.map((a, i) =>
-      `<button class="pt-preset${!instant && i === 1 ? ' sel' : ''}" data-amt="${a}" title="${instant ? 'Buy this amount instantly' : 'Select this amount'}">${a} SOL</button>`
+      `<button class="pt-preset${!instant && i === 1 ? ' sel' : ''}" data-amt="${a}" title="${instant ? 'Buy this amount instantly' : 'Select this amount'}">${usdMode ? `$${a}` : `${a} SOL`}</button>`
     ).join('');
     els.buyPresets.querySelectorAll('.pt-preset').forEach((b) => {
       b.addEventListener('click', () => {
@@ -3549,12 +3586,39 @@
     });
   }
 
+  /* ---------------- panel denomination ----------------
+   * Foreign-chain panels denominate in DOLLARS. Read off the live site
+   * (2026-08-05): fomo's own quick buys on a BNB token are $10/$100/$500/
+   * $1000 with a $-prefixed amount box — the venue prices every non-Solana
+   * chain in USD, so the paper panel speaks the same currency there.
+   * Solana panels keep SOL: the book's own currency, and what the Solana
+   * terminals themselves denominate in. Conversion to SOL book units
+   * happens at order time at the token's RECORDED rate (solUsdAtResolve,
+   * refreshed with every quote) — never a guessed rate, and no rate means
+   * an honest refusal instead of a fill. */
+  const USD_PRESETS_DEFAULT = [10, 100, 500, 1000];
+
+  function panelUsd() {
+    return Boolean(token && token.chain && token.chain !== 'solana');
+  }
+
+  function panelUsdRate() {
+    const rate = Number(token && token.solUsdAtResolve);
+    return rate > 0 ? rate : null;
+  }
+
   /** The Buy label doubles as the balance line in compact focus mode — the
    * balance card is hidden there ("the less information in the tab the
    * better"), but cash on hand is execution information, not decoration. */
   function buyLabelText() {
     // Wave 2 (F-B6/F-H2): the balance CARD is gone — cash rides here in
     // every mode, and the label stops narrating what the chips already say.
+    if (panelUsd()) {
+      const rate = panelUsdRate();
+      // Cash converted at the recorded rate, so the number is spendable
+      // truth: $1000 shown means a $1000 preset fills.
+      return rate ? `Buy ($) · $${E.fmt(state.cashSol * rate, 0)} cash` : 'Buy ($)';
+    }
     return `Buy (SOL) · ${E.fmt(state.cashSol, 2)} cash`;
   }
 
@@ -3590,7 +3654,11 @@
     if (!els.editor) return;
     const open = force === undefined ? els.editor.style.display === 'none' : Boolean(force);
     if (open) {
-      els.editBuy.value = (settings.presetsBuy || [0.1, 0.5, 1, 2]).join(', ');
+      // The buy row edits the list the panel is SHOWING: dollar presets on
+      // a foreign-chain panel, SOL presets otherwise.
+      els.editBuy.value = (panelUsd()
+        ? (settings.presetsBuyUsd || USD_PRESETS_DEFAULT)
+        : (settings.presetsBuy || [0.1, 0.5, 1, 2])).join(', ');
       els.editSell.value = (settings.sellPcts || [25, 50, 75, 100]).join(', ');
       els.editFee.value = (Number(settings.feeBps) || 0) / 100;
       els.editGas.value = Number(settings.gasSolPerTx) > 0 ? settings.gasSolPerTx : '';
@@ -3604,10 +3672,15 @@
     const notes = [];
     const patch = {};
 
-    const buy = Q.parsePresetList(els.editBuy.value, 1000);
+    // Same row, two ledgers: dollar presets on foreign-chain panels (cap
+    // $100k), SOL presets otherwise (cap 1000) — each saved to its own key
+    // so switching chains never rewrites the other currency's list.
+    const usdMode = panelUsd();
+    const buyCap = usdMode ? 100000 : 1000;
+    const buy = Q.parsePresetList(els.editBuy.value, buyCap);
     if (buy && buy.values.length) {
-      patch.presetsBuy = buy.values;
-      if (buy.dropped > 0) notes.push(`${buy.dropped} buy preset(s) rejected (each must be > 0 and ≤ 1000, max 8)`);
+      patch[usdMode ? 'presetsBuyUsd' : 'presetsBuy'] = buy.values;
+      if (buy.dropped > 0) notes.push(`${buy.dropped} buy preset(s) rejected (each must be > 0 and ≤ ${buyCap}, max 8)`);
     } else if (buy) {
       notes.push('buy presets: no valid entries — kept the saved list');
     }
@@ -4166,10 +4239,23 @@
       toast('Armed buy expired — the quote took too long');
       return;
     }
-    const amount = armedBuy.amount;
+    let amount = armedBuy.amount;
+    const armedUsd = Number(armedBuy.usd) > 0 ? Number(armedBuy.usd) : null;
     armedBuy = null;
     renderBuyButton();
-    doBuy(amount);
+    // A dollar-armed buy could not convert at click time (no record yet).
+    // The quote that fired this flush brought the recorded rate with it.
+    if (!(amount > 0) && armedUsd) {
+      const rate = panelUsdRate();
+      if (!rate) { toast('No SOL/USD rate for this chain — armed buy dropped'); return; }
+      amount = armedUsd / rate;
+      // The guard that normally runs at request time was deferred for
+      // exactly this path — the SOL amount only exists now.
+      const guard = E.guardCheck(state, settings, { solAmount: amount });
+      if (!guard.ok) { toast(guard.message); return; }
+    }
+    if (!(amount > 0)) return;
+    doBuy(amount, armedUsd);
   }
 
   /** The buy button states its own readiness instead of failing on click. */
@@ -4177,7 +4263,10 @@
     if (!els.btnBuy) return;
     const ready = Boolean(token && token.priceNative);
     if (armedBuy) {
-      els.btnBuy.textContent = `ARMED — ${E.fmt(armedBuy.amount, 3)} SOL ON FIRST QUOTE`;
+      const armedText = Number(armedBuy.usd) > 0
+        ? `$${E.fmt(armedBuy.usd, 0)}`
+        : `${E.fmt(armedBuy.amount, 3)} SOL`;
+      els.btnBuy.textContent = `ARMED — ${armedText} ON FIRST QUOTE`;
       els.btnBuy.classList.add('pt-buy-armed');
       return;
     }

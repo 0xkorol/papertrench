@@ -1122,6 +1122,10 @@
     }
   }
 
+  // F-39: chart -> hosting iframe, populated during ranking. Only iframe
+  // pseudo-widgets set it; broker-build charts never need it.
+  const chartFrameMap = new WeakMap();
+
   /**
    * All reachable charts, best first.
    *
@@ -1147,6 +1151,9 @@
           const chart = widget[accessor]();
           if (!chart || seen.has(chart)) continue;
           seen.add(chart);
+          // F-39: the DOM bubble layer places chips over the chart's iframe,
+          // so every chart remembers which frame it came from.
+          if (widget._iFrame) chartFrameMap.set(chart, widget._iFrame);
           let score = 0;
           if (chartSymbolMatches(chart)) score += 4;
           if (frameVisible(widget._iFrame)) score += 2;
@@ -1187,6 +1194,95 @@
     if (slot.adapter) { try { slot.adapter.remove(); } catch (_) {} }
     slot.adapter = null;
     slot.chart = null;
+  }
+
+  /* ---------------- charting-library (line-tools) fallback ----------------
+   *
+   * F-39 (fomo, live-probed 2026-08-05): fomo ships TradingView's STANDALONE
+   * charting library — its chart API carries createOrderLine and
+   * createExecutionShape, but calling either throws
+   * "... is only available on Trading Platform". The bridge's silent
+   * catch-and-retry treated that as "chart not ready yet" and looped
+   * forever: no average lines and no fill marks, on every fomo chain, while
+   * the fixture (which implemented both calls) stayed green. Capability is
+   * learned from the throw itself, once per chart, and drawing reroutes:
+   * average lines become locked horizontal_line LINE TOOLS (verified live:
+   * createShape resolves an entity id whose ILineDataSourceApi moves it via
+   * setPoints), and fills become PaperTrench's own DOM bubble layer below.
+   */
+  const chartDrawCaps = new WeakMap(); // chart -> 'linetools' once broker calls threw
+
+  function brokerUnavailable(chart, err) {
+    if (/only available on Trading Platform/i.test(String((err && err.message) || err))) {
+      chartDrawCaps.set(chart, 'linetools');
+      return true;
+    }
+    return false;
+  }
+
+  function chartIsLineTools(chart) {
+    return chartDrawCaps.get(chart) === 'linetools';
+  }
+
+  /**
+   * Wrap a horizontal_line entity in the order-line adapter surface, so the
+   * slot machinery (create/update/remove, F-32 frozen levels, F-35 want
+   * semantics) runs unchanged on charts without broker primitives. Broker
+   * niceties with no line-tool equivalent are accepted and ignored.
+   */
+  function makeShapeLineAdapter(chart, entityId) {
+    const api = () => chart.getShapeById(entityId);
+    const setProps = (props) => { api().setProperties(props); };
+    const self = {
+      setPrice(p) { api().setPoints([{ price: Number(p) }]); return self; },
+      setText(t) { if (t) setProps({ text: String(t), showLabel: true }); return self; },
+      setLineColor(c) { setProps({ linecolor: c, textcolor: c }); return self; },
+      setLineStyle(s) { setProps({ linestyle: Number(s) }); return self; },
+      setLineWidth(w) { setProps({ linewidth: Number(w) }); return self; },
+      setBodyTextColor(c) { setProps({ textcolor: c }); return self; },
+      setQuantity() { return self; },
+      setBodyFont() { return self; },
+      setBodyBorderColor() { return self; },
+      setBodyBackgroundColor() { return self; },
+      setEditable() { return self; },
+      remove() { chart.removeEntity(entityId); },
+    };
+    return self;
+  }
+
+  /**
+   * Create the average line as a locked, non-saving horizontal_line. Created
+   * AT the wanted price: unlike an order line, a shape is visible the moment
+   * it exists, so a placeholder level would flash somewhere wrong first.
+   */
+  function createShapeAverageLine(chart, price, label, color) {
+    if (typeof chart.createShape !== 'function') return null;
+    let made;
+    try {
+      made = chart.createShape({ price: Number(price) || 0 }, {
+        shape: 'horizontal_line',
+        lock: true,
+        disableSelection: true,
+        disableSave: true,
+        disableUndo: true,
+        showInObjectsTree: false,
+        text: label || '',
+        overrides: {
+          linecolor: color,
+          textcolor: color,
+          linestyle: 2,
+          linewidth: 1,
+          showLabel: true,
+          fontsize: 11,
+          horzLabelsAlign: 'right',
+          vertLabelsAlign: 'bottom',
+        },
+      });
+    } catch (_) { return null; }
+    if (made && typeof made.then === 'function') {
+      return made.then((id) => (id == null ? null : makeShapeLineAdapter(chart, id)));
+    }
+    return made == null ? null : makeShapeLineAdapter(chart, made);
   }
 
   function configureAverageLine(line, price, label, color) {
@@ -1243,7 +1339,18 @@
     }
 
     let created;
-    try { created = chart.createOrderLine(); } catch (_) { return false; }
+    try { created = chart.createOrderLine(); }
+    catch (err) {
+      // F-39: on a standalone charting library this throw is a FACT about
+      // the build, not a transient failure — note it and draw the same line
+      // as a locked horizontal_line instead.
+      brokerUnavailable(chart, err);
+      created = null;
+    }
+    if (!created && chartIsLineTools(chart)) {
+      created = createShapeAverageLine(chart, (slot.want && slot.want.price) || price, label, color);
+    }
+    if (!created) return false;
     if (created && typeof created.then === 'function') {
       slot.pending = true;
       slot.pendingAt = Date.now();
@@ -1265,7 +1372,6 @@
       }, () => { if (slot.gen === gen) { slot.pending = false; slot.pendingAt = 0; } });
       return true;
     }
-    if (!created) return false;
     try {
       configureAverageLine(created, price, label, color);
       slot.adapter = created;
@@ -1301,7 +1407,14 @@
     };
 
     let created;
-    try { created = chart.createExecutionShape(); } catch (_) { return null; }
+    try { created = chart.createExecutionShape(); }
+    catch (err) {
+      // F-39: remember that this build has no broker primitives, so the
+      // caller can hand rendering to the DOM bubble layer instead of
+      // retrying a throw forever.
+      brokerUnavailable(chart, err);
+      return null;
+    }
     if (created && typeof created.then === 'function') {
       created.then((shape) => {
         try { configure(shape); } catch (_) { try { shape.remove(); } catch (_) {} }
@@ -1618,6 +1731,20 @@
 
   function drawShapeFallback() {
     const charts = getRankedCharts();
+    // F-39: on a line-tools-only build execution shapes can never spawn —
+    // fills render as PaperTrench's own DOM bubbles, glued to the chart by
+    // the same internal scales the site's swap markers use. POSITIVE
+    // evidence only: a learned Trading-Platform throw, or line tools
+    // present while the broker method is absent outright. A chart that
+    // merely lacks createExecutionShape (Padre's marks-pipeline chart)
+    // keeps the old skip-and-retry — its fills belong to getMarks.
+    const best = charts[0] || null;
+    const bestIsLineTools = best && (chartIsLineTools(best)
+      || (typeof best.createExecutionShape !== 'function' && typeof best.createShape === 'function'));
+    if (bestIsLineTools) {
+      return syncBubbleLayer(best);
+    }
+    if (bubbleLayer.host) clearBubbleLayer();
     let drewAll = charts.length > 0;
     for (const mark of paperMarks) {
       const levels = paperMarkLevels.get(mark.id);
@@ -1649,12 +1776,202 @@
       if (handle) fallbackShapeHandles.set(mark.id, handle);
       else drewAll = false;
     }
+    // The first pass on an unprobed standalone build lands here: the spawn
+    // above threw, which is the moment the capability was learned. Reroute
+    // to bubbles NOW instead of waiting a sweep tick.
+    if (!drewAll && best && chartIsLineTools(best)) return syncBubbleLayer(best);
     return drewAll;
   }
 
   function clearShapeFallback() {
     for (const handle of fallbackShapeHandles.values()) removeShapeHandle(handle);
     fallbackShapeHandles.clear();
+    clearBubbleLayer();
+  }
+
+  /* ---------------- DOM bubble layer (line-tools charts) ----------------
+   *
+   * How fomo draws its OWN swap/thesis markers (decompiled from the token
+   * chunk + verified against chart internals, live, 2026-08-05): DOM chips
+   * in the top document, positioned per frame from the chart's internal
+   * scales — pane geometry from activeChart()._chartWidget.paneWidgets()[0]
+   * ._div, X from model().timeScale().timeToCoordinate(seconds), Y from
+   * mainSeries().priceScale().priceToCoordinate(value, firstValue()).
+   *
+   * PaperTrench fills render through the same mechanism, deliberately
+   * distinct from the site's chips (F-30: a paper artifact must never be
+   * mistakable for a real one): slightly smaller (20px vs 26px), PT palette,
+   * and a "(Paper)" tooltip. Each chip is CENTERED on the fill's own axis
+   * level — the site floats its markers above the candle high; a trainer
+   * whose whole promise is honest numbers anchors at the actual fill.
+   *
+   * Like the Axiom row chips above, bubbles NEVER enter the page's own DOM
+   * tree: they live in a private fixed overlay on <body>.
+   */
+  const BUBBLE_PX = 20;
+  const bubbleLayer = { host: null, nodes: new Map(), chart: null, frame: null, frameQueued: false };
+
+  function bubbleInternals(chart) {
+    try {
+      const cw = chart._chartWidget
+        || (typeof chart.chartWidget === 'function' ? chart.chartWidget() : null);
+      if (!cw || typeof cw.paneWidgets !== 'function' || typeof cw.model !== 'function') return null;
+      const pane = (cw.paneWidgets() || [])[0];
+      const paneDiv = pane && pane._div;
+      const model = cw.model();
+      const series = model && typeof model.mainSeries === 'function' ? model.mainSeries() : null;
+      const timeScale = model && typeof model.timeScale === 'function' ? model.timeScale() : null;
+      const priceScale = series && typeof series.priceScale === 'function' ? series.priceScale() : null;
+      const firstValue = series && typeof series.firstValue === 'function' ? series.firstValue() : null;
+      if (!paneDiv || !timeScale || !priceScale || firstValue == null) return null;
+      if (typeof timeScale.timeToCoordinate !== 'function'
+        || typeof priceScale.priceToCoordinate !== 'function') return null;
+      return { paneDiv, timeScale, priceScale, firstValue };
+    } catch (_) { return null; }
+  }
+
+  function bubbleNode(mark, levels) {
+    let el = bubbleLayer.nodes.get(mark.id);
+    if (el) return el;
+    const isBuy = levels.side !== 'sell';
+    const color = isBuy ? '#34D399' : '#FF5F56';
+    el = document.createElement('div');
+    el.setAttribute('data-pt-bubble', isBuy ? 'buy' : 'sell');
+    el.style.cssText = 'position:fixed;left:0;top:0;width:' + BUBBLE_PX + 'px;height:' + BUBBLE_PX + 'px;'
+      + 'border-radius:50%;background:#060510;border:1px solid ' + color + '66;'
+      + 'display:flex;align-items:center;justify-content:center;'
+      + 'font:700 9px/1 Inter,system-ui,sans-serif;color:' + color + ';'
+      + 'visibility:hidden;pointer-events:auto;cursor:default;'
+      + 'box-shadow:0 1px 6px rgba(0,0,0,0.5);will-change:transform;';
+    el.textContent = isBuy ? '▲' : '▼';
+    // The mark text already reads like "Buy (Paper)\n0.5000 SOL\n…" — the
+    // native tooltip carries the paper disclosure without any hover code.
+    el.title = typeof mark.text === 'string' ? mark.text.replace(/\n/g, ' · ') : 'PaperTrench fill';
+    bubbleLayer.nodes.set(mark.id, el);
+    return el;
+  }
+
+  function hideAllBubbles() {
+    for (const el of bubbleLayer.nodes.values()) el.style.visibility = 'hidden';
+  }
+
+  function layoutBubbles() {
+    const chart = bubbleLayer.chart;
+    const host = bubbleLayer.host;
+    if (!chart || !host) return false;
+    const frame = bubbleLayer.frame;
+    const internals = bubbleInternals(chart);
+    let frameRect = null;
+    let paneRect = null;
+    try {
+      frameRect = frame && typeof frame.getBoundingClientRect === 'function'
+        ? frame.getBoundingClientRect() : { left: 0, top: 0 };
+      paneRect = internals && internals.paneDiv.getBoundingClientRect();
+    } catch (_) { /* geometry unavailable this frame */ }
+    if (!internals || !paneRect) { hideAllBubbles(); return false; }
+
+    const capSec = freshBarTimeSec();
+    const stacks = new Map();
+    const liveIds = new Set();
+    let anyVisible = false;
+    for (const mark of paperMarks) {
+      liveIds.add(mark.id);
+      const levels = paperMarkLevels.get(mark.id);
+      if (!levels) continue;
+      const el = bubbleNode(mark, levels);
+      if (!el.parentNode) host.appendChild(el);
+      const level = shapeLevelFor(levels);
+      // F-31: never place a fill ahead of the chart's newest FRESH bar.
+      const t = capSec > 0 && mark.time > capSec ? capSec : mark.time;
+      let x = null;
+      let y = null;
+      if (level > 0) {
+        try { x = internals.timeScale.timeToCoordinate(t); } catch (_) { x = null; }
+        try { y = internals.priceScale.priceToCoordinate(level, internals.firstValue); } catch (_) { y = null; }
+      }
+      const w = Number(paneRect.width) || 0;
+      const h = Number(paneRect.height) || 0;
+      // Off-viewport culling, same margins the site's own overlay uses.
+      if (x == null || y == null || x < -50 || x > w + 50 || y < -30 || y > h + 30) {
+        el.style.visibility = 'hidden';
+        continue;
+      }
+      // Same-bar fills of the same side stack upward like the site's chips.
+      const stackKey = t + ':' + levels.side;
+      const lift = stacks.get(stackKey) || 0;
+      stacks.set(stackKey, lift + 1);
+      const px = frameRect.left + paneRect.left + x - BUBBLE_PX / 2;
+      const py = frameRect.top + paneRect.top + y - BUBBLE_PX / 2 - lift * (BUBBLE_PX + 3);
+      el.style.transform = 'translate3d(' + px.toFixed(1) + 'px,' + py.toFixed(1) + 'px,0)';
+      el.style.visibility = 'visible';
+      anyVisible = true;
+    }
+    for (const [id, el] of bubbleLayer.nodes) {
+      if (!liveIds.has(id)) {
+        try { el.remove(); } catch (_) {}
+        bubbleLayer.nodes.delete(id);
+      }
+    }
+    return anyVisible;
+  }
+
+  /**
+   * Keep bubbles glued through scroll/zoom/resize. One frame loop, active
+   * only while bubbles exist; it parks itself the moment marks are gone or
+   * rendering moved elsewhere, and syncBubbleLayer revives it. Layout is a
+   * handful of coordinate reads per frame — the site runs the identical
+   * loop for its own markers during interactions.
+   */
+  function scheduleBubbleFrame() {
+    if (bubbleLayer.frameQueued) return;
+    const raf = typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame.bind(window)
+      : (fn) => setTimeout(fn, 120);
+    const step = () => {
+      bubbleLayer.frameQueued = false;
+      if (!bubbleLayer.chart || !shapeFallbackActive || !paperMarks.length) return;
+      layoutBubbles();
+      bubbleLayer.frameQueued = true;
+      raf(step);
+    };
+    bubbleLayer.frameQueued = true;
+    raf(step);
+  }
+
+  function syncBubbleLayer(chart) {
+    if (typeof document === 'undefined') return false;
+    const body = document.body || document.documentElement;
+    if (!body) return false;
+    if (!bubbleLayer.host) {
+      const host = document.createElement('div');
+      host.setAttribute('data-pt-bubbles', '');
+      host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;'
+        + 'z-index:2147482000;pointer-events:none;';
+      body.appendChild(host);
+      bubbleLayer.host = host;
+    }
+    if (bubbleLayer.chart !== chart) {
+      // Chart swap (SPA remount): nodes re-place against the new frame on
+      // the next layout — the C-12 lesson, handled by construction.
+      bubbleLayer.chart = chart;
+      bubbleLayer.frame = chartFrameMap.get(chart) || null;
+    }
+    const ok = layoutBubbles();
+    scheduleBubbleFrame();
+    return ok;
+  }
+
+  function clearBubbleLayer() {
+    for (const el of bubbleLayer.nodes.values()) {
+      try { el.remove(); } catch (_) {}
+    }
+    bubbleLayer.nodes.clear();
+    bubbleLayer.chart = null;
+    bubbleLayer.frame = null;
+    if (bubbleLayer.host) {
+      try { bubbleLayer.host.remove(); } catch (_) {}
+      bubbleLayer.host = null;
+    }
   }
 
   /**
@@ -2161,6 +2478,8 @@
         marksHooked: padreMarksHooked,
         shapeFallback: shapeFallbackActive,
         shapesDrawn: fallbackShapeHandles.size,
+        // F-39: fills that render as DOM bubbles (line-tools charts).
+        bubblesDrawn: bubbleLayer.nodes.size,
       });
     }
   }

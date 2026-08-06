@@ -111,8 +111,13 @@ test('the overlay derives an entry market cap rather than showing a raw price', 
 
 test('a fill confirmation states the market cap it filled at', () => {
   const src = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
-  assert.match(src, /Bought \$\{E\.fmt\(solAmount, 3\)\} SOL of \$\{token\.symbol\}\$\{atMcap/,
+  // The buy toast reports the amount in the currency the trader ordered in
+  // (dollars on a foreign-chain panel, SOL otherwise) AND the cap it
+  // filled at.
+  assert.match(src, /Bought \$\{boughtText\} of \$\{token\.symbol\}\$\{atMcap/,
     'a buy toast must report the market cap it filled at');
+  assert.match(src, /: `\$\{E\.fmt\(solAmount, 3\)\} SOL`/,
+    'SOL panels keep the SOL amount in the confirmation');
   assert.match(src, /exitMcap \? ` at \$\{fmtMoney\(exitMcap\)\} MC` : ''/,
     'a sell toast must report the market cap it exited at');
 });

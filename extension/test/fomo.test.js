@@ -9,6 +9,13 @@
  *    subscribeBars/unsubscribeBars and NO getMarks — the native marks
  *    pipeline has nothing to patch, so fills MUST render as execution
  *    shapes or they render nowhere.
+ *  - F-39 (probed 2026-08-05): the PRODUCTION build is the STANDALONE
+ *    charting library — createOrderLine/createExecutionShape exist and
+ *    THROW "only available on Trading Platform". The liveShape fixture
+ *    throws exactly like the field; lines draw as horizontal_line line
+ *    tools and fills as PaperTrench DOM bubbles. The legacy fiber fixture
+ *    keeps broker primitives: it locks the generic no-getMarks broker
+ *    path (the shape other sites may still serve).
  *  - The chart symbol is the Codex composite "MINT:1399811149" (uppercased
  *    by the library), and bars are MARKET-CAP denominated: a 1.3M-cap token
  *    streams closes around 1.4e6, ~1/sec.
@@ -81,15 +88,80 @@ function runFomoBridge(opts = {}) {
     unsubscribeBars() {},
     // NO getMarks — live-verified absence (dfKeys capture 2026-08-05).
   };
-  const fomoChart = {
-    symbol: () => `${FOMO_MINT.toUpperCase()}:${FOMO_NETWORK}`,
+
+  /* F-39, live-probed 2026-08-05: fomo ships the STANDALONE charting
+   * library. The broker primitives EXIST on the chart API and THROW
+   * "... is only available on Trading Platform" when called — the old
+   * fixture implemented them, which is exactly how the suite stayed green
+   * while the real site drew nothing. Line tools are the only native
+   * drawing surface: createShape resolves an entity id, getShapeById gives
+   * setPoints/setProperties, removeEntity removes. The pane/scale
+   * internals mirror what the site's own overlay reads (decompiled from
+   * the token chunk): _chartWidget.paneWidgets()[0]._div and
+   * model().timeScale()/mainSeries().priceScale()/firstValue(). */
+  const lineShapes = []; // { id, point, opts, points, props, removed }
+  let shapeSeq = 0;
+  const RealDateRef = Date;
+  const paneT0Sec = Math.floor(RealDateRef.now() / 1000) - 2000;
+  const fakePaneDiv = {
+    getBoundingClientRect: () => ({ left: 8, top: 4, width: 800, height: 420 }),
+  };
+  const liveShapeSurface = {
+    createOrderLine: () => { throw new Error('createOrderLine is only available on Trading Platform'); },
+    createExecutionShape: () => { throw new Error('createExecutionShape is only available on Trading Platform'); },
+    createShape(point, shapeOpts) {
+      const id = `shape-${++shapeSeq}`;
+      const rec = {
+        id,
+        point,
+        opts: shapeOpts,
+        points: [{ price: point && point.price }],
+        props: Object.assign(
+          {},
+          shapeOpts && shapeOpts.overrides,
+          shapeOpts && shapeOpts.text != null ? { text: shapeOpts.text } : null
+        ),
+        removed: false,
+      };
+      rec.api = {
+        setPoints(pts) { rec.points = pts; },
+        setProperties(props) { Object.assign(rec.props, props); },
+      };
+      lineShapes.push(rec);
+      return Promise.resolve(id); // live-verified: resolves the entity id
+    },
+    getShapeById(id) {
+      const rec = lineShapes.find((s) => s.id === id && !s.removed);
+      if (!rec) throw new Error('unknown entity');
+      return rec.api;
+    },
+    removeEntity(id) {
+      const rec = lineShapes.find((s) => s.id === id);
+      if (rec) rec.removed = true;
+    },
+    getAllShapes: () => lineShapes.filter((s) => !s.removed).map((s) => ({ id: s.id, name: 'horizontal_line' })),
+    _chartWidget: {
+      paneWidgets: () => [{ _div: fakePaneDiv }],
+      model: () => ({
+        timeScale: () => ({ timeToCoordinate: (sec) => (sec - paneT0Sec) / 10 }),
+        mainSeries: () => ({
+          priceScale: () => ({ priceToCoordinate: (v) => 420 - v / 50000 }),
+          firstValue: () => 1.4e6,
+        }),
+      }),
+    },
+  };
+  const brokerSurface = {
     createOrderLine: () => Promise.resolve(makeAsyncAdapter(orderLines)),
     createExecutionShape: () => Promise.resolve(makeAsyncAdapter(execShapes)),
+  };
+  const fomoChart = Object.assign({
+    symbol: () => `${FOMO_MINT.toUpperCase()}:${FOMO_NETWORK}`,
     exportData: () => Promise.resolve({
       schema: ['time', 'open', 'high', 'low', 'close'],
       data: [],
     }),
-  };
+  }, opts.liveShape ? liveShapeSurface : brokerSurface);
   const fomoWidget = {
     _options: { datafeed: fomoDatafeed },
     activeChart: () => fomoChart,
@@ -118,12 +190,38 @@ function runFomoBridge(opts = {}) {
     contentWindow: opts.liveShape ? { tradingViewApi: { activeChart: () => fomoChart } } : null,
     getClientRects: () => [{}],
     clientWidth: 800,
+    getBoundingClientRect: () => ({ left: 100, top: 50, width: 800, height: 430 }),
   };
+
+  // Minimal element fakes for the F-39 DOM bubble layer: enough tree to
+  // append, position, and remove chips, nothing more.
+  function makeFakeEl(tag) {
+    return {
+      tag,
+      style: {},
+      attrs: {},
+      children: [],
+      parentNode: null,
+      textContent: '',
+      title: '',
+      setAttribute(k, v) { this.attrs[k] = v; },
+      appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
+      remove() {
+        const p = this.parentNode;
+        if (!p) return;
+        const i = p.children.indexOf(this);
+        if (i >= 0) p.children.splice(i, 1);
+        this.parentNode = null;
+      },
+    };
+  }
 
   const doc = {
     getElementById: () => null,
     querySelector: (sel) => (String(sel).includes('iframe[id^="tradingview_"]') ? fomoIframe : null),
     querySelectorAll: (sel) => (String(sel).includes('iframe[id^="tradingview_"]') ? [fomoIframe] : []),
+    createElement: (tag) => makeFakeEl(tag),
+    body: makeFakeEl('body'),
   };
 
   function FakeWebSocket() {}
@@ -188,6 +286,9 @@ function runFomoBridge(opts = {}) {
     emitted,
     orderLines,
     execShapes,
+    lineShapes,
+    doc,
+    paneT0Sec,
     win,
     fomoDatafeed,
     setNow(t) { fakeNow = t; },
@@ -259,10 +360,33 @@ test('F-38: the LIVE fomo shape — options bag + contentWindow api, NO fiber �
     avgBuyUsd: 0.0164, // entry at 2x current => line at 2x the close
   });
   await microtasks();
-  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
-  assert.ok(line, 'the mcap average line draws on fomo');
-  assert.ok(Math.abs(line.values.setPrice - 16_400_000) < 1,
-    'levelled from the vetted ledger close x price ratio');
+  // F-39: the standalone build THROWS on createOrderLine (the fixture now
+  // throws exactly like the field) — the same average line must draw as a
+  // locked horizontal_line LINE TOOL instead.
+  assert.equal(env.orderLines.length, 0, 'no order line can exist on the standalone build');
+  const line = env.lineShapes.find((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.ok(line, 'the mcap average line draws as a horizontal_line line tool');
+  assert.ok(Math.abs(line.points[0].price - 16_400_000) < 1,
+    `levelled from the vetted ledger close x price ratio, got ${line.points[0].price}`);
+  assert.equal(line.opts.shape, 'horizontal_line');
+  assert.equal(line.opts.lock, true, 'the user must not be able to drag a PAPER line');
+  assert.equal(line.opts.disableSave, true, 'PAPER lines must never enter the site-saved layout');
+  assert.equal(line.props.linecolor, '#90A8FA99');
+
+  // A DCA moves the average: a fresh spec must MOVE the same line tool via
+  // setPoints, not stack a second one.
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.0082,
+    avgBuyUsd: 0.0123, // now 1.5x current => 1.5x the close
+  });
+  await microtasks();
+  const lines = env.lineShapes.filter((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.equal(lines.length, 1, 'the moved average updates in place — never a second line');
+  assert.ok(Math.abs(lines[0].points[0].price - 12_300_000) < 1,
+    `the line moved to the new frozen level, got ${lines[0].points[0].price}`);
 });
 
 test('fomo: fiber-only discovery hooks bars and reports marks UNHOOKED', () => {
@@ -336,6 +460,122 @@ test('fomo: a paper fill renders as an execution shape at the MCAP level', async
   assert.ok(level > 1e6 && level < 1.5e6,
     `fill level must land on the mcap axis near 1.32M, got ${level}`);
   assert.equal(shape.values.setDirection, 'buy');
+});
+
+/* ------------------------------------------------------------------ *
+ * 3b. F-39: the PRODUCTION build — DOM bubbles, because broker
+ *     primitives throw on the standalone charting library
+ * ------------------------------------------------------------------ */
+
+function sendMcapLines(env) {
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: CURRENT_PRICE_NATIVE,
+    currentPriceUsd: CURRENT_PRICE_USD,
+    avgBuyNative: 0.0000065,
+    avgBuyUsd: 0.0013,
+    avgBuyMcap: 1300000,
+  });
+}
+
+const CHIP = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/;
+
+test('F-39: on the standalone build a paper fill renders as a PT DOM bubble at the exact axis level', async () => {
+  const env = runFomoBridge({ liveShape: true });
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env);
+  sendMcapLines(env);
+  await microtasks();
+
+  env.send('paper-marker', {
+    side: 'buy',
+    priceNative: 0.0000065,
+    priceUsd: 0.0013,
+    mcap: 1300000,
+    solAmount: 0.5,
+    ts: t0,
+    symbol: 'Doom',
+  });
+  // The marks pipeline can never run and execution shapes THROW — the 2s
+  // verification timer must hand rendering to the DOM bubble layer.
+  env.runTimeouts();
+  await microtasks();
+
+  assert.equal(env.execShapes.length, 0, 'nothing can spawn broker shapes on this build');
+  const host = env.doc.body.children.find((el) => 'data-pt-bubbles' in el.attrs);
+  assert.ok(host, 'the bubble overlay host mounts on <body>, never inside the page tree');
+  const chips = host.children.filter((el) => el.attrs['data-pt-bubble']);
+  assert.equal(chips.length, 1, 'one fill, one bubble');
+  const chip = chips[0];
+  assert.equal(chip.attrs['data-pt-bubble'], 'buy');
+  assert.equal(chip.textContent, '▲');
+  assert.match(chip.title, /\(Paper\)/, 'the tooltip must disclose the fill is paper (F-30)');
+  assert.equal(chip.style.visibility, 'visible');
+
+  // The chip is CENTERED on the fill's own axis level. Level = close x
+  // (fillNative/currentNative) — the F-31 universal formula; coordinates
+  // ride the same internal scales the site's own overlay reads.
+  const level = LIVE_BAR_CLOSE * (0.0000065 / CURRENT_PRICE_NATIVE);
+  const expectedY = 50 + 4 + (420 - level / 50000) - 10;
+  const snapped = Math.floor(t0 / 60000) * 60; // 1-minute grid from the live subscription
+  const expectedX = 100 + 8 + (snapped - env.paneT0Sec) / 10 - 10;
+  const m = CHIP.exec(chip.style.transform || '');
+  assert.ok(m, `the chip must be positioned via translate3d, got "${chip.style.transform}"`);
+  assert.ok(Math.abs(Number(m[1]) - expectedX) < 0.6, `x ${m[1]} vs expected ${expectedX}`);
+  assert.ok(Math.abs(Number(m[2]) - expectedY) < 0.6, `y ${m[2]} vs expected ${expectedY}`);
+});
+
+test('F-39: same-bar fills stack upward and a sell reads as a red down-chip', async () => {
+  const env = runFomoBridge({ liveShape: true });
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env);
+  sendMcapLines(env);
+  await microtasks();
+
+  const fill = (side, priceNative, priceUsd, mcap) => env.send('paper-marker', {
+    side, priceNative, priceUsd, mcap, solAmount: 0.25, ts: t0, symbol: 'Doom',
+  });
+  fill('buy', 0.0000065, 0.0013, 1300000);
+  fill('buy', 0.0000065, 0.0013, 1300000); // same level, same snapped bar
+  fill('sell', 0.0000072, 0.00144, 1440000);
+  env.runTimeouts();
+  await microtasks();
+
+  const host = env.doc.body.children.find((el) => 'data-pt-bubbles' in el.attrs);
+  assert.ok(host);
+  const chips = host.children.filter((el) => el.attrs['data-pt-bubble']);
+  assert.equal(chips.length, 3, 'every fill gets a chip');
+  const buys = chips.filter((c) => c.attrs['data-pt-bubble'] === 'buy');
+  assert.equal(buys.length, 2);
+  const ys = buys.map((c) => Number(CHIP.exec(c.style.transform)[2]));
+  assert.ok(Math.abs(Math.abs(ys[0] - ys[1]) - 23) < 0.01,
+    `the second same-bar buy lifts one chip step (20px + 3px gap), got dy=${Math.abs(ys[0] - ys[1])}`);
+  const sell = chips.find((c) => c.attrs['data-pt-bubble'] === 'sell');
+  assert.ok(sell, 'the sell renders its own chip');
+  assert.equal(sell.textContent, '▼');
+});
+
+test('F-39: standdown removes every bubble and the overlay host itself', async () => {
+  const env = runFomoBridge({ liveShape: true });
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env);
+  sendMcapLines(env);
+  await microtasks();
+  env.send('paper-marker', {
+    side: 'buy', priceNative: 0.0000065, priceUsd: 0.0013, mcap: 1300000,
+    solAmount: 0.5, ts: t0, symbol: 'Doom',
+  });
+  env.runTimeouts();
+  await microtasks();
+  assert.ok(env.doc.body.children.some((el) => 'data-pt-bubbles' in el.attrs), 'bubbles exist before standdown');
+
+  env.send('standdown');
+  assert.equal(env.doc.body.children.find((el) => 'data-pt-bubbles' in el.attrs), undefined,
+    '"PaperTrench off" must leave the page exactly as it found it');
 });
 
 /* ------------------------------------------------------------------ *

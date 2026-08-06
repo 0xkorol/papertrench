@@ -33,6 +33,18 @@ handler). Cross-terminal warm links still build /tokens/solana/ URLs —
 correct today because the other terminals are Solana-only, revisit if that
 changes.
 
+Follow-ups landed the same day:
+- **F-39** (DEFECTS.md): fomo's standalone charting library throws on all
+  broker draw calls — lines now draw as horizontal_line line tools and
+  fills as PT DOM bubbles on every fomo chain (the chart pipeline stays
+  chain-agnostic, as verified above).
+- **Dollar quick buys**: fomo denominates every non-Solana chain in USD
+  (live-read: $10/$100/$500/$1000 on a BNB token panel). Foreign-chain
+  panels quick-buy in dollars (presetsBuyUsd, venue-default ladder),
+  converted ONCE at the recorded solUsdAtResolve rate; the tapped dollars
+  ride the trade as `quotedUsd` for receipts. No rate → refusal, never a
+  guessed conversion. Solana panels keep SOL.
+
 ## The build (one focused pass, in order)
 
 1. **sites.js**: fomo detect() accepts all corpus slugs; returns

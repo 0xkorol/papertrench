@@ -375,6 +375,36 @@ end-to-end feed prewatch test (bare curve address → watched mint → primed
 quote → reserve account remembered), bootstrap acceptance/ambiguity tests,
 and the existing armed-buy suite.
 
+**F-39 · S1 · fomo STILL showed no buys and no lines after F-38 — the standalone charting library THROWS on every broker draw call, and the fixture implemented what the field refuses**
+`price-bridge.js` syncLineSlot/spawnExecutionShape · fomo.family, maintainer
+report ("I asked you to fix a function. And you don't.") ·
+**fixed (unreleased)** — probed on the LIVE chart (in-app browser,
+2026-08-05): fomo ships TradingView's STANDALONE charting library. The chart
+API *carries* createOrderLine and createExecutionShape, and calling either
+throws "… is only available on Trading Platform" — so F-38's bar hook was
+real progress (closes flowed, levels computed) while every draw call threw
+into a silent catch that read as "chart not ready, retry", forever. Two
+lessons compounded: (1) the fixture implemented both broker calls, so the
+liveShape suite stayed green while the field drew nothing — a fake must
+REFUSE what the site refuses, not just omit what it omits; (2) a catch
+that cannot distinguish "not yet" from "never" retries a fact. The throw
+is now evidence: capability is memoized per chart, average lines reroute
+to locked horizontal_line LINE TOOLS (live-verified: createShape resolves
+an entity id; getShapeById(id).setPoints moves it; removeEntity removes),
+and fills render as PaperTrench's own DOM bubble layer — chips styled
+after fomo's swap markers (site: 26px, ours: 20px, PT palette, "(Paper)"
+tooltip — F-30) and positioned by the SAME internals the site's overlay
+uses (decompiled from the token chunk: paneWidgets()[0]._div geometry +
+model().timeScale().timeToCoordinate / mainSeries().priceScale()
+.priceToCoordinate at firstValue), each chip CENTERED on the fill's own
+axis level from the F-31/F-35 vetted-close math. Bubbles live in a private
+overlay on <body> (the Axiom row-chip rule), stack per bar, cull
+off-viewport, and clear on standdown. Routing needs POSITIVE evidence — a
+learned throw, or line tools present while broker calls are absent — so
+Padre's marks-pipeline charts keep their native path. Locked by
+liveShape-fixture tests (fixture now throws exactly like the field) proven
+failing against the pre-fix bridge, with Padre/GMGN/legacy suites green.
+
 **F-38 · S1 · fomo showed NO buys and NO lines — discovery never reached the datafeed, and the test fixture modeled a fiber production doesn't serve**
 `price-bridge.js` widgetsFromIframes · fomo.family, maintainer report ·
 **fixed (unreleased)** — reverse-engineered on the LIVE site (in-app browser,

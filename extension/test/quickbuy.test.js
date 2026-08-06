@@ -24,12 +24,61 @@ test('preset taps route through the shared buy path when instant is on', () => {
   // so arming for unresolved tokens and the in-flight guard apply to both.
   assert.match(content, /if \(instant\) requestBuy\(Number\(b\.dataset\.amt\)\)/,
     'a preset tap must fire the order when one-click quick buy is enabled');
-  assert.match(content, /if \(!\(amt > 0\)\) return toast\('Pick a SOL amount first'\);\s*\n\s*requestBuy\(amt\);/,
-    'the BUY button must use the same shared path');
+  assert.match(content, /if \(!\(amt > 0\)\) return toast\(panelUsd\(\) \? 'Pick a dollar amount first' : 'Pick a SOL amount first'\);\s*\n\s*requestBuy\(amt\);/,
+    'the BUY button must use the same shared path (currency-aware refusal)');
   assert.match(content, /let buyInFlight = false;/,
     'rapid taps must be guarded against stacking fills');
-  assert.match(content, /buyInFlight = true;\s*\n\s*doBuy\(amt\)\.finally\(\(\) => \{ buyInFlight = false; \}\);/,
+  assert.match(content, /buyInFlight = true;\s*\n\s*doBuy\(solAmount, quotedUsd\)\.finally\(\(\) => \{ buyInFlight = false; \}\);/,
     'the guard must release when the buy settles');
+});
+
+/* ---------------- foreign-chain dollar quick buys ---------------- */
+
+test('foreign-chain panels quick-buy in DOLLARS at the recorded rate', () => {
+  // Venue truth, read off the live BNB token panel 2026-08-05: fomo's own
+  // quick buys are $10/$100/$500/$1000 with a $-prefixed amount box — every
+  // non-Solana chain is priced in USD there. The paper panel mirrors the
+  // venue: chips carry panel units, requestBuy converts ONCE at the
+  // token's RECORDED solUsdAtResolve rate, and a missing rate is an honest
+  // refusal — never a guessed conversion.
+  assert.match(content, /return Boolean\(token && token\.chain && token\.chain !== 'solana'\);/,
+    'the dollar panel is exactly the foreign-chain panel');
+  assert.match(content, /const rate = Number\(token && token\.solUsdAtResolve\);/,
+    'conversion uses the recorded rate, not a fresh guess');
+  assert.match(content, /solAmount = amt \/ rate;/,
+    'the tapped dollars become SOL book units before the engine sees them');
+  assert.match(content, /No SOL\/USD rate for this chain — paper buy refused/,
+    'a rateless record refuses instead of filling');
+  assert.match(content, /usdMode \? `\$\$\{a\}` : `\$\{a\} SOL`/,
+    'chips print the venue currency ($10, not 10 SOL) on foreign chains');
+});
+
+test('a dollar buy on a still-resolving token arms in dollars and converts at fire time', () => {
+  assert.match(content, /armedBuy = \{ amount: solAmount, usd: quotedUsd, at: Date\.now\(\), mint: token\.mint \};/,
+    'the armed intent remembers the currency it was placed in');
+  assert.match(content, /amount = armedUsd \/ rate;/,
+    'the fire-time quote brings the rate the click-time conversion lacked');
+  assert.match(content, /if \(!guard\.ok\) \{ toast\(guard\.message\); return; \}/,
+    'the guard deferred at request time must run at fire time');
+});
+
+test('the engine defaults the USD ladder and records the dollars the trader tapped', () => {
+  assert.deepEqual(E.DEFAULT_SETTINGS.presetsBuyUsd, [10, 100, 500, 1000],
+    'the default USD ladder is the venue\'s own');
+  assert.deepEqual(E.mergeSettings({}).presetsBuyUsd, [10, 100, 500, 1000],
+    'installs from before the setting must land on the venue ladder');
+  const settings = E.defaultSettings();
+  const state = E.defaultState(settings);
+  const { trade } = E.buy(state, settings, {
+    ts: 1_800_000_000_000, mint: '0x' + 'a'.repeat(40), symbol: 'MC', site: 'fomo',
+    priceNative: 0.00025, priceUsd: 0.05, chain: 'bnb', solAmount: 0.5, quotedUsd: 100,
+  });
+  assert.equal(trade.quotedUsd, 100, 'receipts must echo the order as it was placed');
+  const sol = E.buy(state, settings, {
+    ts: 1_800_000_060_000, mint: 'So11111111111111111111111111111111111111112',
+    symbol: 'SOL', site: 'padre', priceNative: 1, solAmount: 1,
+  });
+  assert.equal(sol.trade.quotedUsd, undefined, 'SOL panels never carry a dollar quote');
 });
 
 test('the settings page exposes the one-click toggle', () => {

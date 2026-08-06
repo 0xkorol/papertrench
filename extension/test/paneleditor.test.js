@@ -63,8 +63,15 @@ test('the editor validates through the shared parser and persists via store.set'
   const fnAt = src.indexOf('async function savePresetEditor(');
   assert.ok(fnAt !== -1);
   const block = src.slice(fnAt, src.indexOf('\n  }', fnAt) + 4);
-  assert.match(block, /Q\.parsePresetList\(els\.editBuy\.value, 1000\)/,
-    'buy presets go through the ONE parser, same bound as the dashboard');
+  // Currency-aware bound: SOL rows keep the dashboard's 1000 cap; dollar
+  // rows (foreign-chain panels) allow the venue's own $100k scale. Both go
+  // through the ONE shared parser.
+  assert.match(block, /const buyCap = usdMode \? 100000 : 1000;/,
+    'the buy bound follows the panel currency');
+  assert.match(block, /Q\.parsePresetList\(els\.editBuy\.value, buyCap\)/,
+    'buy presets go through the ONE parser, same bound family as the dashboard');
+  assert.match(block, /patch\[usdMode \? 'presetsBuyUsd' : 'presetsBuy'\] = buy\.values;/,
+    'each currency saves to its own key — a chain switch never rewrites the other list');
   assert.match(block, /Q\.parsePresetList\(els\.editSell\.value, 100, \{ dedupe: true \}\)/,
     'sell percents: bounded at 100, deduplicated');
   assert.match(block, /settings = \{ \.\.\.settings, \.\.\.patch \}/,

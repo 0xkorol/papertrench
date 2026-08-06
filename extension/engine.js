@@ -21,6 +21,10 @@
   const DEFAULT_SETTINGS = {
     balanceStartSol: 10,
     presetsBuy: [0.1, 0.5, 1, 2],
+    // Foreign-chain panels quick-buy in DOLLARS (fomo's own ladder on its
+    // EVM chains, read off the live site 2026-08-05). Separate key so a
+    // chain switch never rewrites the SOL list.
+    presetsBuyUsd: [10, 100, 500, 1000],
     sellPcts: [25, 50, 75, 100],
     // One-click trading: a preset amount fires the buy immediately (Axiom /
     // Padre quick-buy behaviour) instead of only selecting it for the BUY
@@ -352,6 +356,9 @@
       mcap: o.mcap || null,
       chain: pos.chain || o.chain || 'solana',
     };
+    // Foreign-chain panels order in dollars; the tapped amount is recorded
+    // so receipts echo the order as placed, not just its SOL conversion.
+    if (Number(o.quotedUsd) > 0) trade.quotedUsd = Number(o.quotedUsd);
     state.journal.unshift(trade);
     pruneJournal(state);
     return { trade, position: pos };
