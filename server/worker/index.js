@@ -765,9 +765,13 @@ async function handleClanGet(env, tag) {
 
   const seasonMembers = membersFor(SEASON_WINDOW_ID);
   const weekMembers = membersFor(week.weekId);
-  // Both slices per member, so the page can switch views without a dash ever
-  // having to stand in for "outside the top five" — a dash means no closed
-  // round in that window, and it must never mean anything else.
+  // Both slices per member, so the page can switch views without one state
+  // ever standing in for another. Three distinct facts, three renderings:
+  // 0 = in the clan, closed nothing (a real result); a dash = not a member
+  // for any of that window (memberEntry null); "not counted" = record below
+  // verified (entry withheld by publicEntry). This comment previously said a
+  // dash meant no closed round — the exact conflation the clan page had to
+  // fix, so: a dash is absence from the window, never a zero.
   const members = seasonMembers.map((m, i) => ({
     handle: m.handle,
     displayName: m.displayName,
