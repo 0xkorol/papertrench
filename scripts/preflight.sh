@@ -137,6 +137,84 @@ DEFECTS_SHOWN=$(grep -oP 'data-check="defects">\K[0-9]+' site/news.html)
   || fail "site/news.html says $DEFECTS_SHOWN defects closed; DEFECTS.md marks $DEFECTS_REAL"
 echo "news stats OK (tests $TESTS_REAL = $EXT_PASS + $SRV_PASS, defects closed $DEFECTS_REAL)"
 
+# ---------------------------------------------------------------- live claims
+# CHANGELOG's "Live on the website" heading promises "you can use this today".
+# That is the one section a deploy backlog can turn into a lie without anyone
+# editing a word: the text stays true of `main` and goes false in production.
+# It happened — a Pages outage froze the site while two bullets described page
+# behaviour that had only landed in the repo.
+#
+# So each claim names a stable TOKEN in the deployed artifact, never its prose:
+# copy gets reworded at cut time by whoever edits voice, and a gate that trips
+# on a comma is a gate people learn to bypass.
+#
+# The check runs BOTH directions, because a one-way check only fixes today's
+# sign of the error:
+#   1. a claim not findable in production, with nothing flagging it  -> FAIL
+#   2. an exception block still standing once its claims ARE live    -> FAIL
+# Direction 2 is the one a human sweep forgets, precisely because everything
+# looks fixed by then. A note that self-removes on a condition nobody re-tests
+# is just a note.
+#
+# Rows: token|path|claim
+LIVE_CLAIMS="
+cookieBlocked|/arena.js|a blocked cross-domain sign-in explains itself
+uncounted|/clan.html|sub-verified clan members read 'not counted'
+"
+LIVE_SITE="https://papertrench.com"
+CLAIMS_MISSING=""
+CLAIMS_LIVE=0
+CLAIMS_TOTAL=0
+LIVE_SKIP=""
+
+if ! command -v curl >/dev/null 2>&1; then
+  LIVE_SKIP="curl not installed"
+fi
+
+while IFS='|' read -r token path claim; do
+  [ -n "$token" ] || continue
+  [ -n "$LIVE_SKIP" ] && continue
+  CLAIMS_TOTAL=$((CLAIMS_TOTAL + 1))
+  # Cache-bust: Pages serves max-age=600, and a stale edge copy is
+  # indistinguishable from an undeployed one. A deploy younger than the CDN
+  # window can still read as missing — this is a pre-TAG gate, not a monitor.
+  body=$(curl -s --max-time 10 -w '\n%{http_code}' "$LIVE_SITE$path?preflight=$$" 2>/dev/null)
+  status=$(printf '%s' "$body" | tail -1)
+  # "I could not check" is never allowed to masquerade as either verdict — the
+  # same three-state rule the pricing layer uses for a failed lookup.
+  if [ "$status" != "200" ]; then
+    LIVE_SKIP="$LIVE_SITE$path returned ${status:-no response}"
+    continue
+  fi
+  if printf '%s' "$body" | grep -q "$token"; then
+    CLAIMS_LIVE=$((CLAIMS_LIVE + 1))
+  else
+    CLAIMS_MISSING="$CLAIMS_MISSING\n    - $claim (no '$token' in $path)"
+  fi
+done <<EOF
+$LIVE_CLAIMS
+EOF
+
+# Structural, not prose: any blockquote inside the section is an exception
+# being flagged. Matching the block's wording would fail the same way matching
+# a claim's wording would.
+LIVE_SECTION=$(sed -n '/^## Live on the website/,/^## v/p' CHANGELOG.md)
+EXCEPTIONS_FLAGGED=$(printf '%s' "$LIVE_SECTION" | grep -c '^> ' || true)
+
+if [ -n "$LIVE_SKIP" ]; then
+  echo "  note: LIVE-CLAIM CHECK SKIPPED — $LIVE_SKIP"
+  echo "        Could not verify the 'Live on the website' bullets against"
+  echo "        production. This is not a pass: re-run with the network up,"
+  echo "        or curl each claim by hand before tagging."
+elif [ -n "$CLAIMS_MISSING" ] && [ "$EXCEPTIONS_FLAGGED" -eq 0 ]; then
+  # shellcheck disable=SC2059
+  fail "$(printf "CHANGELOG says these are live on the website; production disagrees, and nothing flags them:$CLAIMS_MISSING\n    Deploy the site, or flag them in the section as exceptions.")"
+elif [ -z "$CLAIMS_MISSING" ] && [ "$EXCEPTIONS_FLAGGED" -gt 0 ]; then
+  fail "the 'Live on the website' exception block is stale: all $CLAIMS_TOTAL claims ARE in production now. Delete the block — it currently tells users a shipped feature has not shipped."
+else
+  echo "live claims OK ($CLAIMS_LIVE/$CLAIMS_TOTAL in production$([ "$EXCEPTIONS_FLAGGED" -gt 0 ] && echo ", remainder flagged as exceptions"))"
+fi
+
 echo
 echo "PREFLIGHT OK for v$MANIFEST_V"
 echo "Remaining manual steps:"
