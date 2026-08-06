@@ -158,8 +158,24 @@ test('the bridge keeps the spot price gate intact and gives perps its own door',
 
 test('the usd-abs basis returns the level verbatim, with no cap conversion', () => {
   assert.match(bridgeSrc, /if \(basis === 'usd-abs'\)/, 'lineLevelFor must know the basis');
-  assert.match(bridgeSrc, /if \(basis === 'usd-abs'\) return levels\.usd > 0 \? levels\.usd : null;/,
+  assert.match(bridgeSrc, /if \(levels\.perp \|\| basis === 'usd-abs'\) return levels\.usd > 0 \? levels\.usd : null;/,
     'shapeLevelFor must return the USD level unscaled');
+});
+
+test('a perps mark carries its own level — it does not wait for an axis spec', () => {
+  // Observed live on Hyperliquid: a mark posted before any paper-lines
+  // message could not be placed at all (shapesDrawn stayed 0), and a
+  // lines-clear un-drew marks that had been drawn. A perps level is
+  // absolute USD; it needs nothing else to be interpreted.
+  assert.match(bridgeSrc, /perp: isPerp,/, 'the level record must know it is a perp level');
+  assert.match(bridgeSrc, /if \(levels\.perp \|\| basis === 'usd-abs'\)/,
+    'and the level must resolve from the mark alone, before any spec exists');
+
+  // The producer also establishes the axis before posting fills.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'perps-chart.js'), 'utf8');
+  const sync = src.slice(src.indexOf('function syncChart'), src.indexOf('function syncLines'));
+  assert.ok(sync.indexOf('syncLines(o)') < sync.indexOf("post('paper-marker'"),
+    'the axis spec is posted before any marker');
 });
 
 test('perps marks draw as SHAPES, never via the host marks pipeline', () => {

@@ -1853,7 +1853,7 @@
     const spec = paperLineSpec || {};
     const basis = spec.axisBasis;
     // Perps: the mark's USD level IS the chart level, with no ratio scaling.
-    if (basis === 'usd-abs') return levels.usd > 0 ? levels.usd : null;
+    if (levels.perp || basis === 'usd-abs') return levels.usd > 0 ? levels.usd : null;
     if (basis === 'usd' && levels.usd > 0) return levels.usd;
     if (basis === 'native' && levels.native > 0) return levels.native;
     const currentNative = Number(spec.currentPriceNative);
@@ -2683,6 +2683,11 @@
         nativeMcap: markMcap && markUsd && markNative ? markMcap * (markNative / markUsd) : null,
         // Shapes carry the perps vocabulary rather than Buy/Sell.
         shapeText: isPerp ? perpShapeText(payload) : null,
+        // A perps level is absolute USD and needs no axis spec to interpret.
+        // Without this a mark could only be placed AFTER a paper-lines
+        // message had established the basis, so the first fill on a fresh
+        // page silently failed to draw, and a lines-clear un-drew it again.
+        perp: isPerp,
       });
       if (paperMarks.length > MAX_MARKS) {
         for (const dropped of paperMarks.slice(0, paperMarks.length - MAX_MARKS)) {

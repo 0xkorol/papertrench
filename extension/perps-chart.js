@@ -71,6 +71,11 @@
     if (!o || !o.state || !o.venue || !o.market) return;
     announce(o.market);
 
+    // The axis spec goes FIRST. A mark carries its own absolute-USD level
+    // now, but establishing the basis before any fill keeps the ordering
+    // honest and means a level never has to be inferred.
+    syncLines(o);
+
     // Bubbles: replay the whole journal for this market, deduped by id, so a
     // reload or a render handoff redraws exactly what happened and no more.
     const journal = Array.isArray(o.state.journal) ? o.state.journal : [];
@@ -83,7 +88,10 @@
       post('paper-marker', marker);
     }
 
-    // Lines: the open position's entry, and its liquidation price.
+  }
+
+  /* The two lines: the open position's entry, and its liquidation price. */
+  function syncLines(o) {
     let entryPx = null;
     let liqPx = null;
     for (const id of Object.keys(o.state.positions || {})) {
