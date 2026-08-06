@@ -668,6 +668,107 @@ test('D-03: a mismatch renders as one coherent sentence', () => {
 
 /* ---------------- D-01: the equity curve converges on equitySol ----------- */
 
+/* ---- D-51: the curve survives the journal cap (truncation divergence) ---- */
+
+function tripsWallet(trips, over) {
+  // Fee-free round trips at a fixed profit, so the arithmetic is hand-checkable
+  // and the only thing under test is what truncation does to the walk.
+  const settings = wave2Settings(Object.assign({ feeBps: 0 }, over || {}));
+  const state = E.defaultState(settings);
+  let ts = 1_700_000_000_000;
+  for (let i = 0; i < trips; i++) {
+    const mint = 'M' + (i % 7);
+    ts += 1000;
+    E.buy(state, settings, { ts, mint, symbol: 'S', priceNative: 0.001, solAmount: 0.5 });
+    ts += 1000;
+    E.sell(state, settings, { ts, mint, qtyFraction: 1, priceNative: 0.00102 });
+  }
+  return { state, settings, ts };
+}
+
+test('D-51: past the journal cap the curve still lands on equitySol', () => {
+  // pruneJournal keeps the newest 2000 fills. Beyond that the dropped fills'
+  // P&L is in cashSol but missing from the walk, so a curve anchored at the
+  // starting balance froze while the equity KPI beside it kept climbing —
+  // two numbers on one screen disagreeing, by more the older the account got.
+  for (const trips of [1001, 1200, 1600]) {
+    const { state, settings, ts } = tripsWallet(trips);
+    assert.equal(state.journal.length, 2000, `the fixture must be truncated at ${trips} trips`);
+    const pts = E.equityCurvePoints(state, settings.balanceStartSol, { now: ts + 1000 });
+    const last = pts[pts.length - 1].eq;
+    assert.ok(Math.abs(last - E.equitySol(state)) < 1e-9,
+      `at ${trips} trips the curve must land on equitySol; got ${last} vs ${E.equitySol(state)}`);
+  }
+  // And the divergence must really have been there to fix: anchoring at the
+  // starting balance (what the code did) is provably wrong at this size.
+  const { state, settings } = tripsWallet(1600);
+  const walked = state.journal.slice().sort((a, b) => a.ts - b.ts)
+    .reduce((s, t) => s + (t.side === 'sell' ? (Number(t.pnlSol) || 0) : -(Number(t.feeSol) || 0)), 0);
+  assert.ok(Math.abs((settings.balanceStartSol + walked) - E.equitySol(state)) > 1,
+    'the start-anchored walk must be off by a large margin, or this test proves nothing');
+});
+
+test('D-51: a truncated curve starts at the oldest fill it can speak for', () => {
+  const { state, settings, ts } = tripsWallet(1600);
+  const pts = E.equityCurvePoints(state, settings.balanceStartSol, { now: ts + 1000 });
+  const oldestRetained = state.journal.slice().sort((a, b) => a.ts - b.ts)[0];
+  assert.equal(pts[0].t, oldestRetained.ts,
+    'a truncated curve must not claim to begin at account open — it begins where its data does');
+  assert.ok(pts[0].eq > settings.balanceStartSol,
+    'and it must begin at the equity actually reached by then, not the starting balance');
+  // Every point must still be exact relative to the last one.
+  const step = pts[pts.length - 1].eq - pts[pts.length - 2].eq;
+  assert.ok(Number.isFinite(step), 'the walk stays finite');
+});
+
+test('D-51: an unknowable equity draws NOTHING, never a confident line', () => {
+  // The tempting "fix" here is to rescue a non-finite derivation by falling
+  // back to the starting balance, which keeps the historical points finite.
+  // That is the wrong trade. When cashSol is unknowable the KPI honestly
+  // reads "—", and a start-anchored walk would draw a confident curve — with
+  // a green/red profit verdict — for a wallet whose equity nobody can
+  // compute. Absent beats plausible-but-unsupported.
+  const settings = wave2Settings();
+  const t0 = 1_700_000_000_000;
+
+  const mk = () => {
+    const state = E.defaultState(settings);
+    E.buy(state, settings, { ts: t0, mint: 'A', symbol: 'A', priceNative: 0.001, solAmount: 1 });
+    E.sell(state, settings, { ts: t0 + 2000, mint: 'A', qtyFraction: 1, priceNative: 0.0012 });
+    E.buy(state, settings, { ts: t0 + 3000, mint: 'B', symbol: 'B', priceNative: 0.002, solAmount: 1 });
+    return state;
+  };
+
+  // Corrupt cash: equity is unknowable, and the curve must not pretend.
+  const cashBroken = mk();
+  cashBroken.cashSol = NaN;
+  assert.ok(!Number.isFinite(E.equitySol(cashBroken)), 'the KPI itself is unknowable here');
+  const ptsCash = E.equityCurvePoints(cashBroken, settings.balanceStartSol, { now: t0 + 4000 });
+  assert.ok(ptsCash.some((p) => !Number.isFinite(p.eq)),
+    'a wallet whose equity cannot be computed must not render a drawable curve');
+
+  // Corrupt mark: the renderer takes min/max across the series, so the
+  // non-finite tail already empties the chart — the series must carry it.
+  const markBroken = mk();
+  markBroken.positions.B.lastPriceNative = NaN;
+  const ptsMark = E.equityCurvePoints(markBroken, settings.balanceStartSol, { now: t0 + 4000 });
+  assert.ok(ptsMark.some((p) => !Number.isFinite(p.eq)),
+    'a broken mark must reach the series rather than be quietly absorbed');
+});
+
+test('D-51: a complete journal draws exactly the curve it always drew', () => {
+  // The derived anchor must be a strict generalization: on a book whose
+  // journal covers every fill it has to reproduce the old output exactly,
+  // anchor value and anchor timestamp included.
+  const { state, settings, ts } = tripsWallet(300);
+  assert.ok(state.journal.length < 2000, 'this fixture must NOT be truncated');
+  const pts = E.equityCurvePoints(state, settings.balanceStartSol, { now: ts + 1000 });
+  assert.equal(pts[0].eq, settings.balanceStartSol,
+    'a complete journal anchors on the caller\'s own starting figure, bit for bit');
+  assert.equal(pts[0].t, state.startedAt, 'and at account open');
+  assert.ok(Math.abs(pts[pts.length - 1].eq - E.equitySol(state)) < 1e-9);
+});
+
 test('D-01: the curve final point equals equitySol, open positions included', () => {
   const settings = wave2Settings();
   const state = E.defaultState(settings);

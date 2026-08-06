@@ -634,6 +634,12 @@
     return pos.qty * pos.lastPriceNative - pos.costSol;
   }
 
+  /* How far the derived curve anchor may sit from the caller's starting
+   * balance before we conclude the journal does not account for all of
+   * current equity. Float drift over thousands of fills is far below this;
+   * a single dropped fill is far above it. */
+  const CURVE_ANCHOR_EPS = 1e-6;
+
   function equitySol(state) {
     let eq = state.cashSol;
     for (const mint of Object.keys(state.positions)) {
@@ -657,15 +663,30 @@
    * time and open positions marked with the same net-basis unrealizedPnl(),
    * the identity is exact: the final point equals equitySol(state)
    * (cash + marked positions) whenever the journal covers every fill.
+   *
+   * D-51: the journal is CAPPED (pruneJournal keeps the newest 2000 fills),
+   * so on any wallet past that cap it does NOT cover every fill — the
+   * dropped fills' P&L is baked into cashSol but missing from the walk. The
+   * curve's last point then froze while the equity KPI on the same screen
+   * kept moving, and the gap grew with account age: the same monotonic
+   * divergence this function was written to kill, reintroduced by
+   * truncation.
+   *
+   * The anchor is therefore DERIVED rather than assumed. Walking the
+   * retained journal backwards from equity known to be true gives the equity
+   * at the oldest RETAINED fill, which needs none of the data the cap threw
+   * away. When the journal does cover everything that derivation equals
+   * startSol exactly, so a complete book draws precisely the curve it drew
+   * before; when it does not, the curve starts at the oldest fill it can
+   * honestly speak for instead of claiming the account began there.
    */
   function equityCurvePoints(state, startSol, opts) {
     const start = Number(startSol) || 0;
     const journal = ((state && state.journal) || []).slice().sort((a, b) => a.ts - b.ts);
     const startedAt = Number(state && state.startedAt)
       || (journal[0] ? Number(journal[0].ts) : Date.now());
-    const pts = [{ t: startedAt, eq: start }];
-    let pnl = 0;
-    for (const t of journal) {
+
+    const stepOf = (t) => {
       if (t.side === 'buy') {
         const feeRaw = Number(t.feeSol);
         const fee = Number.isFinite(feeRaw) && feeRaw >= 0
@@ -673,16 +694,42 @@
           : (Number.isFinite(Number(t.solNet))
             ? Math.max(0, (Number(t.solGross) || 0) - Number(t.solNet))
             : 0);
-        pnl -= fee;
-      } else if (t.side === 'sell') {
-        pnl += Number(t.pnlSol) || 0;
+        return -fee;
       }
-      pts.push({ t: t.ts, eq: start + pnl });
-    }
+      if (t.side === 'sell') return Number(t.pnlSol) || 0;
+      return 0;
+    };
+
     let openPnl = 0;
     const positions = (state && state.positions) || {};
     for (const mint of Object.keys(positions)) openPnl += unrealizedPnl(positions[mint]);
-    pts.push({ t: Number(opts && opts.now) || Date.now(), eq: start + pnl + openPnl });
+
+    let walked = 0;
+    for (const t of journal) walked += stepOf(t);
+    // Unwind backwards from equity that is true by construction.
+    const derived = equitySol(state) - openPnl - walked;
+    // A non-finite derivation is deliberately NOT rescued by falling back to
+    // the caller's figure. It is tempting — it would keep the historical
+    // points finite — but it is the wrong trade: when equity is unknowable
+    // (a corrupt cashSol, a broken mark) a start-anchored walk draws a
+    // confident line and a green/red verdict for a wallet whose equity
+    // nobody can compute, while the KPI beside it honestly reads "—". The
+    // renderer takes min/max across the series, so a single non-finite point
+    // already yields an empty chart either way; propagating is what keeps an
+    // unknowable equity ABSENT from the screen instead of plausible on it.
+    const covers = Math.abs(derived - start) <= CURVE_ANCHOR_EPS;
+    // A covered journal keeps the caller's own starting figure, so the
+    // complete case is bit-identical to what it has always drawn.
+    const anchorEq = covers ? start : derived;
+    const anchorT = covers || !journal.length ? startedAt : Number(journal[0].ts);
+
+    const pts = [{ t: anchorT, eq: anchorEq }];
+    let pnl = 0;
+    for (const t of journal) {
+      pnl += stepOf(t);
+      pts.push({ t: t.ts, eq: anchorEq + pnl });
+    }
+    pts.push({ t: Number(opts && opts.now) || Date.now(), eq: anchorEq + pnl + openPnl });
     return pts;
   }
 
