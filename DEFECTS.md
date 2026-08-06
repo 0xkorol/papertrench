@@ -456,6 +456,41 @@ reject it as `hash-mismatch`. The new server code verifies BOTH versions, so it
 is backward compatible — **redeploy the worker before any extension build that
 writes v2 links reaches a user.**
 
+**F-45 · S3 · Padre's URL slot is a MARKET address and we label it `kind: 'mint'` — a mislabel that has only ever been survivable by luck**
+`sites.js` padre adapter · found by reading Padre's own shipped bundle
+(`trade.padre.gg/assets/index-*.js`, logged-out, 2026-08-06) while scoping
+per-chain native balances · **open — needs ONE live URL to confirm before any
+fix**.
+Padre's router declares `/trade/:chain/:marketAddress`; our adapter returns
+`{ kind: 'mint' }` for whatever sits in that slot. Their bundle draws the
+distinction explicitly: `formatMarketId` and `formatTokenId` are SEPARATE
+functions, and on every EVM chain the market id is a composite
+(`<chain>-fm_<marketAddress>_<tokenAddress>`, likewise `tr_`/`fl_`/`hf_`/
+`cr_`/`u4_`) in which the market and the token are different values. The
+Solana branch parses to `{ type: 'sol', marketAddress: <raw> }` — the same
+slot, named the same way, with no validation distinguishing a mint from a
+pool. By symmetry the Solana URL most likely carries a POOL, not a mint.
+Nothing is visibly broken today, which is exactly the shape of the hazard:
+the resolver accepts pair addresses as readily as mints (Dexscreener resolves
+both), so a wrong label produces a right answer and stays invisible. It is
+the O-13 class — Axiom's `/t/` carried a MINT while we called it a pair — and
+that one also "worked" until something believed the label. Consumers that
+believe it are arriving: `forge.js` branches on `det.kind` to decide whether
+it knows the chain, and design B's per-chain routing keys off the same record.
+Deliberately NOT fixed on inference. Flipping `kind` to `'pair'` on this
+evidence would be the fabricated-spec trap in the other direction — a
+plausible reconstruction, shipped without seeing the thing itself, risking
+the Solana path that demonstrably works today. The confirmation is one
+glance during the logged-in Chrome sitting already scheduled: open any Padre
+Solana token page and compare the address in the URL against the token's mint.
+Same string → the label is right and this closes. Different → `kind` is wrong
+and the fix lands with a live corpus behind it.
+Also captured from the same bundle, for whoever opens the gate: Padre's URL
+chain slugs are `solana | bsc | base | eth | arbitrum | robinhood` (+ sepolia
+testnets) — note **`eth`, not `ethereum`**; a second map in the same file
+emits "ethereum" for an external link, and taking the wrong one yields a route
+that silently resolves to nothing.
+
 **F-43 · S1 · A basis RECLASSIFICATION teleported the entry line and every fill bubble — and the test written for that exact field report could not fail for it**
 `price-bridge.js` sameBasisFamily / paper-lines intake ·
 `test/basisflap.test.js` · fomo.family, maintainer field report 2026-08-06
