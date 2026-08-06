@@ -950,6 +950,22 @@
       return;
     }
 
+    // MOUNTED, BUT THE PAGE MAY HAVE CHANGED INSTRUMENT UNDER US. On
+    // Hyperliquid the market lives only in the title and the URL never
+    // changes, so the market switch is invisible to this poll. A
+    // MutationObserver on <title> catches it — unless the app REPLACES the
+    // title node rather than mutating its text, which silently orphans the
+    // observer. This one-second string compare needs no observer at all and
+    // costs nothing, so a switch can never be missed.
+    if (adapter && adapter.venue === 'hyperliquid') {
+      const nowMarket = S.hlTitleMarket(document.title);
+      if (nowMarket && nowMarket !== adapter.market) {
+        lastEntryAt = now;
+        enterPage();
+        return;
+      }
+    }
+
     // NOT MOUNTED YET: keep looking. These are SPAs — at document_idle the
     // route may not have resolved and, on Hyperliquid, the title that NAMES
     // the market often has not been written yet. The href never changes

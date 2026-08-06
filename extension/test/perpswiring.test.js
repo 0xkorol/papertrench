@@ -158,6 +158,24 @@ test('an unmounted page keeps looking — a first failed detect is never permane
     'detection must gate entry, not the other way round');
 });
 
+test('a market switch is caught without depending on a title observer', () => {
+  // On Hyperliquid the market lives only in the title and the URL never
+  // changes, so a switch is invisible to the location poll. A
+  // MutationObserver catches it only while it is still attached to the live
+  // <title> node — an app that REPLACES that node silently orphans it. The
+  // one-second string compare needs no observer at all.
+  const poll = contentSrc.slice(
+    contentSrc.indexOf('function pollLocation()'),
+    contentSrc.indexOf('chrome.storage.onChanged.addListener'),
+  );
+  assert.match(poll, /if \(adapter && adapter\.venue === 'hyperliquid'\) \{/,
+    'the poll itself must check the current market');
+  assert.match(poll, /if \(nowMarket && nowMarket !== adapter\.market\)/,
+    'and re-enter when it changed');
+  assert.ok(poll.indexOf('nowMarket !== adapter.market') < poll.indexOf('if (!adapter && !venueParamsPending)'),
+    'the switch check runs while mounted, before the unmounted-retry branch');
+});
+
 test('one unreadable moment does not tear the chart down', () => {
   // leavePage() clears every drawn fill and both lines. These pages
   // re-render constantly — a title briefly without its market, a route

@@ -203,6 +203,26 @@ test('perps marks draw as SHAPES, never via the host marks pipeline', () => {
     'the perps branch must precede the marks-pipeline heuristic');
 });
 
+test('perps fills render as OUR OWN dom bubbles, not host chart objects', () => {
+  // Execution shapes belong to the host's chart: it can drop them on any
+  // re-render, symbol change or widget remount, and nothing tells us they
+  // are gone — the handles still look alive, so the redraw sweep sees a
+  // full set and does nothing. That is "shows up then disappears". The
+  // bubble layer is our own fixed overlay, repositioned every frame from
+  // the chart's own scales, so there is nothing for the host to delete.
+  const fn = bridgeSrc.slice(
+    bridgeSrc.indexOf('function drawShapeFallback()'),
+    bridgeSrc.indexOf('function clearShapeFallback()'),
+  );
+  assert.ok(fn, 'drawShapeFallback must exist');
+  assert.match(fn, /if \(best && perpsMarksPresent\) \{\s*\n\s*return syncBubbleLayer\(best\);/,
+    'a perps fill must go to the bubble layer');
+  // And it must decide that BEFORE the execution-shape path.
+  const body = fn.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.ok(body.indexOf('perpsMarksPresent') < body.indexOf('createExecutionShape'),
+    'the perps branch must precede the execution-shape branch');
+});
+
 test('a drawn perps fill is never handed back to the marks pipeline', () => {
   // The reported "it shows up then it disappears". The patched getMarks
   // hands rendering back to the native pipeline and DELETES the temporary

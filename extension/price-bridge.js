@@ -1888,6 +1888,17 @@
     // merely lacks createExecutionShape (Padre's marks-pipeline chart)
     // keeps the old skip-and-retry — its fills belong to getMarks.
     const best = charts[0] || null;
+    // PERPS render as OUR OWN DOM bubbles, always. Execution shapes belong
+    // to the host's chart: it can drop them on any re-render, symbol change
+    // or widget remount, and nothing tells us they are gone - the handles
+    // still look alive, so the redraw sweep sees a full set and does
+    // nothing. That is the reported "shows up then disappears". The bubble
+    // layer is PaperTrench's own fixed overlay, repositioned every frame
+    // from the chart's own scales, so there is nothing for the host to
+    // delete and a lost frame self-heals on the next one.
+    if (best && perpsMarksPresent) {
+      return syncBubbleLayer(best);
+    }
     const bestIsLineTools = best && (chartIsLineTools(best)
       || (typeof best.createExecutionShape !== 'function' && typeof best.createShape === 'function'));
     if (bestIsLineTools) {
