@@ -203,6 +203,24 @@ test('perps marks draw as SHAPES, never via the host marks pipeline', () => {
     'the perps branch must precede the marks-pipeline heuristic');
 });
 
+test('a drawn perps fill is never handed back to the marks pipeline', () => {
+  // The reported "it shows up then it disappears". The patched getMarks
+  // hands rendering back to the native pipeline and DELETES the temporary
+  // shapes — and it is reached by our own refreshPadreMarks() call. So the
+  // sequence was: shapes draw, we ask the host to refresh, the host calls
+  // getMarks, and we delete the only thing on screen. On Hyperliquid that
+  // took the bubble and left the lines, which is exactly what was seen.
+  assert.match(bridgeSrc, /if \(shapeFallbackActive && !perpsMarksPresent\) \{/,
+    'the handback must never fire once a perps mark exists');
+  // And the handback must still work for spot, where marks genuinely render.
+  const handback = bridgeSrc.slice(
+    bridgeSrc.indexOf('if (shapeFallbackActive && !perpsMarksPresent)'),
+    bridgeSrc.indexOf('if (shapeFallbackActive && !perpsMarksPresent)') + 160,
+  );
+  assert.match(handback, /shapeFallbackActive = false;\s*\n\s*clearShapeFallback\(\);/,
+    'spot still hands back when the host really is pulling marks');
+});
+
 test('a perps shape says Long/Short/Close/Liquidated, not Buy/Sell', () => {
   assert.match(bridgeSrc, /shapeText: isPerp \? perpShapeText\(payload\) : null/);
   assert.match(bridgeSrc, /text: levels\.shapeText \|\| \(levels\.side === 'sell' \? 'PT Sell' : 'PT Buy'\)/,

@@ -158,6 +158,22 @@ test('an unmounted page keeps looking — a first failed detect is never permane
     'detection must gate entry, not the other way round');
 });
 
+test('one unreadable moment does not tear the chart down', () => {
+  // leavePage() clears every drawn fill and both lines. These pages
+  // re-render constantly — a title briefly without its market, a route
+  // mid-redirect — so a single failed detect used to wipe the chart and the
+  // user watched their marks vanish.
+  const enter = contentSrc.slice(
+    contentSrc.indexOf('async function enterPage()'),
+    contentSrc.indexOf('function leavePage()'),
+  );
+  assert.match(enter, /missedDetects \+= 1;/, 'a miss is counted, not acted on');
+  assert.match(enter, /if \(missedDetects >= DETECT_MISSES_BEFORE_LEAVE\) leavePage\(\);/,
+    'only a sustained absence tears down');
+  assert.match(enter, /missedDetects = 0;/, 'and a successful detect resets the count');
+  assert.match(contentSrc, /const DETECT_MISSES_BEFORE_LEAVE = \d+;/);
+});
+
 test('a missing venue number is chased every second, not every thirty', () => {
   // A freshly loaded Jupiter page prints its borrow rate only once its app
   // renders. Reading it on the slow cadence left the ticket CLOSED for up to

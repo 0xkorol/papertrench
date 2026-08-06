@@ -1154,7 +1154,16 @@
         // execution-shape fallback fired first (slow chart boot), hand
         // rendering back and remove the temporary shapes. Paper fills then
         // render as the site's own bubble marks (Axiom-styled on Axiom).
-        if (shapeFallbackActive) {
+        //
+        // NEVER for perps. On the perps venues the host exposes getMarks but
+        // does not render OUR marks from it, and this handback is reached by
+        // our own refreshPadreMarks() call - so the sequence was: shapes
+        // draw, we ask the host to refresh, the host calls getMarks, and we
+        // delete the only thing the user could see. That is the reported
+        // "it shows up then it disappears", and on Hyperliquid it took the
+        // bubble while leaving the average lines (a separate mechanism)
+        // untouched. Shapes stay authoritative once a perps mark exists.
+        if (shapeFallbackActive && !perpsMarksPresent) {
           shapeFallbackActive = false;
           clearShapeFallback();
         }

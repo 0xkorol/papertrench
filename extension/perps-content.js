@@ -40,6 +40,7 @@
   const CARRY_TICK_MS = 60000;
   const ENTRY_RETRY_MS = 5000;
   const VENUE_PARAM_POLL_MS = 1000; // while a required venue number is missing
+  const DETECT_MISSES_BEFORE_LEAVE = 4; // ~4s of real absence, not one blip
   const ENTRY_ATTEMPTS_BEFORE_NOTICE = 6; // ~30s of the venue not answering
   const ACCEPT_RATIO = 20; // same magnitude gate doctrine as quote.js
   const BARS_REFRESH_MS = 60000;
@@ -90,6 +91,7 @@
   let barStore = null;       // TA bar ring for the current HL market
   let taReads = null;        // assembleReads() context pack, or null
   let venueParamsPending = false; // entry is waiting on the venue's own API
+  let missedDetects = 0;          // consecutive ticks with nothing detectable
   let entryAttempts = 0;
   let venueUnreachable = false;   // said out loud rather than left blank
 
@@ -873,7 +875,18 @@
 
   async function enterPage() {
     const found = S.detect(location.hostname, location.pathname, document.title);
-    if (!found) { leavePage(); return; }
+    if (!found) {
+      // One unreadable moment must not tear the chart down. These pages
+      // re-render constantly: a title briefly without its market, a route
+      // momentarily mid-redirect. leavePage() clears every drawn fill and
+      // both lines, so a single blip wiped the chart and the user watched
+      // their marks vanish. Only a SUSTAINED absence means we have really
+      // left the page.
+      missedDetects += 1;
+      if (missedDetects >= DETECT_MISSES_BEFORE_LEAVE) leavePage();
+      return;
+    }
+    missedDetects = 0;
     if (adapter && found.venue === adapter.venue && found.market === adapter.market) return;
     leavePage();
     adapter = found;
