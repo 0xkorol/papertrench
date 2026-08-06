@@ -723,6 +723,50 @@ test('F-41: the line HOLDS its level across price reposts, and still follows a D
     'a changed average MUST move the line');
 });
 
+test('F-41: an uncomputable level HOLDS the line; only "no average" removes it', async () => {
+  // "No level" and "no line" are different facts. When a wanted average
+  // briefly cannot be converted onto the axis (the chart flips Price/MCap
+  // and the conversion inputs lapse for a post), the line on screen is still
+  // the correct constant in axis units — destroying it is how a held
+  // position lost its average line and got it back only on the next tick.
+  const env = runFomoBridge({ liveShape: true });
+  env.setNow(Date.now());
+  bootWithLiveBar(env, 8_000_000);
+
+  env.send('paper-lines', {
+    enabled: true, axisBasis: 'mcap',
+    currentPriceNative: CURRENT_PRICE_NATIVE, currentPriceUsd: CURRENT_PRICE_USD,
+    currentMcap: 8_000_000,
+    avgBuyNative: CURRENT_PRICE_NATIVE, avgBuyUsd: CURRENT_PRICE_USD,
+  });
+  await microtasks();
+  const drawn = env.lineShapes.filter((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.equal(drawn.length, 1, 'the line draws');
+  const level = drawn[0].points[0].price;
+
+  // The axis flips and the conversion inputs are momentarily gone: the buy
+  // average is still WANTED, but no level can be computed for it.
+  env.send('paper-lines', {
+    enabled: true, axisBasis: 'native',
+    currentPriceNative: 0, currentPriceUsd: 0,
+    avgBuyNative: 0, avgBuyUsd: CURRENT_PRICE_USD,
+  });
+  await microtasks();
+  const held = env.lineShapes.filter((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.equal(held.length, 1, 'a wanted average whose level lapsed must KEEP its line');
+  assert.equal(held[0].points[0].price, level, 'and must not move it to a guess');
+
+  // Closing the position IS "no average" — that must remove the line.
+  env.send('paper-lines', {
+    enabled: true, axisBasis: 'mcap',
+    currentPriceNative: CURRENT_PRICE_NATIVE, currentPriceUsd: CURRENT_PRICE_USD,
+    avgBuyNative: 0, avgBuyUsd: 0,
+  });
+  await microtasks();
+  const gone = env.lineShapes.filter((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.equal(gone.length, 0, 'no average means no line — that removal is intended');
+});
+
 test('F-41: one fill posted twice is ONE bubble — the bridge keys marks by fill id', async () => {
   const env = runFomoBridge({ liveShape: true });
   const t0 = Date.now();

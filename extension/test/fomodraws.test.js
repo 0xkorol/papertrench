@@ -251,32 +251,44 @@ test('ONE paper buy on fomo posts exactly ONE chart marker', async () => {
     `one fill must post exactly one marker, got ${ov.markers().length}: ${JSON.stringify(ov.types())}`);
 });
 
-test('the fill survives the C-19 handoff: no duplicate marker, and never a starved replay', async () => {
-  // fomo mounts its chart iframe late. If the 8s grace window expires first,
+test('the fill survives the C-19 handoff: the rail hands back to the native chart and replays exactly once', async () => {
+  // fomo mounts its chart iframe late. If the 8 s grace window expires first,
   // the SVG rail takes over and replays the journal through itself; when the
-  // bridge then reports a real widget, rendering hands back to the native
-  // chart and the SAME fill must be replayed there exactly once.
+  // bridge then reports a real widget, rendering hands back and the SAME fill
+  // must be replayed natively exactly once — not zero times (a ledger that
+  // still holds the rail's claim starves it) and not twice.
+  //
+  // The sequence MUST be driven for real: bridgeNativeCapable is a one-way
+  // latch, so announcing a chart up front makes the grace window, the rail
+  // handoff, and everything this test names impossible.
   const ov = runFomoOverlay();
-  await ov.advance(1500);
-  announceNativeChart(ov);
-  await ov.advance(200);
-
+  await ov.advance(1500);          // detect + resolve; grace window still open
   ov.setValue('pt-custom', 0.1);
-  ov.clickById('pt-buy');
+  ov.clickById('pt-buy');          // fills optimistically down the native path
   await ov.advance(1000);
   assert.equal(ov.markers().length, 1, 'baseline: one fill, one marker');
 
-  // Force the rail handoff and back, the way a late-mounting chart does.
-  ov.dispatchBridge('padre-hook-status', { barsHooked: false, marksHooked: false, nativeCapable: false });
-  await ov.advance(9000);          // grace expires -> SVG rail owns rendering
-  announceNativeChart(ov);         // the widget finally appears
+  // The grace window expires with no widget: the SVG rail takes ownership,
+  // tells the bridge to drop its marks, and replays the journal onto itself.
+  await ov.advance(9000);
+  const clears = ov.types().filter((t) => t === 'paper-marker-clear').length;
+  assert.ok(clears >= 1, 'the expired probe must tell the bridge to drop its native marks');
+
+  // The chart finally mounts. Rendering hands back to the native chart.
+  announceNativeChart(ov);
   await ov.advance(1000);
 
-  const markers = ov.markers();
-  const ids = markers.map((m) => `${m.payload && m.payload.side}@${m.payload && m.payload.ts}`);
-  const unique = new Set(ids);
-  assert.equal(unique.size, markers.length,
-    `no fill may be posted twice across the handoff, got ${JSON.stringify(ids)}`);
+  // Count only what was posted AFTER the last clear — that is what is on the
+  // native chart now. Exactly one fill lives in the journal.
+  const types = ov.types();
+  const lastClear = types.lastIndexOf('paper-marker-clear');
+  const afterClear = ov.posted
+    .slice(lastClear + 1)
+    .filter((m) => m && m.type === 'paper-marker');
+  assert.equal(afterClear.length, 1,
+    `the handoff must replay each journal fill exactly once, got ${afterClear.length}`);
+  assert.ok(afterClear[0].payload.fillId,
+    'the replayed marker must carry its trade id so the bridge can recognize it');
 });
 
 test('a position on fomo keeps a live average-line spec flowing to the bridge', async () => {

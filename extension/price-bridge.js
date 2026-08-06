@@ -1314,8 +1314,18 @@
    * live, being created, or intentionally absent; false when the chart could
    * not produce it (callers retry).
    */
-  function syncLineSlot(slot, chart, price, label, color) {
-    if (!(Number(price) > 0)) { clearLineSlot(slot); return true; }
+  function syncLineSlot(slot, chart, price, label, color, wanted) {
+    if (!(Number(price) > 0)) {
+      // F-41: "no level" and "no line" are different facts. A caller that
+      // MEANS no line (spec disabled, no average on this side) clears. But a
+      // WANTED level that merely became uncomputable for a moment — the
+      // evidence window lapsing on a quiet token — must not destroy a line
+      // that is still the correct constant in axis units. Destroying it was
+      // how a held position lost its average line 15 s after the last tick
+      // and got it back only when the next trade printed.
+      if (!wanted) { clearLineSlot(slot); return true; }
+      return Boolean(slot.adapter);
+    }
     // F-35: the slot always remembers the newest requested appearance. An
     // async createOrderLine that is still in flight configures itself from
     // HERE on resolve — not from the values captured when it was issued, or
@@ -1740,8 +1750,8 @@
       // the two indistinguishable when both positions exist (DEFECT F-30).
       // Same doctrine as the P&L-card watermark — a paper artifact must
       // never be mistakable for a real one.
-      const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, 'PAPER Avg. Fill', '#90A8FA99');
-      const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, 'PAPER Avg. Exit', '#F7DC8599');
+      const buyOk = syncLineSlot(averageFillSlot, chart, buyLevel, 'PAPER Avg. Fill', '#90A8FA99', wantsBuy);
+      const sellOk = syncLineSlot(averageExitSlot, chart, sellLevel, 'PAPER Avg. Exit', '#F7DC8599', wantsSell);
       if (buyOk && sellOk) {
         // Every wanted level drew, or one is still waiting on a close —
         // ok only when nothing wanted is missing.

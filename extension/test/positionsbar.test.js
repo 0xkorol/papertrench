@@ -364,7 +364,15 @@ function runOverlayBar(positions, opts) {
           // makes the cross-tab path testable at all.
           set: (obj, cb) => {
             const changes = {};
-            for (const k of Object.keys(obj)) changes[k] = { newValue: obj[k], oldValue: storage[k] };
+            // Chrome delivers a STRUCTURED CLONE across the process
+            // boundary, never the caller's object. Handing back the same
+            // reference let a self-write guard match here while it could
+            // never match in a browser -- which is exactly how F-41's
+            // duplicate-fill bug stayed invisible to this suite. A fake
+            // must copy what the platform copies.
+            for (const k of Object.keys(obj)) {
+              changes[k] = { newValue: JSON.parse(JSON.stringify(obj[k])), oldValue: storage[k] };
+            }
             Object.assign(storage, obj);
             for (const fn of storageListeners) { try { fn(changes, 'local'); } catch (e) { /* asserted elsewhere */ } }
             if (cb) cb();

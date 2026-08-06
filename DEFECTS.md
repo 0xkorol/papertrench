@@ -415,6 +415,30 @@ reports `off-range` instead of `ok:true`. The drawing code itself was proven
 correct on the live chart first — canvas pixels showed the dashed line on the
 exact expected row — which is what ruled it out and pointed upstream.
 
+**F-42 · S2 · The line was DESTROYED whenever its level briefly could not be computed, and the F-41 handoff test could not fail for its stated reason**
+`price-bridge.js` syncLineSlot · `test/fomodraws.test.js` ·
+**fixed (unreleased)** — found by a 35-agent adversarial audit of F-41, two
+findings it confirmed against my own just-landed work.
+(1) `syncLineSlot` opened with `if (!(price > 0)) { clearLineSlot(slot); }`,
+which conflates two different facts: "this side has no average" (clear it)
+and "a WANTED average could not be converted onto the axis this instant"
+(hold it — the line on screen is still the correct constant in axis units).
+A held position therefore lost its average line on any evidence lapse and
+only got it back on the next tick. The clear now requires the caller to MEAN
+it; a wanted-but-uncomputable level leaves the line alone.
+(2) My own C-19 handoff test was VACUOUS: it called `announceNativeChart`
+first, and `bridgeNativeCapable` is a one-way latch — so the grace window,
+the SVG-rail handoff, and the `drawnFillIds.clear()` it claimed to guard
+could never happen; its `side@ts` dedupe assertion could not have caught the
+F-41 duplicate either, since the two posts carry different timestamps by
+construction. Rewritten to drive the real sequence and to count markers
+posted after the last clear; mutation-verified by removing ONLY the
+`drawnFillIds.clear()` line, which fails it with "got 0" (the starved
+replay) while nothing else moves. The same pass switched every remaining
+storage fake (livepnl/positionsbar/statepersist) to hand back a STRUCTURED
+CLONE like Chrome does — handing back the caller's object is what let F-41's
+dead self-write guard pass this suite for months.
+
 **F-40 · S1 · The F-39 bubble showed "for a second", then vanished — and blinked through zooms — because its level was recomputed every frame from moving evidence; off-chart snipes also never replayed onto an already-open chart**
 `price-bridge.js` layoutBubbles · `content.js` adoptState · fomo.family,
 maintainer field test minutes after F-39 shipped ("for a 2nd you can see
