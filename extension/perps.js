@@ -60,10 +60,14 @@
 
   function refreshHl(pos, markPx) {
     const liq = V.hlLiqPrice({
-      side: pos.side, markPx, sizeUnits: pos.sizeUnits,
+      side: pos.side, markPx, entryPx: pos.entryPx, sizeUnits: pos.sizeUnits,
       marginUsd: pos.marginUsd, maxLeverage: pos.maxLeverage,
     });
-    pos.liqPx = liq ? liq.px : null;
+    // When the mark is already past liquidation the venue formula has no
+    // solution — keep the last true liquidation price so the fill still
+    // happens where the venue would actually have triggered.
+    if (liq && !liq.breached) pos.liqPx = liq.px;
+    else if (!isNum(pos.liqPx)) pos.liqPx = liq ? liq.px : null;
     pos.liqBreached = liq ? liq.breached : true;
   }
 
@@ -82,7 +86,8 @@
       collateralUsd: pos.collateralUsd, closeFeeUsd: closeFee, borrowFeeUsd: pos.borrowUsd,
     });
     pos.closeFeeEstUsd = closeFee;
-    pos.liqPx = liq ? liq.px : null;
+    if (liq && !liq.breached) pos.liqPx = liq.px;
+    else if (!isNum(pos.liqPx)) pos.liqPx = liq ? liq.px : null;
     pos.liqBreached = liq ? liq.breached : true;
   }
 

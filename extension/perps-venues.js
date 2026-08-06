@@ -134,18 +134,23 @@
     return notionalUsd * rate;
   }
 
-  /* [HL-LIQ] liq_price = price - side*margin_available/size/(1 - l*side).
-   * `price` and the maintenance requirement are CURRENT-mark quantities, so
-   * the liquidation price legitimately moves as mark and margin move — this
-   * is venue behavior, not drift in our math. side: +1 long, -1 short. */
+  /* [HL-LIQ] liq_price = price - side*margin_available/size/(1 - l*side),
+   * where isolated margin_available is EQUITY-based: isolated margin plus
+   * unrealized PnL at the current mark, minus the maintenance requirement.
+   * With equity in the numerator the formula has a fixed point — the same
+   * liquidation price falls out at any current mark (locked by an
+   * invariance test) — and it moves only when margin actually changes
+   * (funding, add-margin). side: +1 long, -1 short. */
   function hlLiqPrice(o) {
-    const { side, markPx, sizeUnits, marginUsd, maxLeverage } = o || {};
+    const { side, markPx, entryPx, sizeUnits, marginUsd, maxLeverage } = o || {};
     const l = hlMaintenanceFraction(maxLeverage);
     if (l === null || !isNum(markPx) || markPx <= 0) return null;
+    if (!isNum(entryPx) || entryPx <= 0) return null;
     if (!isNum(sizeUnits) || sizeUnits <= 0 || !isNum(marginUsd)) return null;
     if (side !== 1 && side !== -1) return null;
+    const equityUsd = marginUsd + side * sizeUnits * (markPx - entryPx);
     const maintUsd = l * sizeUnits * markPx;
-    const availUsd = marginUsd - maintUsd;
+    const availUsd = equityUsd - maintUsd;
     if (availUsd <= 0) return { px: markPx, breached: true };
     return { px: markPx - side * (availUsd / sizeUnits) / (1 - l * side), breached: false };
   }

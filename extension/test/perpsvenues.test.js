@@ -45,24 +45,45 @@ test('[HL-FEES] base tier taker 4.5 bps, maker 1.5 bps, builder fee added on top
 });
 
 test('[HL-LIQ] liquidation price matches the documented formula, hand-derived both sides', () => {
-  // Long: P=100, 20x max (l=0.025), $10 isolated margin, 2 units ($200).
-  // maint = 0.025*2*100 = $5; avail = $5; liq = 100 - (5/2)/(1-0.025).
-  const long = V.hlLiqPrice({ side: 1, markPx: 100, sizeUnits: 2, marginUsd: 10, maxLeverage: 20 });
+  // Long at entry: P=100, 20x max (l=0.025), $10 isolated margin, 2 units.
+  // equity = $10; maint = 0.025*2*100 = $5; avail = $5;
+  // liq = 100 - (5/2)/(1-0.025).
+  const long = V.hlLiqPrice({ side: 1, markPx: 100, entryPx: 100, sizeUnits: 2, marginUsd: 10, maxLeverage: 20 });
   assert.equal(long.breached, false);
   assert.ok(Math.abs(long.px - (100 - (5 / 2) / 0.975)) < CLOSE);
   assert.ok(long.px < 100, 'long liquidates below');
 
   // Short mirror: liq = 100 + (5/2)/(1+0.025) — the denominator flips sign.
-  const short = V.hlLiqPrice({ side: -1, markPx: 100, sizeUnits: 2, marginUsd: 10, maxLeverage: 20 });
+  const short = V.hlLiqPrice({ side: -1, markPx: 100, entryPx: 100, sizeUnits: 2, marginUsd: 10, maxLeverage: 20 });
   assert.equal(short.breached, false);
   assert.ok(Math.abs(short.px - (100 + (5 / 2) / 1.025)) < CLOSE);
   assert.ok(short.px > 100, 'short liquidates above');
 });
 
-test('[HL-LIQ] margin at or below the maintenance requirement reports breached, not a fake price', () => {
-  // maint = 0.025*2*100 = $5; margin $5 leaves nothing available.
-  const r = V.hlLiqPrice({ side: 1, markPx: 100, sizeUnits: 2, marginUsd: 5, maxLeverage: 20 });
-  assert.equal(r.breached, true);
+test('[HL-LIQ] the liquidation price is a fixed point — the same at any current mark', () => {
+  // Equity-based margin_available makes the formula self-consistent: for a
+  // fixed margin the liq price must not care which mark it is evaluated at.
+  const base = { side: 1, entryPx: 100, sizeUnits: 2, marginUsd: 10, maxLeverage: 20 };
+  const atEntry = V.hlLiqPrice(Object.assign({ markPx: 100 }, base));
+  const below = V.hlLiqPrice(Object.assign({ markPx: 98.5 }, base));
+  const above = V.hlLiqPrice(Object.assign({ markPx: 104 }, base));
+  assert.ok(Math.abs(atEntry.px - below.px) < CLOSE, 'evaluated at 98.5 must agree with entry');
+  assert.ok(Math.abs(atEntry.px - above.px) < CLOSE, 'evaluated at 104 must agree with entry');
+  const short = { side: -1, entryPx: 100, sizeUnits: 2, marginUsd: 10, maxLeverage: 20 };
+  assert.ok(Math.abs(
+    V.hlLiqPrice(Object.assign({ markPx: 100 }, short)).px
+    - V.hlLiqPrice(Object.assign({ markPx: 101.5 }, short)).px
+  ) < CLOSE, 'short side invariance');
+});
+
+test('[HL-LIQ] equity at or below the maintenance requirement reports breached, not a fake price', () => {
+  // At entry: equity $5 == maint $5 — nothing available.
+  const atEntry = V.hlLiqPrice({ side: 1, markPx: 100, entryPx: 100, sizeUnits: 2, marginUsd: 5, maxLeverage: 20 });
+  assert.equal(atEntry.breached, true);
+  // Healthy margin but the mark has collapsed through the liq price:
+  // equity = 10 + 2*(96-100) = $2 < maint $4.8.
+  const under = V.hlLiqPrice({ side: 1, markPx: 96, entryPx: 100, sizeUnits: 2, marginUsd: 10, maxLeverage: 20 });
+  assert.equal(under.breached, true);
 });
 
 test('[HL-FUND] positive funding: longs pay, shorts receive, on oracle notional', () => {
