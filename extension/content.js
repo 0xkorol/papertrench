@@ -5737,7 +5737,25 @@
     try {
       jankObserver = new PerformanceObserver((list) => {
         // In-memory aggregation only — the flush cadence owns persistence.
+        //
+        // HONEST DENOMINATOR: the rate the dashboard prints is blockedMs over
+        // sampledMs, and sampledMs counts VISIBLE time alone (jankCloseWindow).
+        // So a long task may only be counted if it ran inside the visible
+        // window that is currently open. Two things go wrong otherwise, both
+        // inflating the published number for anyone who parks tabs — which is
+        // every trader with five terminals open:
+        //   - tasks that run while hidden have no visible time to divide by;
+        //   - worse, a hidden tab's deferred entries are DELIVERED in a batch
+        //     when it is re-shown, so checking document.hidden at delivery
+        //     time would still fold a whole hidden stretch into the first
+        //     visible window.
+        // Attributing by entry.startTime handles both. The residue is a slight
+        // UNDERCOUNT — a task that ran visibly but arrives after the window
+        // closed is dropped — and a floor is the right way to be wrong about a
+        // number we publish.
+        if (jankVisibleSince < 0) return;
         for (const entry of list.getEntries()) {
+          if (entry.startTime < jankVisibleSince) continue;
           jankCount += 1;
           jankBlockedMs += entry.duration;
         }

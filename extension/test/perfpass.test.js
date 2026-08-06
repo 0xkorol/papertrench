@@ -84,6 +84,34 @@ test('D-15 survives the scoping: a failed read is still not "empty storage"', ()
     'the failed-read bail must come before any scoped work');
 });
 
+/* ------- receipts: the jank rate must not count what it cannot divide ----- */
+
+test('long tasks are attributed to the visible window they ran in', () => {
+  const contentJs = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const observer = contentJs.slice(
+    contentJs.indexOf('jankObserver = new PerformanceObserver('),
+    contentJs.indexOf('jankObserver.observe('),
+  );
+  assert.ok(observer, 'the jank observer must exist');
+
+  // The published rate is blockedMs / sampledMs, and sampledMs counts VISIBLE
+  // time only. Counting a task with no visible time to divide by inflates the
+  // number the dashboard prints — an honest-numbers defect, not a perf one.
+  assert.match(observer, /if \(jankVisibleSince < 0\) return;/,
+    'nothing may be counted while hidden — there is no open window to attribute it to');
+  assert.match(observer, /if \(entry\.startTime < jankVisibleSince\) continue;/,
+    'a hidden tab delivers its deferred entries in a batch when re-shown, so entries '
+    + 'must be attributed by startTime, not by whether we happen to be visible at delivery');
+
+  // The denominator must still be visible-time-only, or the fix is pointless.
+  const closeWindow = contentJs.slice(
+    contentJs.indexOf('function jankCloseWindow()'),
+    contentJs.indexOf('function onJankVisibility()'),
+  );
+  assert.match(closeWindow, /jankVisibleMs \+= Math\.max\(0, performance\.now\(\) - jankVisibleSince\)/,
+    'sampledMs accrues only across open visible windows');
+});
+
 /* ---------------- attest: parallel digests, identical verdicts ---------- */
 
 test('verifyChain hashes in parallel and reports problems in the same order', async () => {
