@@ -111,8 +111,33 @@ the way your hands already expect.
   remaining percentage meaning what it says, and closing the position disarms
   everything attached to it.
 
+**Fomo trades honestly now.** Fomo puts other people's numbers on every
+surface — the social feed, the holder list, the thesis wall — and we were
+reading some of them as live prices. Your P&L, your position value and your
+average lines could all drift toward a stranger's entry from hours ago. Every
+one of those surfaces is now treated as history, not as the market. If a
+price is somebody's trade rather than the market's, it never touches your
+numbers.
+
+- **Your fills show up where they happened.** Fomo's chart doesn't offer the
+  marker channel other terminals do, so buys and sells draw as chart shapes
+  instead — and a sell no longer slides minutes into the past when the
+  chart's live feed goes quiet.
+- **The panel says what it's doing.** Instead of "connecting…" forever, the
+  footer names the real state — including when fills are drawing as shapes,
+  which is fomo's normal healthy mode — and says why an average line is
+  missing when one is.
+
 **Fixed**
 
+- **Updates no longer leave your open tabs half-dead.** When the extension
+  updated, Chrome left every already-open terminal tab running the old,
+  disconnected copy: the panel was gone and nothing brought it back until you
+  happened to reload the page. PaperTrench now restores itself in those tabs
+  automatically — and only where the old copy is genuinely dead, so a working
+  panel is never doubled up.
+- **Birdeye pages work again.** Birdeye changed its address format, which
+  quietly broke how we recognised its token pages.
 - **The entry line stopped teleporting on fomo.** (Field report: "the avg
   fill line and where the entry thought it was just keeps teleporting
   everywhere — completely unusable.") The chart never declares whether its
@@ -202,6 +227,13 @@ whether any of this is real; that is what it is for.
   what lets the manifest's own content scripts STAY narrow, and with the
   toggles off, nothing is injected anywhere (docs/PERMISSIONS.md has the
   full audit).
+
+**What's next**
+
+Multichain paper trading is built and waiting. It ships once each chain can
+carry its own paper balance in its own coin — SOL on Solana, ETH on Base, BNB
+on BSC — rather than converting everything into one SOL book. That is the
+version worth having, so it lands next release instead of this one.
 
 ## Live on the website — 2026-08-06
 
