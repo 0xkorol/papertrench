@@ -2771,14 +2771,113 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+/* -------------------- re-injection after reload/update --------------------
+ *
+ * Chrome does NOT re-inject content scripts into tabs that were already open
+ * when an extension is reloaded, updated, or re-enabled. Those tabs keep the
+ * ORPHANED old scripts: their globals survive but every chrome.* handle is
+ * invalidated, so the panel is dead and can never come back on its own — while
+ * the page looks completely normal. The extension simply reads as broken, and
+ * the only cure is a refresh the user has no reason to suspect. In development
+ * that is every reload; in the wild it is every auto-update, on every open
+ * terminal tab at once.
+ *
+ * So on install/update/enable we re-inject the manifest's own script sets into
+ * the tabs the manifest already claims. Two rules keep it honest:
+ *
+ *   - ONLY the ISOLATED world. The MAIN-world bridge never touches chrome.*,
+ *     so a reload does not kill it; injecting a second copy would risk
+ *     double-initialising the page world for no gain. Only what dies returns.
+ *   - ONLY where the resident instance PROVES it is dead (window.__ptAlive).
+ *     A second live content.js would mount a second panel, so presence is not
+ *     enough — the beacon reports its chrome handle, which an orphan loses.
+ *
+ * The corpse left behind is already handled: it shut itself down when its
+ * context died (O-04/C-17), and createUI() removes a leftover host before
+ * rebuilding (O-05).
+ */
+
+/** Runs INSIDE the tab, in our isolated world. Serialisable: no closures. */
+function ptLivenessProbe() {
+  try {
+    return typeof window.__ptAlive === 'function' && window.__ptAlive() === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function reinjectQueryTabs(matches) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.query({ url: matches }, (tabs) => {
+        if (chrome.runtime && chrome.runtime.lastError) { resolve([]); return; }
+        resolve(Array.isArray(tabs) ? tabs : []);
+      });
+    } catch (_) {
+      resolve([]);
+    }
+  });
+}
+
+let reinjectInFlight = false;
+
+async function reinjectOpenTabs(reason) {
+  if (reinjectInFlight) return { reason, skipped: 'in-flight' };
+  reinjectInFlight = true;
+  const report = { reason, alive: 0, injected: 0, failed: 0 };
+  try {
+    const manifest = chrome.runtime.getManifest();
+    // The manifest is the single source of truth: a file added to an entry is
+    // re-injected for free, and no list can drift out of sync with what Chrome
+    // itself injects.
+    const entries = (manifest.content_scripts || [])
+      .filter((entry) => !entry.world || entry.world === 'ISOLATED')
+      .filter((entry) => Array.isArray(entry.js) && entry.js.length);
+
+    for (const entry of entries) {
+      const tabs = await reinjectQueryTabs(entry.matches);
+      for (const tab of tabs) {
+        if (!tab || typeof tab.id !== 'number') continue;
+        // Every step is per-tab contained: one page Chrome refuses to script
+        // (a PDF viewer, a policy-blocked host, a tab closing mid-sweep) must
+        // never strand the tabs after it.
+        let alive = false;
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: ptLivenessProbe,
+          });
+          alive = Boolean(results && results[0] && results[0].result);
+        } catch (_) {
+          continue;
+        }
+        if (alive) { report.alive += 1; continue; }
+        try {
+          // Styles first, so the panel never paints unstyled.
+          if (Array.isArray(entry.css) && entry.css.length) {
+            await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: entry.css });
+          }
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: entry.js });
+          report.injected += 1;
+        } catch (_) {
+          report.failed += 1;
+        }
+      }
+    }
+  } catch (_) { /* no capability, no sweep: never break the install */ }
+  reinjectInFlight = false;
+  return report;
+}
+
 chrome.runtime.onStartup.addListener(() => {
   refreshFrameInterval().catch(() => {});
 });
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   refreshFrameInterval().catch(() => {});
   // F-14: move a legacy in-state chain out at update time, not lazily on the
   // next fill — deterministic for the install, free for every later wake.
   attestSerial(ensureAttestMigratedLocked).catch(() => {});
+  reinjectOpenTabs((details && details.reason) || 'installed').catch(() => {});
 });
 refreshFrameInterval().catch(() => {});
 

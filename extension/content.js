@@ -257,6 +257,26 @@
   let contextDead = false;
   const teardownFns = [];
 
+  /**
+   * Liveness beacon for the background's re-injection sweep.
+   *
+   * Chrome does not re-inject content scripts into tabs that were already open
+   * when the extension reloads or updates, and the ORPHANED instance left in
+   * such a tab keeps every one of its globals — only its chrome.* handles are
+   * invalidated. Presence therefore proves nothing; the chrome handle is the
+   * only honest signal, so that is what this reports. An orphan answers false
+   * and the background rebuilds the tab (background.js reinjectOpenTabs).
+   */
+  try {
+    window.__ptAlive = () => {
+      try {
+        return !contextDead && Boolean(chrome.runtime && chrome.runtime.id);
+      } catch (_) {
+        return false;
+      }
+    };
+  } catch (_) { /* a hostile page pinned the property: the sweep re-injects, which is safe */ }
+
   /** True while this content script may still talk to the extension. */
   function contextAlive() {
     if (contextDead) return false;
