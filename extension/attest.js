@@ -27,6 +27,10 @@
 
   const VERSION = 1;
   const GENESIS = 'papertrench-genesis-v1';
+  // How many independent link digests verifyChain may have in flight at once.
+  // Bounds both concurrency and peak preimage memory on the shared server path
+  // (see verifyChain). Large enough that the parallel win is fully realised.
+  const DIGEST_BATCH = 512;
 
   function subtle() {
     const c = (typeof crypto !== 'undefined' && crypto) || null;
@@ -121,18 +125,31 @@
 
     // Every digest is INDEPENDENT: the preimage is built from the link's own
     // stored `prev`, never from the running `previous` below. So the hashes are
-    // computed in one parallel pass instead of one awaited digest per link,
-    // which is what made verification O(chain) round trips through WebCrypto
-    // and left "Checking your trade chain…" on screen after every fill. The
-    // loop that follows is unchanged and still strictly sequential, so the
-    // chaining check, the timestamp check and the ORDER problems are reported
-    // in are all exactly as before.
-    const expectedHashes = await Promise.all(
-      list.map((entry) => {
-        const link = entry || {};
-        return sha256(fillPreimage(link, link.prev || GENESIS));
-      }),
-    );
+    // computed in parallel instead of one awaited digest per link, which is
+    // what made verification O(chain) round trips through WebCrypto and left
+    // "Checking your trade chain…" on screen after every fill. The loop that
+    // follows is unchanged and still strictly sequential, so the chaining
+    // check, the timestamp check and the ORDER problems are reported in are
+    // all exactly as before.
+    //
+    // BATCHED, not one big Promise.all, because this module is shared: the
+    // leaderboard server imports this exact file (server/core/chain.js) so the
+    // hash contract cannot fork between the client that commits a fill and the
+    // server that ranks it — and that server accepts chains up to 50,000 links
+    // inside one request's CPU budget. An unbounded map would launch 50,000
+    // concurrent digests AND materialise 50,000 preimages before the first one
+    // resolved. The batch bounds both; at any realistic chain length it is
+    // indistinguishable from the unbounded form.
+    const expectedHashes = [];
+    for (let start = 0; start < list.length; start += DIGEST_BATCH) {
+      const batch = await Promise.all(
+        list.slice(start, start + DIGEST_BATCH).map((entry) => {
+          const link = entry || {};
+          return sha256(fillPreimage(link, link.prev || GENESIS));
+        }),
+      );
+      for (const hash of batch) expectedHashes.push(hash);
+    }
 
     for (let i = 0; i < list.length; i++) {
       const link = list[i] || {};

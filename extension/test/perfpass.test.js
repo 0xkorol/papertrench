@@ -86,8 +86,13 @@ test('D-15 survives the scoping: a failed read is still not "empty storage"', ()
 /* ---------------- attest: parallel digests, identical verdicts ---------- */
 
 test('verifyChain hashes in parallel and reports problems in the same order', async () => {
-  assert.match(attestJs, /await Promise\.all\(\s*list\.map\(/,
-    'the digests are independent — they must not be awaited one at a time');
+  // The digests are independent, so they must not be awaited one at a time.
+  // (Bounded batching is the required shape — see the batching test below.)
+  assert.match(attestJs, /await Promise\.all\(\s*list\.slice\(start, start \+ DIGEST_BATCH\)\.map\(/,
+    'the digests are independent — they must be computed in parallel, not one await per link');
+  const verify = attestJs.slice(attestJs.indexOf('async function verifyChain('));
+  assert.ok(!/for \(let i = 0; i < list\.length; i\+\+\) \{[\s\S]{0,400}await sha256\(/.test(verify),
+    'no awaited digest may return to the sequential loop');
 
   // A good chain verifies. appendFill returns ONE link; the caller owns the
   // chain, so build it the way the engine does.
@@ -136,6 +141,43 @@ test('verifyChain hashes in parallel and reports problems in the same order', as
     assert.deepEqual(indexes, [...indexes].sort((a, b) => a - b),
       'problems must stay in index order');
   }
+});
+
+test('digests are batched, so a very long chain cannot launch unbounded work', async () => {
+  // attest.js is imported DIRECTLY by the leaderboard server (server/core/chain.js)
+  // so the hash contract cannot fork between client and server — and that server
+  // accepts chains far longer than any local wallet. An unbounded Promise.all
+  // would launch one digest per link at once and materialise every preimage
+  // before the first resolved.
+  assert.match(attestJs, /const DIGEST_BATCH = \d+/, 'the batch size must be a named constant');
+  assert.match(attestJs, /for \(let start = 0; start < list\.length; start \+= DIGEST_BATCH\)/,
+    'digests must be computed in bounded batches, not one unbounded map');
+
+  // And batching must not disturb results across a boundary. Build a chain
+  // longer than one batch and verify it end to end.
+  const batchSize = Number(/const DIGEST_BATCH = (\d+)/.exec(attestJs)[1]);
+  const n = batchSize * 2 + 3; // crosses two boundaries and lands mid-batch
+  const chain = [];
+  let prev = null;
+  for (let i = 0; i < n; i++) {
+    const link = await AT.appendFill(prev, {
+      id: 'b' + i, ts: 1000 + i, mint: 'M', side: 'buy', qty: 1, priceNative: 0.5, solGross: 0.1,
+    });
+    chain.push(link);
+    prev = link.hash;
+  }
+  const clean = await AT.verifyChain(chain);
+  assert.equal(clean.valid, true, `a ${n}-link chain must verify across batch boundaries`);
+  assert.equal(clean.length, n);
+
+  // Tamper a link that sits in the SECOND batch — the boundary is where an
+  // off-by-one in the batching would hide.
+  const tampered = chain.map((l) => ({ ...l }));
+  const victim = batchSize + 1;
+  tampered[victim] = { ...tampered[victim], qty: 4242 };
+  const bad = await AT.verifyChain(tampered);
+  assert.ok(bad.problems.some((p) => p.index === victim && p.reason === 'hash-mismatch'),
+    'a tampered link past the first batch boundary must still be caught, at the right index');
 });
 
 test('an empty chain still verifies to GENESIS', async () => {
