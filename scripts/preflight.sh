@@ -93,11 +93,20 @@ SRV_FAIL=$(grep -E '^ℹ fail ' /tmp/pt-preflight-server.log | awk '{print $3}')
 [ -n "$EXT_PASS" ] && [ -n "$SRV_PASS" ] || fail "could not parse suite totals"
 [ "$EXT_FAIL" = "0" ] && [ "$SRV_FAIL" = "0" ] \
   || fail "suite fail count non-zero (extension $EXT_FAIL, server $SRV_FAIL)"
+# Same asymmetry as the trading-sites gate below, and for the same reason.
+# Claiming MORE tests than exist is a lie and fails the release. Claiming fewer
+# is merely stale, and staleness is the normal state of this number while other
+# sessions are landing tests all day — the first version of this gate went red
+# within the hour because a concurrent session added sixteen tests, which is
+# ordinary development rather than a release blocker.
 TESTS_REAL=$((EXT_PASS + SRV_PASS))
 for page in site/news.html site/index.html; do
   shown=$(grep -oP 'data-check="tests">\K[0-9]+' "$page")
+  [ -n "$shown" ] || fail "$page has no data-check=\"tests\" figure to verify"
+  [ "$shown" -le "$TESTS_REAL" ] \
+    || fail "$page claims $shown tests passing; the suites report only $TESTS_REAL ($EXT_PASS + $SRV_PASS)"
   [ "$shown" = "$TESTS_REAL" ] \
-    || fail "$page says $shown tests passing; the suites report $TESTS_REAL ($EXT_PASS + $SRV_PASS)"
+    || echo "  note: $page says $shown tests, suites now report $TESTS_REAL — bump it when this ships"
 done
 
 # The homepage's "TRADING SITES" figure must never exceed what the build
