@@ -9,7 +9,7 @@
 
 
 if (typeof importScripts === 'function') {
-  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'attest.js', 'xlinks.js', 'warmdest.js', 'xray-core.js', 'pnlcard.js');
+  importScripts('replay.js', 'quote.js', 'resolver.js', 'onchain.js', 'rpc-pool.js', 'onchain-feed.js', 'recordings.js', 'attest.js', 'xlinks.js', 'warmdest.js', 'xray-core.js', 'pnlcard.js', 'forge-core.js');
 }
 const RP = self.PTReplay;
 const AT = self.PTAttest;
@@ -17,6 +17,7 @@ const R = self.PaperTrenchResolver;
 const FEED = self.PTOnchainFeed;
 const XL = self.PTXLinks;
 const XR = self.PTXRay;
+const FG = self.PTForge;
 
 /* -------------------- rug guard (holder concentration) --------------------
  * Two chain reads per coin per minute at most: the 20 largest token accounts
@@ -80,6 +81,21 @@ const DEFAULTS = {
   aiModel: '',
   aiApiKey: '',
   aiAllowLocalEndpoint: false,
+  forgeEnabled: false,
+  forgeBrainProvider: 'xai',
+  forgeBrainEndpoint: '',
+  forgeBrainModel: '',
+  forgeBrainKey: '',
+  forgeSearchX: true,
+  forgeImageProvider: 'openai',
+  forgeImageEndpoint: '',
+  forgeImageModel: '',
+  forgeImageKey: '',
+  forgeImageHeaders: '',
+  forgeImageBody: '',
+  forgeImagePath: '',
+  forgeStyle: 'trench',
+  forgeVariants: 2,
 };
 
 const FRAME_CAP = 80;
@@ -610,6 +626,242 @@ async function aiModels(overrides) {
   } catch (error) {
     return { models: [], error: error.message };
   }
+}
+
+/* -------------------- Forge (banner generator) --------------------
+ *
+ * Every provider call in this feature happens HERE and nowhere else. The
+ * content script sends facts and receives pixels; the keys never enter a page
+ * context, so a hostile dex cannot read them out of the DOM or a JS global.
+ *
+ * Custom endpoints go through the same isAllowedEndpoint gate as the AI
+ * coach — this feature widens the number of keys a user holds, not the set of
+ * hosts they can be pointed at.
+ */
+
+const FORGE_BRIEF_TTL_MS = 10 * 60_000;
+const forgeBriefCache = new Map();   // briefKey -> { at, brief }
+const forgeBriefInflight = new Map(); // briefKey -> Promise
+const FORGE_TIMEOUT_MS = 90_000;
+
+function forgeConfig(settings) {
+  return {
+    allowLocal: settings.aiAllowLocalEndpoint === true,
+    brain: {
+      id: settings.forgeBrainProvider || '',
+      endpoint: settings.forgeBrainEndpoint || '',
+      apiKey: settings.forgeBrainKey || '',
+      model: settings.forgeBrainModel || '',
+      useSearch: settings.forgeSearchX !== false,
+    },
+    hands: {
+      id: settings.forgeImageProvider || '',
+      endpoint: settings.forgeImageEndpoint || '',
+      apiKey: settings.forgeImageKey || '',
+      model: settings.forgeImageModel || '',
+      headersJson: settings.forgeImageHeaders || '',
+      bodyTemplate: settings.forgeImageBody || '',
+      responsePath: settings.forgeImagePath || '',
+    },
+  };
+}
+
+function forgeSecrets(cfg) {
+  return [cfg.brain.apiKey, cfg.hands.apiKey].filter(Boolean);
+}
+
+function forgeClean(text, secrets) {
+  return FG.redact(text, secrets).slice(0, 300);
+}
+
+/**
+ * One request, with the two robustness moves this feature needs:
+ *  - a timeout, because an image model that hangs would otherwise pin the
+ *    panel on "Generating…" forever;
+ *  - an optional single retry with one body key removed. `search_parameters`
+ *    and `size` are the two fields whose exact acceptance we cannot verify
+ *    from inside this repo, so we send them hopefully and survive being
+ *    wrong instead of assuming we are right.
+ */
+async function forgeFetch(req, secrets, allowLocal) {
+  if (req.error) return { error: req.error };
+  if (!isAllowedEndpoint(req.url, allowLocal)) {
+    return { error: 'That endpoint is not allowed. Enable local/private endpoints in Settings if it is self-hosted.' };
+  }
+
+  const attempt = async (body, form) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FORGE_TIMEOUT_MS);
+    try {
+      const init = { method: 'POST', headers: Object.assign({}, req.headers), redirect: 'error', signal: controller.signal };
+      if (form) {
+        const fd = new FormData();
+        for (const k of Object.keys(form)) fd.append(k, String(form[k]));
+        delete init.headers['Content-Type'];   // FormData sets its own boundary
+        init.body = fd;
+      } else {
+        init.body = JSON.stringify(body);
+      }
+      const res = await fetch(req.url, init);
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch (_) { json = null; }
+      if (!res.ok) {
+        const detail = (json && json.error && (json.error.message || json.error.type)) || text.slice(0, 200);
+        return { status: res.status, error: `${res.status} — ${forgeClean(detail, secrets)}` };
+      }
+      if (!json) return { error: 'The provider replied with something that is not JSON.' };
+      return { json };
+    } catch (e) {
+      const msg = e && e.name === 'AbortError'
+        ? `Timed out after ${FORGE_TIMEOUT_MS / 1000}s`
+        : forgeClean((e && e.message) || 'request failed', secrets);
+      return { error: msg };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let out = await attempt(req.body, req.form);
+  if (out.error && req.retryWithout && req.body && (req.body[req.retryWithout] !== undefined)) {
+    const trimmed = Object.assign({}, req.body);
+    delete trimmed[req.retryWithout];
+    const second = await attempt(trimmed, null);
+    if (!second.error) return second;
+  }
+  return out;
+}
+
+/** Narrative research. Cached and de-duplicated so the prefetch and the
+ *  panel's own request never become two bills for the same answer. */
+function forgeBrief(facts) {
+  const key = FG.briefKey(facts);
+  const hit = forgeBriefCache.get(key);
+  if (hit && Date.now() - hit.at < FORGE_BRIEF_TTL_MS) return Promise.resolve({ brief: hit.brief });
+  const flying = forgeBriefInflight.get(key);
+  if (flying) return flying;
+
+  const run = (async () => {
+    const settings = await getSettings();
+    const cfg = forgeConfig(settings);
+    if (!cfg.brain.id) return { error: 'No narrative AI configured — describe the art yourself, or set one up in Settings.' };
+    const provider = FG.brainById(cfg.brain.id);
+    if (!provider) return { error: 'Unknown narrative provider.' };
+    const req = FG.buildResearchRequest(provider, cfg.brain, facts);
+    const out = await forgeFetch(req, forgeSecrets(cfg), cfg.allowLocal);
+    if (out.error) return { error: out.error };
+    const brief = FG.parseResearch(provider, out.json);
+    if (!brief) return { error: 'The narrative AI answered, but with nothing usable in it.' };
+    forgeBriefCache.set(key, { at: Date.now(), brief });
+    if (forgeBriefCache.size > 40) forgeBriefCache.delete(forgeBriefCache.keys().next().value);
+    return { brief };
+  })().finally(() => { forgeBriefInflight.delete(key); });
+
+  forgeBriefInflight.set(key, run);
+  return run;
+}
+
+function forgeB64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Crop what the provider gave us to the exact slot size. Image APIs only
+ * serve a handful of sizes, so a 3:1 header is always a centre-crop of a
+ * wider-than-tall render rather than a squashed square.
+ */
+async function forgeFit(buffer, spec) {
+  const bmp = await createImageBitmap(new Blob([buffer]));
+  const plan = FG.planFit(bmp.width, bmp.height, spec);
+  try {
+    if (plan.exact) return { dataUrl: 'data:image/png;base64,' + forgeB64(buffer), w: bmp.width, h: bmp.height };
+    const canvas = new OffscreenCanvas(plan.dw, plan.dh);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bmp, plan.sx, plan.sy, plan.sw, plan.sh, 0, 0, plan.dw, plan.dh);
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
+    const buf = await blob.arrayBuffer();
+    return { dataUrl: 'data:image/png;base64,' + forgeB64(buf), w: plan.dw, h: plan.dh };
+  } finally {
+    if (bmp && typeof bmp.close === 'function') bmp.close();
+  }
+}
+
+async function forgeOneImage(provider, cfg, opts, secrets, allowLocal) {
+  const req = FG.buildImageRequest(provider, cfg.hands, opts);
+  if (req.error) return { error: req.error };
+  const out = await forgeFetch(req, secrets, allowLocal);
+  if (out.error) return { error: out.error };
+  const parsed = FG.parseImages(out.json, req.responsePath);
+  if (!parsed.images.length) return { error: forgeClean(parsed.error || 'no image in the reply', secrets) };
+
+  const first = parsed.images[0];
+  let buffer = null;
+  if (first.b64) {
+    try {
+      const bin = atob(first.b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      buffer = arr.buffer;
+    } catch (_) { return { error: 'The provider sent image data this build could not decode.' }; }
+  } else if (first.url) {
+    // A provider CDN is still a URL we were handed by a remote party: it goes
+    // through the same gate as everything else.
+    if (!isAllowedEndpoint(first.url, allowLocal)) return { error: 'The provider pointed at an address that is not allowed.' };
+    try {
+      const res = await fetch(first.url, { redirect: 'error' });
+      if (!res.ok) return { error: `Could not fetch the generated image (${res.status}).` };
+      buffer = await res.arrayBuffer();
+    } catch (e) { return { error: forgeClean('Could not fetch the generated image: ' + ((e && e.message) || ''), secrets) }; }
+  }
+  if (!buffer) return { error: 'The provider replied with no image payload.' };
+
+  try {
+    return await forgeFit(buffer, opts.spec);
+  } catch (e) {
+    return { error: forgeClean('Could not resize the image: ' + ((e && e.message) || ''), secrets) };
+  }
+}
+
+async function forgeImages(message) {
+  const settings = await getSettings();
+  const cfg = forgeConfig(settings);
+  if (!cfg.hands.id) return { error: 'No image AI configured. Open the dashboard → Settings → Forge.' };
+  const provider = FG.handsById(cfg.hands.id);
+  if (!provider) return { error: 'Unknown image provider.' };
+
+  const facts = message.facts || {};
+  const spec = message.spec && message.spec.w ? message.spec : FG.ASSET_KINDS[FG.DEFAULT_KIND];
+  // The user's own words win. Only fall back to research when they left it
+  // blank — nobody wants their description quietly overridden.
+  let brief = null;
+  if (message.subject) {
+    brief = { subject: message.subject };
+  } else {
+    const res = await forgeBrief(facts);
+    brief = res && res.brief ? res.brief : null;
+  }
+
+  const prompt = FG.buildImagePrompt({
+    facts, brief, spec, styleId: message.styleId, withTicker: message.withTicker === true,
+  });
+
+  const n = Math.max(1, Math.min(4, Number(message.n) || 2));
+  const secrets = forgeSecrets(cfg);
+  const results = await Promise.all(
+    Array.from({ length: n }, () => forgeOneImage(provider, cfg, { prompt, spec }, secrets, cfg.allowLocal)),
+  );
+  const images = results.filter((r) => r && r.dataUrl);
+  if (!images.length) {
+    const firstErr = results.find((r) => r && r.error);
+    return { error: (firstErr && firstErr.error) || 'The image AI returned nothing.' };
+  }
+  return { images, prompt };
 }
 
 async function autoReview(roundId) {
@@ -2323,6 +2575,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // for the endpoint test; aiModels validates them through the same
         // isAllowedEndpoint gate and persists nothing.
         sendResponse(await aiModels(message.overrides));
+        break;
+
+      case 'pt_forge_prewarm':
+        // Fire-and-forget: the panel has not opened yet, and the point is
+        // that the brief is already home when it does.
+        forgeBrief(message.facts).catch(() => {});
+        sendResponse({ ok: true });
+        break;
+
+      case 'pt_forge_brief':
+        sendResponse(await forgeBrief(message.facts));
+        break;
+
+      case 'pt_forge_image':
+        sendResponse(await forgeImages(message));
         break;
 
       case 'pt_rec_query':

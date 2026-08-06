@@ -5,6 +5,83 @@ details live in the commit messages.
 
 ## Unreleased
 
+**Take profits and stops you drag on the chart.** The exit half of paper
+trading, with a real terminal's ergonomics: arm a take profit or a stop and it
+draws as a line you can grab and drop where you want out. They are the site's
+own order lines — the same primitive its live trading uses — so they behave
+the way your hands already expect.
+
+- **The level means the same thing on every axis.** Market cap, USD, native
+  SOL, or a perp's absolute USD — and you can flip mid-session. A drag hands
+  back whatever unit the axis is currently in, and the conversion runs through
+  a ratio rather than re-deriving the unit, so there is no per-axis special
+  case to get wrong. When the unit genuinely cannot be established — no bar
+  close yet, no rate — **no line is drawn and no drag is accepted**, rather
+  than a level invented to fill the gap.
+- **A stop that gaps fills where the market actually was**, not at the level
+  you set, and the slip is recorded. A take profit that filled below its
+  target reads negative the same way. Selling by hand first leaves the
+  remaining percentage meaning what it says, and closing the position disarms
+  everything attached to it.
+
+**Fixed**
+
+- **The entry line stopped teleporting on fomo.** (Field report: "the avg
+  fill line and where the entry thought it was just keeps teleporting
+  everywhere — completely unusable.") The chart never declares whether its
+  axis is a USD market cap or a SOL one — we infer it, and the boundary
+  between the two moves with the SOL/USD rate, so a value sitting near it
+  flips classification tick to tick while nothing about your position has
+  changed. Each flip threw away the frozen level and recomputed it against a
+  candle that had moved in the meantime, walking the line up the chart — a
+  60% run dragged a 240k entry to 384k, with the fill bubbles riding along.
+  A reclassification is no longer treated as a unit change. A real axis
+  switch still re-projects, and a new average still moves the line. (F-43)
+- **A fresh install keeps what your first save wrote.** Settings saved on a
+  brand-new install could be partly reverted by migrations meant for old
+  installs — including an AI endpoint and key entered together. Fresh
+  installs now run no migrations at all, and old installs still get every
+  one of them. (D-56)
+
+**Forge — make the banner inside the dex's own checkout.** Community ask from
+AmpBets: none of the tools generate the art for a dex banner, so you end up
+pulling up Grok in another tab, going back and forth, and pasting a file into
+a payment flow you already had open. Now when a paid upload box appears on a
+dex — fund, boost, enhance token info — a **Generate** chip shows up on the
+image slot itself.
+
+- **Two AIs, because they do different jobs.** A *narrative* model reads what
+  the coin is actually about and writes the art direction; an *image* model
+  draws it. Grok is the interesting narrative pick: it runs xAI's server-side
+  `x_search` tool and reads X before writing the brief, so the art matches the
+  joke people are posting right now instead of a generic frog. The brief lands in an editable
+  box — it is a starting point, not a decision made for you, and the sources
+  it read are listed as clickable citations.
+- **Bring any key.** OpenAI-compatible `/images/generations` (OpenAI, xAI, and
+  the many hosts that copy that shape) works as-is; Gemini and Stability have
+  their own adapters. For anything we ship no adapter for — Higgsfield, a
+  private model, whatever launches next month — pick **Custom** and paste the
+  endpoint, headers, a body template and where the image sits in the reply.
+  No waiting on us to add your provider.
+- **Fast, on purpose.** The narrative research starts the moment an upload box
+  is spotted — and earlier still if you so much as hover the fund button — so
+  the brief is usually home before you have finished reading the form. Options
+  render in parallel, so four is barely slower than one.
+- **It reads the box instead of guessing.** The required image size is lifted
+  off the checkout's own copy at runtime, and the panel says whether the size
+  came from that page or from our preset. We ship no table of per-site pixel
+  requirements, because we would be inventing it.
+- **It never lies about what landed.** The file is set on the upload input the
+  way a real upload does it, with a drag-and-drop fallback for boxes that want
+  one. If neither works, it says so and gives you the download — it will never
+  print "dropped in" over an empty uploader you are about to pay for.
+- **Off by default, and it never spends anything on its own.** No key, no
+  feature. Keys live on your machine, are never synced, and every provider
+  call happens in the extension's worker — a page can never read them out of
+  the DOM. PaperTrench never submits the form and never pays for anything.
+- Needs no new Chrome permissions: it runs inside the site access PaperTrench
+  already has.
+
 Turbo II — the speed pass, everywhere at once. Ask the Turbo receipts card
 whether any of this is real; that is what it is for.
 

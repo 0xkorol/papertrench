@@ -84,7 +84,9 @@
         "chart-markers.js",
         "title-feed.js",
         "content.js",
-        "warm-links.js"
+        "warm-links.js",
+        "forge-core.js",
+        "forge.js"
       ],
       "css": [
         "content.css"

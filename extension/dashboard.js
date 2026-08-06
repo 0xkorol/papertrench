@@ -15,6 +15,31 @@ if (!RP) throw new Error('PTReplay module missing');
 const RC = window.PTRecordings;
 if (!RC) throw new Error('PTRecordings store missing');
 const AT = window.PTAttest;
+const FG = window.PTForge;
+
+/* Forge settings helpers — the provider lists live in forge-core.js so the
+ * dashboard, the worker and the tests all read one registry. */
+function forgeOptions(registry, selected) {
+  return Object.keys(registry).map((id) => {
+    const p = registry[id];
+    return `<option value="${esc(p.id)}" ${selected === p.id ? 'selected' : ''}>${esc(p.label)}</option>`;
+  }).join('');
+}
+function forgePick(registry, selected) {
+  return registry[selected] || registry[Object.keys(registry)[0]];
+}
+function forgeBlurb(registry, selected) {
+  const p = forgePick(registry, selected);
+  return (p && p.blurb) || '';
+}
+function forgeEndpointHint(registry, selected) {
+  const p = forgePick(registry, selected);
+  return (p && p.endpoint) || 'https://…';
+}
+function forgeModelHint(registry, selected) {
+  const p = forgePick(registry, selected);
+  return (p && p.modelHint) || 'model name';
+}
 if (!AT) throw new Error('PTAttest module missing');
 const PC = window.PTPnlCard;
 if (!PC) throw new Error('PTPnlCard module missing');
@@ -3750,6 +3775,13 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-panel-presets" ${settings.panelPresetsEnabled !== false ? 'checked' : ''}> Quick-buy preset buttons</label><small>The one-tap SOL amount buttons. Off keeps the custom amount and BUY button.</small></div>
       </div>
       <div class="card">
+        <h3>Exits — take profit &amp; stop loss</h3>
+        <p class="dim" style="margin-top:0;font-size:12px;line-height:1.55">Arm a level on the chart and the position exits itself when the market gets there. Drag the line to place it exactly, the way a terminal does it.</p>
+        <div class="field field-check"><label><input type="checkbox" id="set-chart-orders" ${settings.chartOrdersEnabled !== false ? 'checked' : ''}> Take profit / stop loss on the chart</label><small>Adds a TP/SL section to the trade panel and draggable order lines to the chart. Costs nothing until a level is actually armed.</small></div>
+        <p class="dim" style="font-size:11.5px;line-height:1.6;margin:8px 0 0"><strong>When a level is watched:</strong> while a page feeding that token's price is open. PaperTrench checks armed levels against the prices your own tabs are already receiving — nothing runs in the background, and an armed level says so on the chart.</p>
+        <p class="dim" style="font-size:11.5px;line-height:1.6;margin:8px 0 0"><strong>How a paper stop fills:</strong> at the next price this machine actually observed after your level was crossed — never at the level itself. On an illiquid coin a stop can gap well past where you put it, and the journal records both numbers (“stop 180K → filled 154K”). A paper stop that always fills exactly where you placed it would teach an exit quality that does not exist.</p>
+      </div>
+      <div class="card">
         <h3>AI &amp; Recording</h3>
         <div class="field"><label for="set-endpoint">AI server address</label><input id="set-endpoint" type="text" value="${esc(settings.aiEndpoint)}" placeholder="https://api.openai.com/v1 or http://127.0.0.1:8765/v1"><small>Blank turns the AI coach off. Paste any OpenAI-compatible endpoint; if it runs on localhost or your LAN, also tick the local toggle below, then Save.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-ai-allow-local" ${settings.aiAllowLocalEndpoint ? 'checked' : ''}> Allow local/private AI endpoints</label><small>Enable only if you run a self-hosted (localhost, 127.0.0.1, or LAN) AI server. Off blocks requests to private/internal addresses.</small></div>
@@ -3759,6 +3791,28 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-rec" ${settings.recordingEnabled ? 'checked' : ''}> Record screen while a position is open</label><small>Chrome asks for screen permission once per session.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-frames" ${settings.framesEnabled ? 'checked' : ''}> Capture key frames on fills</label></div>
         <div class="field field-check"><label><input type="checkbox" id="set-autorev" ${settings.autoReview ? 'checked' : ''}> Auto-run AI review when a round closes</label></div>
+      </div>
+      <div class="card">
+        <h3>Forge — generate the banner inside the dex's own box</h3>
+        <p class="dim" style="margin-top:0;font-size:12px;line-height:1.55">When a paid upload box appears on a dex — fund, boost, enhance token info — PaperTrench puts a <strong>Generate</strong> chip on the image slot. It reads what the coin is about, draws the art at the size that box asks for, and drops the file straight into the uploader. Bring your own keys; the calls are yours and so are the bills.</p>
+        <div class="field field-check"><label><input type="checkbox" id="set-forge" ${settings.forgeEnabled === true ? 'checked' : ''}> Show the Generate chip on image upload boxes</label><small>Off by default. Nothing is generated, and no key is used, until you click Generate yourself.</small></div>
+        <p class="dim" style="font-size:11.5px;line-height:1.6;margin:10px 0 4px"><strong>1 · The narrative AI (optional).</strong> Reads what the coin is actually about and writes the art direction. Grok is the interesting one: with X search on, it looks at the live timeline first, so the art matches the joke people are actually posting. Leave this blank and you just describe the picture yourself.</p>
+        <div class="field"><label for="set-forge-brain">Narrative AI</label><select id="set-forge-brain">${forgeOptions(FG.BRAINS, settings.forgeBrainProvider)}</select><small>${esc(forgeBlurb(FG.BRAINS, settings.forgeBrainProvider))}</small></div>
+        <div class="field"><label for="set-forge-brain-endpoint">Narrative endpoint</label><input id="set-forge-brain-endpoint" type="text" value="${esc(settings.forgeBrainEndpoint || '')}" placeholder="${esc(forgeEndpointHint(FG.BRAINS, settings.forgeBrainProvider))}"><small>Blank uses that provider's usual address.</small></div>
+        <div class="field"><label for="set-forge-brain-model">Narrative model</label><input id="set-forge-brain-model" type="text" value="${esc(settings.forgeBrainModel || '')}" placeholder="${esc(forgeModelHint(FG.BRAINS, settings.forgeBrainProvider))}"><small>Model names change often — the placeholder is a hint, not a promise. Use whatever your account can call.</small></div>
+        <div class="field"><label for="set-forge-brain-key">Narrative API key</label><input id="set-forge-brain-key" type="password" value="${esc(settings.forgeBrainKey || '')}" autocomplete="off" placeholder="sk-…"><small>Stored on this machine only, never synced, and only ever sent to the endpoint above.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-forge-search" ${settings.forgeSearchX !== false ? 'checked' : ''}> Let Grok search X for the narrative</label><small>Uses xAI's server-side <code>x_search</code> tool on <code>/v1/responses</code> — Grok runs the search itself and answers with citations you can click. Costs more per call. If your key is not entitled to it, PaperTrench retries once without the tool and still returns a brief rather than failing.</small></div>
+        <p class="dim" style="font-size:11.5px;line-height:1.6;margin:12px 0 4px"><strong>2 · The image AI (required).</strong> Draws the picture. Anything with an OpenAI-style <code>/images/generations</code> endpoint works as-is; Gemini and Stability have their own adapters. For anything else — Higgsfield, a private model, next month's release — pick <em>Custom</em> and paste the request shape.</p>
+        <div class="field"><label for="set-forge-image">Image AI</label><select id="set-forge-image">${forgeOptions(FG.HANDS, settings.forgeImageProvider)}</select><small>${esc(forgeBlurb(FG.HANDS, settings.forgeImageProvider))}</small></div>
+        <div class="field"><label for="set-forge-image-endpoint">Image endpoint</label><input id="set-forge-image-endpoint" type="text" value="${esc(settings.forgeImageEndpoint || '')}" placeholder="${esc(forgeEndpointHint(FG.HANDS, settings.forgeImageProvider))}"><small>Required for a custom provider; blank uses the provider's usual address otherwise.</small></div>
+        <div class="field"><label for="set-forge-image-model">Image model</label><input id="set-forge-image-model" type="text" value="${esc(settings.forgeImageModel || '')}" placeholder="${esc(forgeModelHint(FG.HANDS, settings.forgeImageProvider))}"></div>
+        <div class="field"><label for="set-forge-image-key">Image API key</label><input id="set-forge-image-key" type="password" value="${esc(settings.forgeImageKey || '')}" autocomplete="off" placeholder="sk-…"></div>
+        <div class="field"><label for="set-forge-image-headers">Custom: extra headers (JSON)</label><input id="set-forge-image-headers" type="text" value="${esc(settings.forgeImageHeaders || '')}" placeholder='{"x-api-key":"…"}'><small>Only used by the Custom provider. Leave blank to send just <code>Authorization: Bearer &lt;key&gt;</code>.</small></div>
+        <div class="field"><label for="set-forge-image-body">Custom: request body template</label><input id="set-forge-image-body" type="text" value="${esc(settings.forgeImageBody || '')}" placeholder='{"prompt":"{{prompt}}","width":{{width}},"height":{{height}}}'><small>JSON with <code>{{prompt}}</code>, <code>{{width}}</code>, <code>{{height}}</code>, <code>{{n}}</code>, <code>{{model}}</code> substituted in.</small></div>
+        <div class="field"><label for="set-forge-image-path">Custom: where the image is in the reply</label><input id="set-forge-image-path" type="text" value="${esc(settings.forgeImagePath || '')}" placeholder="data.0.b64_json"><small>A dotted path to a base64 string or an image URL. Blank means PaperTrench guesses from the shapes it already knows.</small></div>
+        <div class="field"><label for="set-forge-style">Default style</label><select id="set-forge-style">${FG.STYLES.map((s) => `<option value="${esc(s.id)}" ${settings.forgeStyle === s.id ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select><small>Changeable per generation from the panel.</small></div>
+        <div class="field"><label for="set-forge-variants">Options per click</label><input id="set-forge-variants" type="number" min="1" max="4" step="1" value="${Number(settings.forgeVariants) || 2}"><small>Rendered in parallel, so four is barely slower than one — but it is four times the bill.</small></div>
+        <p class="dim" style="font-size:11.5px;line-height:1.6;margin:10px 0 0"><strong>What PaperTrench will not do here:</strong> it never sizes the image from a table of numbers we made up. It reads the required dimensions off the box in front of you and says so on the panel; when a box states nothing, the panel says the size is our preset instead. It never pays for anything, never submits the form, and never touches the site's own DOM — the chip floats over the upload slot rather than being injected into it.</p>
       </div>
       <div class="card">
         <h3>Feedback &amp; alerts</h3>
@@ -4037,6 +4091,7 @@ function gatherSettingsFromForm(notes = [], base = settings) {
       const v = Number(document.getElementById('set-guard-daily-loss').value);
       return Number.isFinite(v) && v > 0 ? v : null;
     })(),
+    chartOrdersEnabled: document.getElementById('set-chart-orders').checked,
     guardRugEnabled: document.getElementById('set-guard-rug').checked,
     guardRugTopPct: clampInt('set-guard-rug-pct', 10, 90, 40, 'rug guard threshold'),
     postExitWatchEnabled: document.getElementById('set-post-exit-watch').checked,
@@ -4045,6 +4100,21 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     recordingEnabled: document.getElementById('set-rec').checked,
     framesEnabled: document.getElementById('set-frames').checked,
     autoReview: document.getElementById('set-autorev').checked,
+    forgeEnabled: document.getElementById('set-forge').checked,
+    forgeBrainProvider: document.getElementById('set-forge-brain').value,
+    forgeBrainEndpoint: document.getElementById('set-forge-brain-endpoint').value.trim(),
+    forgeBrainModel: document.getElementById('set-forge-brain-model').value.trim(),
+    forgeBrainKey: document.getElementById('set-forge-brain-key').value.trim(),
+    forgeSearchX: document.getElementById('set-forge-search').checked,
+    forgeImageProvider: document.getElementById('set-forge-image').value,
+    forgeImageEndpoint: document.getElementById('set-forge-image-endpoint').value.trim(),
+    forgeImageModel: document.getElementById('set-forge-image-model').value.trim(),
+    forgeImageKey: document.getElementById('set-forge-image-key').value.trim(),
+    forgeImageHeaders: document.getElementById('set-forge-image-headers').value.trim(),
+    forgeImageBody: document.getElementById('set-forge-image-body').value.trim(),
+    forgeImagePath: document.getElementById('set-forge-image-path').value.trim(),
+    forgeStyle: document.getElementById('set-forge-style').value,
+    forgeVariants: clampInt('set-forge-variants', 1, 4, 2, 'Forge options per click'),
     tradeEffectsEnabled: document.getElementById('set-effects').checked,
     tradeSoundsEnabled: document.getElementById('set-sounds').checked,
     profitAlertsEnabled: document.getElementById('set-profit-alerts').checked,

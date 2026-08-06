@@ -415,6 +415,42 @@ reports `off-range` instead of `ok:true`. The drawing code itself was proven
 correct on the live chart first — canvas pixels showed the dashed line on the
 exact expected row — which is what ruled it out and pointed upstream.
 
+**F-43 · S1 · A basis RECLASSIFICATION teleported the entry line and every fill bubble — and the test written for that exact field report could not fail for it**
+`price-bridge.js` sameBasisFamily / paper-lines intake ·
+`test/basisflap.test.js` · fomo.family, maintainer field report 2026-08-06
+("the avg fill line and where the entry thought it was just keeps teleporting
+everywhere — completely unusable") · **fixed (unreleased)**.
+`mcap` (USD cap) and `native-mcap` (SOL cap) are not declared by the chart —
+they are inferred per tick from which band the value lands in, and the
+boundary between them moves with the SOL/USD rate, so a value near it
+alternates tick to tick while describing the SAME axis and the SAME entry.
+Both freezes were keyed on exact basis equality, so each flap discarded them
+and handed the level back to the ratio path (`close x avg/current`). The
+close refreshes on every chart tick; the spec's current price only re-posts
+every ~2 s. Recomputing across that gap is F-32's failure re-entered through
+the basis door: measured on the reported shape, a 60 % candle run moved a
+240k entry to 384k, and the bubbles rode with it (same reset, one line up).
+The freeze now survives a cap<->cap reclassification; crossing into or out of
+an explicit price basis is still a real unit change and still recomputes —
+and those branches read the recorded average, not the close, so they cannot
+exhibit this at all.
+The reverse risk is stated rather than hidden: a GENUINE USD-cap<->SOL-cap
+toggle now holds a level one rate off. That is the safer error — the sites
+expose no such toggle (the distinction is our inference, not their control),
+F-41's `offVisibleRange` NAMES a held level that leaves the visible band, and
+the next changed average recomputes. A silent 60 % teleport is a lie; a
+named off-range level is not.
+Why it survived the pass that named it: `basisflap.test.js` posted the
+flapped spec BEFORE moving the candle, so the level re-froze while the close
+was still where it started — all five tests passed with the freeze mechanism
+disabled outright (`if (false)`), i.e. they never exercised it. In the field
+the order is reversed: the chart ticks continuously while the re-post is
+throttled, so the flapped spec lands AFTER the close has moved. Four tests
+added on that ordering; mutation-verified BOTH ways — reverting the guard to
+strict equality fails exactly the two teleport tests, and widening it to
+treat every basis change as a flap fails exactly the two real-unit-switch
+tests, and nothing else moves in either direction.
+
 **F-42 · S2 · The line was DESTROYED whenever its level briefly could not be computed, and the F-41 handoff test could not fail for its stated reason**
 `price-bridge.js` syncLineSlot · `test/fomodraws.test.js` ·
 **fixed (unreleased)** — found by a 35-agent adversarial audit of F-41, two

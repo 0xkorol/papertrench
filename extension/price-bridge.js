@@ -1157,7 +1157,7 @@
         //
         // NEVER for perps. On the perps venues the host exposes getMarks but
         // does not render OUR marks from it, and this handback is reached by
-        // our own refreshPadreMarks() call - so the sequence was: shapes
+        // our own refreshPadreMarks() call — so the sequence was: shapes
         // draw, we ask the host to refresh, the host calls getMarks, and we
         // delete the only thing the user could see. That is the reported
         // "it shows up then it disappears", and on Hyperliquid it took the
@@ -1370,6 +1370,221 @@
       .setBodyBorderColor('#FFFFFF00')
       .setBodyBackgroundColor('#FFFFFF00')
       .setEditable(false);
+  }
+
+  /* ---------------- draggable chart orders (take profit / stop loss) ------
+   *
+   * The exit half of paper trading, with Padre's ergonomics: a line you grab
+   * and drop where you want the position to leave. These are the SAME
+   * TradingView order lines the average levels above use — the only
+   * differences are setEditable(true) and the onMove/onCancel handlers,
+   * which is exactly how a real terminal wires them.
+   *
+   * UNIT INVERSION — the part that has to be right, or every armed level is
+   * a lie. The chart's Y axis is not necessarily a token price: it may be
+   * market cap (Axiom's default), USD, native SOL, or absolute USD on a perp
+   * axis, and the user can flip it mid-session. A drag hands back
+   * getPrice() in WHATEVER unit the axis is currently in.
+   *
+   * Rather than re-deriving the unit — the failure mode that produced C-02
+   * through C-05 — this exploits the one property every basis shares: each
+   * is a LINEAR function of the token price. So the ratio to the live level
+   * is unit-free and exact:
+   *
+   *     level   = currentLevel x (trigger / refPrice)      draw
+   *     trigger = refPrice     x (level   / currentLevel)  drag back
+   *
+   * and no branch on axisBasis is needed anywhere. When the current level
+   * cannot be established (no bar close yet on an mcap axis, no rate on a
+   * USD one) the ratio is undefined, so NO line is drawn and no drag is
+   * accepted — honest absence, never a fabricated level.
+   */
+
+  let paperOrderSpec = null;         // { enabled, orders: [...], refPrice }
+  let orderWidget = null;            // widget the current adapters belong to
+  const orderSlots = new Map();      // order id -> line slot
+
+  const ORDER_TP_COLOR = '#3fb950';
+  const ORDER_SL_COLOR = '#f85149';
+
+  /**
+   * The Y-axis level the LIVE price currently sits at — the anchor both
+   * directions of the conversion hang off. Null means the axis unit is not
+   * yet knowable, which must stop the feature rather than guess.
+   */
+  function currentAxisLevel(spec) {
+    const basis = spec && spec.axisBasis;
+    if (basis === 'mcap') return lastBarClose > 0 ? lastBarClose : null;
+    if (basis === 'usd' || basis === 'usd-abs') {
+      const usd = Number(spec.currentPriceUsd);
+      return usd > 0 ? usd : null;
+    }
+    if (basis === 'native') {
+      const native = Number(spec.currentPriceNative);
+      return native > 0 ? native : null;
+    }
+    return null;
+  }
+
+  /** Chart level for an armed trigger price. Null when not knowable. */
+  function orderLevelFor(spec, triggerPrice) {
+    const currentLevel = currentAxisLevel(spec);
+    const ref = Number(spec && spec.refPrice);
+    const trigger = Number(triggerPrice);
+    if (!(currentLevel > 0) || !(ref > 0) || !(trigger > 0)) return null;
+    return currentLevel * (trigger / ref);
+  }
+
+  /** The inverse: a dragged level back to a trigger price. */
+  function orderPriceFromLevel(spec, level) {
+    const currentLevel = currentAxisLevel(spec);
+    const ref = Number(spec && spec.refPrice);
+    const value = Number(level);
+    if (!(currentLevel > 0) || !(ref > 0) || !(value > 0)) return null;
+    return ref * (value / currentLevel);
+  }
+
+  function configureOrderLine(line, order, level) {
+    const color = order.kind === 'tp' ? ORDER_TP_COLOR : ORDER_SL_COLOR;
+    return line
+      .setText(order.label || (order.kind === 'tp' ? 'TAKE PROFIT' : 'STOP LOSS'))
+      .setQuantity(order.sizePct >= 100 ? 'ALL' : `${order.sizePct}%`)
+      .setLineColor(color)
+      .setLineStyle(0)
+      .setLineWidth(2)
+      .setPrice(Number(level))
+      .setBodyFont('11px Inter, sans-serif')
+      .setBodyTextColor(color)
+      .setBodyBorderColor(color)
+      .setBodyBackgroundColor('#0D1117E6')
+      .setEditable(true);
+  }
+
+  /**
+   * Wire the drag and the cancel button.
+   *
+   * onMove fires on DROP with the line already at its new level, so the
+   * level is read back off the adapter rather than trusted from a closure.
+   * A drag whose level cannot be inverted is reported as a refusal and the
+   * line is snapped back, so the chart never shows a level the wallet did
+   * not accept.
+   */
+  function bindOrderLineHandlers(line, order) {
+    if (typeof line.onMove === 'function') {
+      line.onMove(() => {
+        let level = null;
+        try { level = line.getPrice(); } catch (_) {}
+        const price = orderPriceFromLevel(paperOrderSpec, level);
+        if (!(price > 0)) {
+          // Put it back where the wallet still believes it is.
+          const back = orderLevelFor(paperOrderSpec, order.triggerPrice);
+          if (back > 0) { try { line.setPrice(back); } catch (_) {} }
+          emit('paper-order-moved', { id: order.id, ok: false, reason: 'axis-unit-unknown' });
+          return;
+        }
+        order.triggerPrice = price;
+        emit('paper-order-moved', { id: order.id, ok: true, triggerPrice: price, level });
+      });
+    }
+    if (typeof line.onCancel === 'function') {
+      line.onCancel(() => { emit('paper-order-cancelled', { id: order.id }); });
+    }
+    return line;
+  }
+
+  function clearPaperOrderLines() {
+    for (const slot of orderSlots.values()) clearLineSlot(slot);
+    orderSlots.clear();
+  }
+
+  /**
+   * Bring the drawn order lines in line with the armed set. Runs on every
+   * repost and on the 1 s sweep, like the average lines, so a chart that
+   * arrives late still gets its levels.
+   */
+  function syncPaperOrderLines() {
+    const spec = paperOrderSpec;
+    if (!spec || !spec.enabled || !Array.isArray(spec.orders) || !spec.orders.length) {
+      clearPaperOrderLines();
+      return false;
+    }
+    // Same chart the average lines draw on — ranked, so a multi-chart
+    // widget's seriesless shell never wins (see getRankedCharts).
+    const widget = findTradingViewWidget();
+    const charts = getRankedCharts();
+    if (!widget || !charts.length) return false;
+    const chart = charts[0];
+
+    // A chart swap invalidates every adapter held against the old one.
+    if (orderWidget && orderWidget !== widget) clearPaperOrderLines();
+    orderWidget = widget;
+
+    // Orders that are no longer armed lose their line immediately.
+    const live = new Set(spec.orders.map((o) => o.id));
+    for (const [id, slot] of orderSlots) {
+      if (!live.has(id)) { clearLineSlot(slot); orderSlots.delete(id); }
+    }
+
+    let drewAll = true;
+    for (const order of spec.orders) {
+      const level = orderLevelFor(spec, order.triggerPrice);
+      if (!(level > 0)) { drewAll = false; continue; }
+
+      let slot = orderSlots.get(order.id);
+      if (!slot) { slot = makeLineSlot(); orderSlots.set(order.id, slot); }
+      slot.want = { price: level, order };
+
+      // Already drawn: move it rather than rebuild, so a drag in progress on
+      // another line is never interrupted by a repost.
+      if (slot.adapter) {
+        try { slot.adapter.setPrice(level).setQuantity(order.sizePct >= 100 ? 'ALL' : `${order.sizePct}%`); }
+        catch (_) { clearLineSlot(slot); }
+        continue;
+      }
+      if (slot.pending) { if (Date.now() - slot.pendingAt < 5000) continue; clearLineSlot(slot); }
+
+      let created;
+      try { created = chart.createOrderLine(); }
+      catch (err) {
+        // F-39: a standalone charting library has no broker primitives, so
+        // there is nothing here that can be dragged. Say so once and stop —
+        // a locked horizontal_line would look identical and refuse to move,
+        // which is worse than not offering the feature on this chart.
+        if (brokerUnavailable(chart, err)) {
+          emit('paper-orders-status', { ok: false, reason: 'no-draggable-lines' });
+          clearPaperOrderLines();
+          return false;
+        }
+        created = null;
+      }
+      if (!created) { drewAll = false; continue; }
+
+      if (typeof created.then === 'function') {
+        slot.pending = true;
+        slot.pendingAt = Date.now();
+        const gen = slot.gen;
+        created.then((line) => {
+          if (slot.gen !== gen) { try { line.remove(); } catch (_) {} return; }
+          slot.pending = false;
+          slot.pendingAt = 0;
+          try {
+            const want = slot.want || { price: level, order };
+            configureOrderLine(line, want.order, want.price);
+            bindOrderLineHandlers(line, want.order);
+            slot.adapter = line;
+            slot.chart = chart;
+          } catch (_) { try { line.remove(); } catch (_) {} }
+        }, () => { if (slot.gen === gen) { slot.pending = false; slot.pendingAt = 0; } });
+        continue;
+      }
+      try {
+        configureOrderLine(created, order, level);
+        bindOrderLineHandlers(created, order);
+        slot.adapter = created;
+        slot.chart = chart;
+      } catch (_) { clearLineSlot(slot); drewAll = false; }
+    }
+    return drewAll;
   }
 
   /**
@@ -1739,6 +1954,42 @@
     return keys.every((k) => (Number(a[k]) || 0) === (Number(b[k]) || 0));
   }
 
+  /* F-43 (fomo.family field report, 2026-08-06: "the avg fill line and where
+   * the entry thought it was just keeps teleporting everywhere — completely
+   * unusable").
+   *
+   * `mcap` (USD cap) and `native-mcap` (SOL cap) are not DECLARED by the
+   * chart — they are inferred per tick from which band the value lands in,
+   * and the boundary between them moves with the SOL/USD rate. A value near
+   * that boundary therefore alternates between the two classifications tick
+   * to tick while describing the SAME axis and the SAME entry.
+   *
+   * Treating that flap as a unit switch discards the frozen level, which
+   * hands the line back to the ratio path (close x avg/current) — and the
+   * close refreshes on every chart tick while the spec's current price only
+   * re-posts every ~2 s. Recomputing across that gap makes the level ride the
+   * candle: F-32's exact failure, re-entered through the basis door. Measured
+   * on the reported shape, a 60% candle run moved a 240k entry to 384k.
+   *
+   * So a cap<->cap reclassification is NOT evidence of a unit switch and the
+   * freeze survives it. Crossing into or out of an explicit price basis
+   * (native / usd / usd-abs) IS a real unit change and still recomputes —
+   * and those branches read the exact recorded average rather than the close,
+   * so they cannot exhibit this failure at all.
+   *
+   * The residual risk is the reverse: a GENUINE USD-cap <-> SOL-cap toggle
+   * would hold a level that is now ~1 rate off. That is the safer error of
+   * the two — the sites do not expose such a toggle (the distinction is our
+   * inference, not their control), a held level lands outside the visible
+   * band where F-41's offVisibleRange NAMES it, and the next changed average
+   * recomputes. A silent 60% teleport is a lie; a named off-range level is
+   * not. */
+  const CAP_BASES = new Set(['mcap', 'native-mcap']);
+  function sameBasisFamily(prevBasis, nextBasis) {
+    if (prevBasis === nextBasis) return true;
+    return CAP_BASES.has(prevBasis) && CAP_BASES.has(nextBasis);
+  }
+
   const averageFillSlot = makeLineSlot();
   const averageExitSlot = makeLineSlot();
 
@@ -1861,7 +2112,8 @@
   function shapeLevelFor(levels) {
     const spec = paperLineSpec || {};
     const basis = spec.axisBasis;
-    // Perps: the mark's USD level IS the chart level, with no ratio scaling.
+    // Perps: the mark's USD level IS the chart level, with no ratio scaling
+    // and no dependence on a spec having arrived first.
     if (levels.perp || basis === 'usd-abs') return levels.usd > 0 ? levels.usd : null;
     if (basis === 'usd' && levels.usd > 0) return levels.usd;
     if (basis === 'native' && levels.native > 0) return levels.native;
@@ -1890,7 +2142,7 @@
     const best = charts[0] || null;
     // PERPS render as OUR OWN DOM bubbles, always. Execution shapes belong
     // to the host's chart: it can drop them on any re-render, symbol change
-    // or widget remount, and nothing tells us they are gone - the handles
+    // or widget remount, and nothing tells us they are gone — the handles
     // still look alive, so the redraw sweep sees a full set and does
     // nothing. That is the reported "shows up then disappears". The bubble
     // layer is PaperTrench's own fixed overlay, repositioned every frame
@@ -2171,13 +2423,12 @@
     // PERPS: draw as shapes immediately, never via the host's marks
     // pipeline. Verified live on app.hyperliquid.xyz (2026-08-06): the
     // datafeed HAS getMarks, so it gets patched and reports marksHooked,
-    // but the widget never calls it - and our own refreshMarks() makes the
-    // host call it just once, which sets the pipeline-seen stamp and
-    // thereby suppresses the watchdog forever. The result was a mark
-    // accepted with ok:true that never appeared on screen. Both perps
-    // venues were confirmed to support createExecutionShape, so the
-    // evidence is positive on both sides: marks do not render here,
-    // shapes do.
+    // but the widget never calls it — and our own refreshMarks() makes the
+    // host call it just once, which sets marksPipelineSeenAt and thereby
+    // suppresses the watchdog forever. The result was a mark accepted with
+    // ok:true that never appeared on screen. Both perps venues were
+    // confirmed to support createExecutionShape, so the evidence is
+    // positive on both sides: marks do not render here, shapes do.
     if (perpsMarksPresent) {
       shapeFallbackActive = true;
       drawShapeFallback();
@@ -2468,6 +2719,10 @@
     padreBarsHooked = bars;
     padreMarksHooked = marks;
     const linesReady = paperLineSpec ? syncPaperAverageLines() : true;
+    // Armed order lines re-assert on the same sweep: a chart that mounts
+    // after the orders were posted still gets them, and a level the user
+    // dragged stays where the WALLET says it is if anything repaints.
+    if (paperOrderSpec && paperOrderSpec.enabled) syncPaperOrderLines();
 
     if (changedWidget || newlyPatched) {
       emit('padre-hook-status', {
@@ -2511,6 +2766,7 @@
       // stop re-asserting it. Backdating the liveness stamp silences the
       // sweep immediately; a future content script revives it by speaking.
       paperLineSpec = null;
+      paperOrderSpec = null;
       gmgnLineSpec = null;
       paperMarks = [];
       paperMarkLevels.clear();
@@ -2518,6 +2774,7 @@
       if (fallbackCheckTimer) { clearTimeout(fallbackCheckTimer); fallbackCheckTimer = null; }
       clearShapeFallback();
       clearPaperAverageLines();
+      clearPaperOrderLines();
       clearGmgnAverageLines();
       clearGmgnFillMarkers();
       refreshPadreMarks();
@@ -2603,13 +2860,56 @@
       return;
     }
 
+    if (type === 'paper-orders-clear') {
+      paperOrderSpec = null;
+      clearPaperOrderLines();
+      emit('paper-orders-status', { action: 'clear', ok: true });
+      return;
+    }
+
+    if (type === 'paper-orders') {
+      // The armed set is authoritative: the wallet decides what exists, the
+      // chart only draws it. A repost that drops an order removes its line.
+      const orders = Array.isArray(payload && payload.orders)
+        ? payload.orders
+          .map((o) => ({
+            id: String(o && o.id || ''),
+            kind: o && o.kind === 'tp' ? 'tp' : 'sl',
+            triggerPrice: numberValue(o && o.triggerPrice),
+            sizePct: numberValue(o && o.sizePct) || 100,
+            label: typeof (o && o.label) === 'string' ? o.label : null,
+          }))
+          .filter((o) => o.id && o.triggerPrice > 0)
+        : [];
+      paperOrderSpec = {
+        enabled: Boolean(payload && payload.enabled),
+        axisBasis: typeof (payload && payload.axisBasis) === 'string' ? payload.axisBasis : null,
+        // The live price in the SAME unit the trigger prices are quoted in.
+        // Both sides of the ratio come from one source, so no basis branch
+        // is needed and a perp's USD axis needs no special case.
+        refPrice: numberValue(payload && payload.refPrice),
+        currentPriceNative: numberValue(payload && payload.currentPriceNative),
+        currentPriceUsd: numberValue(payload && payload.currentPriceUsd),
+        orders,
+      };
+      const synced = syncPaperOrderLines();
+      emit('paper-orders-status', {
+        action: 'sync',
+        ok: synced,
+        drawn: [...orderSlots.keys()].filter((id) => orderSlots.get(id).adapter),
+      });
+      return;
+    }
+
     if (type === 'paper-lines') {
       // A frozen bubble level is a constant IN ITS AXIS UNIT. If the chart
       // flips unit (Price <-> MCap), every frozen level is stale evidence —
       // clear them so the next frame re-freezes in the new unit.
       const prevBasis = paperLineSpec && paperLineSpec.axisBasis;
       const nextBasis = typeof (payload && payload.axisBasis) === 'string' ? payload.axisBasis : null;
-      if (prevBasis !== nextBasis) {
+      // F-43: bubbles freeze the same way lines do, so the flap teleported
+      // them the same way. Only a REAL unit change invalidates their level.
+      if (!sameBasisFamily(prevBasis, nextBasis)) {
         for (const levels of paperMarkLevels.values()) levels.frozenLevel = null;
       }
       const prevSpec = paperLineSpec;
@@ -2643,7 +2943,8 @@
       // and off the visible band. The frozen levels therefore survive a
       // repost that did not change what is being drawn — the averages
       // themselves. A DCA changes them, and recomputes, exactly as before.
-      if (prevSpec && prevSpec.axisBasis === nextBasis && sameAverages(prevSpec, paperLineSpec)) {
+      if (prevSpec && sameBasisFamily(prevSpec.axisBasis, nextBasis)
+        && sameAverages(prevSpec, paperLineSpec)) {
         paperLineSpec.frozenBuyLevel = prevSpec.frozenBuyLevel;
         paperLineSpec.frozenSellLevel = prevSpec.frozenSellLevel;
       }
@@ -2704,9 +3005,9 @@
         // Shapes carry the perps vocabulary rather than Buy/Sell.
         shapeText: isPerp ? perpShapeText(payload) : null,
         // A perps level is absolute USD and needs no axis spec to interpret.
-        // Without this a mark could only be placed AFTER a paper-lines
+        // Without this the mark could only be placed AFTER a paper-lines
         // message had established the basis, so the first fill on a fresh
-        // page silently failed to draw, and a lines-clear un-drew it again.
+        // page silently failed to draw (and a lines-clear un-drew it again).
         perp: isPerp,
       });
       if (paperMarks.length > MAX_MARKS) {

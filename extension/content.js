@@ -60,6 +60,7 @@
   let lastPollAt = 0;
   let pollInFlight = false;
   let posEls = null;            // cached position-card nodes, updated in place
+  let posOrderEls = null;       // cached TP/SL section nodes on that card
   let thesisEls = null;         // cached thesis card state
   let thesisEditing = false;
   // Wave 2 (F-B12, maintainer: "too big and clunky"): with no thesis yet the
@@ -463,6 +464,23 @@
     } else if (ev.type === 'paper-lines-status') {
       lastLineStatus = ev.payload || null;
       renderSiteStatus();
+    } else if (ev.type === 'paper-order-moved') {
+      // A drag landed on the chart. The bridge already refused anything it
+      // could not convert back to a price, so an ok:false here means the
+      // line snapped back and the wallet is unchanged — say so rather than
+      // letting the user think a level moved when it did not.
+      const p = ev.payload || {};
+      if (p.ok && Number(p.triggerPrice) > 0) adoptDraggedOrder(p.id, Number(p.triggerPrice));
+      else toast('That level could not be read off this chart — the line was put back');
+    } else if (ev.type === 'paper-order-cancelled') {
+      const p = ev.payload || {};
+      if (p.id) cancelChartOrder(p.id);
+    } else if (ev.type === 'paper-orders-status') {
+      lastOrderStatus = ev.payload || null;
+      // A chart with no draggable lines is a FACT about that build (F-39),
+      // not a transient failure: stop offering the drag and say why once.
+      if (ev.payload && ev.payload.reason === 'no-draggable-lines') chartOrdersDraggable = false;
+      renderSiteStatus();
     } else if (ev.type === 'gmgn-lines-status') {
       // The GMGN bridge reports only lifecycle status; its labels live on the
       // native TradingView lines rather than in the PaperTrench card.
@@ -608,6 +626,11 @@
     // maybeRepostAverageLines) — a spec frozen at fill time made mcap lines
     // ride the candle at ratio ≈ 1 instead of holding the entry level.
     maybeRepostAverageLines();
+    // Armed levels are judged against THIS observed price — the honest fill
+    // rule depends on it being the tick that first crossed the level, so this
+    // sits in the tick path and nowhere else.
+    evaluateChartOrders();
+    syncChartOrders();
     if (usesSvgMarkers()) CM.tickPrice(genericChartPoint(token.priceNative, token.priceUsd, token.mcap).plot);
     persistSoon();
     // Event-driven hot path: render in this same task, with no timer wait.
@@ -1653,6 +1676,249 @@
       && Math.abs(price / lastLineSpecPrice - 1) >= LINE_REPOST_MOVE_PCT;
     if (!moved && now - lastLineSpecPostAt < LINE_REPOST_MS) return;
     syncAveragePriceLines();
+  }
+
+  /* ---------------- chart orders: take profit / stop loss ----------------
+   *
+   * Arm a level by dragging a line on the chart; the position exits itself
+   * when the market reaches it. The RULES live in the engine (see the
+   * chart-orders note in engine.js) — this is the plumbing: post the armed
+   * set to the MAIN-world bridge, take drags back from it, and fire.
+   *
+   * WHAT PRICE A FIRED ORDER FILLS AT. The triggering tick's price, exactly
+   * as observed — NOT a freshly fetched quote, and NOT the trigger level.
+   * Re-quoting would fill at a price the order never actually saw, and
+   * filling at the level would hide the gap. The first tick on which the
+   * condition holds IS the next observed price after the crossing, which is
+   * the honest fill by construction.
+   */
+
+  let orderFireInFlight = false;
+  let lastOrderSpecSignature = null;
+  let lastOrderStatus = null;
+  // Learned per page, never assumed: a chart proves it can carry a draggable
+  // line by carrying one. Charts shipping TradingView's standalone build
+  // throw on createOrderLine (F-39), and on those the drag is honestly
+  // withdrawn instead of offered and silently doing nothing.
+  let chartOrdersDraggable = true;
+
+  function chartOrdersOn() {
+    return settings.appEnabled !== false && settings.chartOrdersEnabled !== false;
+  }
+
+  /** The armed orders for the token on screen. */
+  function currentOrders() {
+    return token && token.mint ? E.ordersFor(state, token.mint) : [];
+  }
+
+  /**
+   * Push the armed set to the bridge. Throttled by CONTENT, not by time: a
+   * repost that would draw the same lines at the same levels is skipped, so
+   * the ~800 ms heartbeat cannot fight a line the user is mid-drag on.
+   */
+  function syncChartOrders(force) {
+    if (!usesNativeChart()) return;
+    if (!chartOrdersOn() || !token || !token.mint) {
+      if (lastOrderSpecSignature !== null) {
+        lastOrderSpecSignature = null;
+        sendPadreMarker('paper-orders-clear');
+      }
+      return;
+    }
+    const orders = currentOrders();
+    if (!orders.length) {
+      if (lastOrderSpecSignature !== null) {
+        lastOrderSpecSignature = null;
+        sendPadreMarker('paper-orders-clear');
+      }
+      return;
+    }
+    const refPrice = Number(token.priceNative) || 0;
+    if (!(refPrice > 0)) return;
+
+    // The signature covers everything the bridge draws from. The live price
+    // is deliberately EXCLUDED: levels are absolute, so a moving price does
+    // not move a line, and including it would repost on every tick.
+    const signature = JSON.stringify(orders.map((o) => [o.id, o.kind, o.triggerPrice, o.sizePct]))
+      + '|' + chartAxisBasis;
+    if (!force && signature === lastOrderSpecSignature) return;
+    lastOrderSpecSignature = signature;
+
+    sendPadreMarker('paper-orders', {
+      enabled: true,
+      axisBasis: chartAxisBasis,
+      refPrice,
+      currentPriceNative: token.priceNative,
+      currentPriceUsd: token.priceUsd,
+      orders: orders.map((o) => ({
+        id: o.id,
+        kind: o.kind,
+        triggerPrice: o.triggerPrice,
+        sizePct: o.sizePct,
+        label: orderLineLabel(o),
+      })),
+    });
+  }
+
+  /**
+   * What the line says on the chart. Market cap first — it is how traders
+   * quote a level ("out at 240K"), and matches the journal's own convention.
+   */
+  function orderLineLabel(order) {
+    const kind = order.kind === 'tp' ? 'TP' : 'SL';
+    const mcap = mcapAtPrice(order.triggerPrice);
+    const level = mcap ? fmtMoney(mcap) : E.fmt(order.triggerPrice, 8) + ' SOL';
+    // The % is measured from the AVERAGE ENTRY — the same number the average
+    // fill line draws from, so the chart cannot show two different entries.
+    // With no average yet, the label claims no percentage at all.
+    const averages = token && token.mint ? E.averageFillPrices(state, token.mint) : null;
+    const entry = averages && Number(averages.avgBuyNative) > 0 ? Number(averages.avgBuyNative) : null;
+    const pct = entry ? ((order.triggerPrice - entry) / entry) * 100 : null;
+    return pct === null
+      ? `${kind} ${level}`
+      : `${kind} ${level} (${pct >= 0 ? '+' : ''}${pct.toFixed(0)}%)`;
+  }
+
+  /**
+   * Fire every order this observed price has tripped.
+   *
+   * Called from the tick path. Sequential and guarded: two stops tripped by
+   * one crash must not race each other through the wallet, and a re-entrant
+   * tick must not double-fill the same level.
+   */
+  async function evaluateChartOrders() {
+    if (orderFireInFlight || !chartOrdersOn() || !token || !token.mint) return;
+    const observed = Number(token.priceNative);
+    if (!(observed > 0)) return;
+    const due = E.triggeredOrders(state, token.mint, observed);
+    if (!due.length) return;
+
+    orderFireInFlight = true;
+    try {
+      for (const order of due) {
+        // Re-check against the live wallet: an earlier order in this same
+        // batch may have closed the position out from under this one.
+        if (!state.positions[token.mint]) break;
+        if (!E.ordersFor(state, token.mint).some((o) => o.id === order.id)) continue;
+        await fireChartOrder(order, observed);
+      }
+    } finally {
+      orderFireInFlight = false;
+    }
+  }
+
+  async function fireChartOrder(order, observedPrice) {
+    const mint = token.mint;
+    const priceUsd = Number(token.priceUsd) > 0 ? Number(token.priceUsd) : null;
+    const mcap = mcapAtPrice(observedPrice);
+    try {
+      const result = await withState(async () => {
+        if (!state.positions[mint]) return null;
+        const { trade, position, round } = E.sell(state, settings, {
+          ts: Date.now(), mint, site: site && site.id,
+          qtyFraction: order.sizePct / 100,
+          priceNative: observedPrice,
+          priceUsd,
+          mcap,
+          order,
+        });
+        // The order is spent whether or not it closed the round.
+        E.removeOrder(state, mint, order.id);
+        drawnFillIds.add(trade.id);
+        await commitFill(trade);
+        await persistStateNow();
+        const markerTs = Date.now();
+        marks.push({ t: markerTs, p: trade.priceNative, side: 'sell' });
+        drawFillOnChart({
+          ts: markerTs, fillId: trade.id, side: 'sell',
+          priceNative: trade.priceNative, priceUsd: trade.priceUsd,
+          mcap: trade.mcap, solAmount: trade.solGross,
+        });
+        syncAveragePriceLines();
+        if (round) profitAlertLevels.delete(mint);
+        return { trade, position, round };
+      });
+      if (!result) return;
+
+      syncChartOrders(true);
+      sendMessage({
+        type: 'pt_trade_event', kind: 'sell', opened: false,
+        session: summarizeSession(result.round || result.position),
+        trade: summarizeTrade(result.trade),
+        round: result.round ? summarizeRound(result.round) : null,
+      }).catch(() => {});
+      runTradeEffect('sell');
+      playTradeSound('sell');
+      announceOrderFill(order, result);
+    } catch (err) {
+      // A refused fill must not leave a level armed that the wallet has
+      // already decided against — but it must also not vanish silently.
+      toast(`${order.kind === 'tp' ? 'Take profit' : 'Stop loss'} could not fill: ${err.message || 'unknown error'}`);
+    }
+    renderAll();
+  }
+
+  /**
+   * Say what was asked for AND what was given. The slip is the whole point:
+   * a stop that gapped 14% past its level taught something, and a toast that
+   * hides it teaches the opposite.
+   */
+  function announceOrderFill(order, result) {
+    const kind = order.kind === 'tp' ? 'Take profit' : 'Stop loss';
+    const slip = Number(result.trade.triggerSlipPct);
+    const askedMcap = order.triggerMcap || mcapAtPrice(order.triggerPrice);
+    const gotMcap = result.trade.mcap || mcapAtPrice(result.trade.priceNative);
+    const asked = askedMcap ? `${fmtMoney(askedMcap)} MC` : `${E.fmt(order.triggerPrice, 8)} SOL`;
+    const got = gotMcap ? `${fmtMoney(gotMcap)} MC` : `${E.fmt(result.trade.priceNative, 8)} SOL`;
+    const gap = Number.isFinite(slip) && Math.abs(slip) >= 0.1
+      ? ` — filled ${got} (${slip >= 0 ? '+' : ''}${slip.toFixed(1)}% vs asked)`
+      : ' — filled at the level';
+    toast(`${kind} ${asked} fired${gap}`);
+    if (result.round) {
+      const r = result.round;
+      toast(`Round closed: ${r.pnlSol >= 0 ? '+' : ''}${E.fmt(r.pnlSol)} SOL (${r.pnlPct.toFixed(1)}%) paper`);
+    }
+  }
+
+  /** Arm a level. Returns the order, or throws with a reason to show. */
+  async function armChartOrder(kind, triggerPrice, sizePct) {
+    if (!token || !token.mint) throw new Error('No token detected on this page');
+    const order = await withState(async () => {
+      const made = E.addOrder(state, token.mint, {
+        kind,
+        triggerPrice,
+        triggerMcap: mcapAtPrice(triggerPrice),
+        sizePct,
+      }, Number(token.priceNative), Date.now());
+      await persistStateNow();
+      return made;
+    });
+    syncChartOrders(true);
+    renderAll();
+    return order;
+  }
+
+  async function cancelChartOrder(id) {
+    if (!token || !token.mint) return;
+    await withState(async () => {
+      E.removeOrder(state, token.mint, id);
+      await persistStateNow();
+    });
+    syncChartOrders(true);
+    renderAll();
+  }
+
+  /** A drag landed: adopt the new level, then re-post so the wallet wins. */
+  async function adoptDraggedOrder(id, triggerPrice) {
+    if (!token || !token.mint) return;
+    await withState(async () => {
+      E.moveOrder(state, token.mint, id, triggerPrice, mcapAtPrice(triggerPrice));
+      await persistStateNow();
+    });
+    // Force a repost: the label carries the level and the % from entry, both
+    // of which the drag just changed.
+    syncChartOrders(true);
+    renderAll();
   }
 
   function syncAveragePriceLines() {
@@ -2741,6 +3007,58 @@
     .pt-grade-b { color: #9CC2FF; border-color: rgba(106, 169, 255, 0.4); }
     .pt-grade-c { color: var(--pt-amber); border-color: rgba(255, 157, 69, 0.4); }
     .pt-grade-d, .pt-grade-f { color: var(--pt-red); border-color: rgba(255, 95, 86, 0.4); }
+
+    /* ---------------- take profit / stop loss ---------------- */
+
+    .pt-order-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 6px; }
+    .pt-okind {
+      padding: 7px 2px; border-radius: var(--pt-r-sm);
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--pt-dim); font-size: 10px; font-weight: 800; letter-spacing: 0.6px;
+      cursor: pointer; transition: background 0.16s, color 0.16s, border-color 0.16s;
+    }
+    .pt-okind:hover { background: rgba(255, 255, 255, 0.07); color: #E6EDF3; }
+    /* The armed side is unmistakable: green for a target, red for a stop. */
+    .pt-okind-on[data-kind="tp"] {
+      border-color: rgba(63, 185, 80, 0.45); background: rgba(63, 185, 80, 0.16); color: #7EE787;
+    }
+    .pt-okind-on[data-kind="sl"] {
+      border-color: rgba(255, 95, 86, 0.45); background: rgba(255, 95, 86, 0.16); color: #FFB3AE;
+    }
+    .pt-order-pcts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 5px; }
+    .pt-opct {
+      padding: 7px 2px; border-radius: var(--pt-r-sm);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      color: #C9D1D9; font-size: 11px; font-weight: 800; cursor: pointer;
+      transition: background 0.16s, transform 0.12s;
+    }
+    .pt-opct:hover { background: rgba(255, 255, 255, 0.09); }
+    .pt-opct:active { transform: translateY(1px); }
+    .pt-order-hint {
+      margin-top: 5px; font-size: 9.5px; line-height: 1.45; color: var(--pt-faint);
+    }
+    .pt-order-row {
+      display: flex; align-items: center; gap: 6px; margin-top: 5px;
+      padding: 5px 7px; border-radius: var(--pt-r-sm);
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .pt-otag { font-size: 9px; font-weight: 900; letter-spacing: 0.7px; padding: 2px 5px; border-radius: 3px; }
+    .pt-otag-tp { background: rgba(63, 185, 80, 0.18); color: #7EE787; }
+    .pt-otag-sl { background: rgba(255, 95, 86, 0.18); color: #FFB3AE; }
+    .pt-olevel { flex: 1; font-size: 11px; font-weight: 700; color: #E6EDF3; }
+    .pt-okill {
+      border: 0; background: transparent; color: var(--pt-faint);
+      font-size: 12px; cursor: pointer; padding: 0 2px; line-height: 1;
+    }
+    .pt-okill:hover { color: #FFB3AE; }
+    /* Focus mode strips the panel to execution only — the ladders go, but an
+       ARMED level is still shown: a hidden stop is a dangerous stop. */
+    .pt-box.pt-focus .pt-orders .pt-order-kind,
+    .pt-box.pt-focus .pt-orders .pt-order-pcts,
+    .pt-box.pt-focus .pt-orders .pt-order-hint { display: none; }
 
     /* ---------------- sell row ---------------- */
 
@@ -4868,10 +5186,14 @@
     if (!pos) {
       if (els.position.childNodes.length) els.position.textContent = '';
       posEls = null;
+      posOrderEls = null;
       return;
     }
 
     if (!posEls) buildPositionCard(pos);
+    // Armed levels change from the chart (a drag, a cancel) and from the
+    // wallet (an order firing), neither of which rebuilds the card.
+    renderOrderList();
 
     const mark = Q.positionMark(pos, token.priceNative, token.priceUsd);
     if (!mark) return;
@@ -5405,6 +5727,9 @@
     // disappearing" — the buttons were being built but never wired because
     // the stale cache short-circuited the rebuild.
     posEls = null;
+    // Same reason as posEls above: the TP/SL nodes are about to be detached,
+    // and a stale cache would leave renderOrderList writing into ghosts.
+    posOrderEls = null;
     els.position.textContent = '';
     const card = document.createElement('div');
     card.className = 'pt-pos';
@@ -5435,6 +5760,134 @@
         doSell(p / 100);
       });
       row.appendChild(b);
+    });
+
+    buildOrdersSection(card);
+  }
+
+  /**
+   * The take-profit / stop-loss section of the position card.
+   *
+   * The chart is the primary surface — a tap here puts a DRAGGABLE line on
+   * it, which is then moved to the exact level by hand, Padre style. The
+   * percentages are the fast path, not the only path: nobody wants to type a
+   * price for a coin quoted in nine decimal places.
+   *
+   * On a chart that cannot carry a draggable line (F-39), the section says
+   * so plainly instead of offering a control that would silently do nothing.
+   */
+  function buildOrdersSection(card) {
+    if (!chartOrdersOn()) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'pt-orders';
+    wrap.innerHTML = `
+      <div class="pt-label" style="margin-top:10px">Take profit / Stop loss</div>
+      <div class="pt-order-kind" data-f="kind">
+        <button class="pt-okind pt-okind-on" data-kind="tp">TAKE PROFIT</button>
+        <button class="pt-okind" data-kind="sl">STOP LOSS</button>
+      </div>
+      <div class="pt-order-pcts" data-f="pcts"></div>
+      <div class="pt-order-hint" data-f="hint"></div>
+      <div class="pt-order-list" data-f="list"></div>
+    `;
+    card.appendChild(wrap);
+
+    let kind = 'tp';
+    const kindRow = wrap.querySelector('[data-f="kind"]');
+    const pctRow = wrap.querySelector('[data-f="pcts"]');
+    const hint = wrap.querySelector('[data-f="hint"]');
+
+    // Take profits are quoted as gains above entry, stops as losses below —
+    // the ladders are NOT mirror images of each other, because nobody arms a
+    // -200% stop and nobody arms a +10% take profit on a memecoin.
+    const TP_STEPS = [25, 50, 100, 200];
+    const SL_STEPS = [10, 20, 35, 50];
+
+    const paintPcts = () => {
+      pctRow.textContent = '';
+      const steps = kind === 'tp' ? TP_STEPS : SL_STEPS;
+      steps.forEach((pct) => {
+        const b = document.createElement('button');
+        b.className = 'pt-opct';
+        b.textContent = (kind === 'tp' ? '+' : '−') + pct + '%';
+        b.addEventListener('click', () => armFromPercent(kind, pct));
+        pctRow.appendChild(b);
+      });
+    };
+
+    kindRow.querySelectorAll('.pt-okind').forEach((b) => {
+      b.addEventListener('click', () => {
+        kind = b.dataset.kind;
+        kindRow.querySelectorAll('.pt-okind').forEach((x) =>
+          x.classList.toggle('pt-okind-on', x === b));
+        paintPcts();
+      });
+    });
+
+    paintPcts();
+    hint.textContent = chartOrdersDraggable
+      ? 'Tap a level, then drag the line on the chart to place it exactly.'
+      : 'This chart cannot carry a draggable line — levels are set here.';
+
+    posOrderEls = { list: wrap.querySelector('[data-f="list"]'), hint };
+    renderOrderList();
+  }
+
+  /**
+   * Arm a level a percentage away from the AVERAGE ENTRY.
+   *
+   * From entry, not from the live price: "+50%" means "up 50% on this trade",
+   * which is the question a trader is actually asking. Measuring from the
+   * live price would make the same button mean something different every
+   * tick, and a +50% take profit could land BELOW the entry on a position
+   * already deep in profit.
+   */
+  async function armFromPercent(kind, pct) {
+    if (!token || !token.mint) return toast('No token detected on this page');
+    const averages = E.averageFillPrices(state, token.mint);
+    const entry = averages && Number(averages.avgBuyNative) > 0 ? Number(averages.avgBuyNative) : null;
+    if (!entry) return toast('No average entry yet — set the level by dragging on the chart');
+    const trigger = kind === 'tp' ? entry * (1 + pct / 100) : entry * (1 - pct / 100);
+    try {
+      await armChartOrder(kind, trigger, 100);
+      const mcap = mcapAtPrice(trigger);
+      toast(`${kind === 'tp' ? 'Take profit' : 'Stop loss'} armed at ${mcap ? fmtMoney(mcap) + ' MC' : E.fmt(trigger, 8) + ' SOL'}`
+        + (chartOrdersDraggable ? ' — drag it on the chart to adjust' : ''));
+    } catch (err) {
+      toast(err.message || 'That level could not be armed');
+    }
+  }
+
+  /** The armed set, listed under the buttons with a cancel on each. */
+  function renderOrderList() {
+    if (!posOrderEls || !posOrderEls.list) return;
+    const orders = currentOrders();
+    posOrderEls.list.textContent = '';
+    if (!orders.length) return;
+
+    orders.forEach((o) => {
+      const row = document.createElement('div');
+      row.className = 'pt-order-row';
+
+      const tag = document.createElement('span');
+      tag.className = 'pt-otag ' + (o.kind === 'tp' ? 'pt-otag-tp' : 'pt-otag-sl');
+      tag.textContent = o.kind === 'tp' ? 'TP' : 'SL';
+
+      const level = document.createElement('span');
+      level.className = 'pt-olevel';
+      const mcap = mcapAtPrice(o.triggerPrice);
+      level.textContent = (mcap ? fmtMoney(mcap) + ' MC' : E.fmt(o.triggerPrice, 8) + ' SOL')
+        + (o.sizePct >= 100 ? '' : ` · ${o.sizePct}%`);
+
+      const kill = document.createElement('button');
+      kill.className = 'pt-okill';
+      kill.textContent = '✕';
+      kill.title = 'Cancel this order';
+      kill.addEventListener('click', () => cancelChartOrder(o.id));
+
+      row.append(tag, level, kill);
+      posOrderEls.list.appendChild(row);
     });
   }
 

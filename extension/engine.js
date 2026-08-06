@@ -18,6 +18,20 @@
   };
   const EPS = 1e-9;
 
+  // Bumped when a default changes in a way existing users should receive.
+  // Stored settings normally win over defaults, so without this a user who
+  // installed before the change would keep the old value forever.
+  //
+  // Declared HERE, above DEFAULT_SETTINGS, so the defaults can carry it
+  // directly. That coupling is the fix for D-56: the constant used to live
+  // below the defaults, which pinned `settingsRevision` to a literal (4)
+  // that nobody remembered to bump alongside it. A FRESH install was
+  // therefore born three revisions stale, and migrations written to repair
+  // data from OLD builds ran against settings the user had just typed —
+  // silently reverting them one read after "Saved." appeared. A brand-new
+  // install has no legacy data, so no migration may ever apply to it.
+  const SETTINGS_REVISION = 7;
+
   const DEFAULT_SETTINGS = {
     balanceStartSol: 10,
     presetsBuy: [0.1, 0.5, 1, 2],
@@ -77,8 +91,19 @@
     tradeSoundsEnabled: true,
     profitAlertsEnabled: false,
     profitAlertPct: 10,
+    // Market-cap alerts. On by default: an armed alert is an explicit,
+    // per-token act, so there is nothing to opt into until the trader arms
+    // one, and a switch that silences a level they deliberately set is the
+    // surprising default, not the safe one.
+    mcAlertsEnabled: true,
+    // Post a real desktop notification through the host page, the same way
+    // the terminals' own alerts do. Off falls back to the in-page toast and
+    // bell, which is also what happens when the page has no notification
+    // permission to lend.
+    mcAlertDesktopEnabled: true,
     averagePriceLinesEnabled: true,
-    settingsRevision: 4,
+    // A fresh install is CURRENT by construction — see SETTINGS_REVISION.
+    settingsRevision: SETTINGS_REVISION,
     // Padre-style top rail listing every open paper position.
     positionsBarEnabled: true,
     // Saved left/top offsets for the draggable positions bar. null means the
@@ -129,16 +154,65 @@
     // the Guardrails card.
     guardRugEnabled: true,
     guardRugTopPct: 40,          // top-10 holders (excl. pool) % threshold
+    // Chart orders — drag a take profit or stop loss onto the chart, Padre
+    // style. On by default: it is the exit half of paper trading, and it
+    // costs nothing until a level is actually armed.
+    chartOrdersEnabled: true,
+    // Whether armed orders keep watching after the trading tab is closed.
+    //
+    // OFF by default, deliberately (maintainer call, 2026-08-06: "our default
+    // setting is just non-aggressive, not too much, but people have the
+    // ability"). With this off — the only behaviour that exists today — a
+    // level is evaluated against prices a page in front of you is already
+    // receiving: no background network, nothing running behind your back.
+    //
+    // NOT YET WIRED, and therefore NOT YET OFFERED in Settings: turning this
+    // on needs the `alarms` permission (a Chrome Web Store listing change),
+    // engine access inside the service worker, and seq-safe wallet writes
+    // from a context that races open content tabs. The key lives here so the
+    // poller has one home to read when it lands; until then no UI exposes it,
+    // because a switch that does not do what it says is worse than no switch.
+    ordersBackgroundArmEnabled: false,
+    // Intended poll cadence in seconds for that future poller, bounded there
+    // too — a user-set 1 s would be a self-inflicted rate limit, not a feature.
+    ordersBackgroundPollSec: 30,
+    // Forge — a Generate button inside the dex's own paid upload box, so a
+    // header or icon can be made without leaving the checkout. OFF by
+    // default and useless until the user brings their own key: it is the one
+    // feature here that spends the user's money at someone else's API, so it
+    // may never be something they discover by finding a charge.
+    //
+    // NOTHING is stored here that we would not want a hostile page to see —
+    // except the keys, which is exactly why every provider call happens in
+    // the service worker and never in a content script.
+    forgeEnabled: false,
+    // Lane 1, the "brain": reads the narrative and writes the art direction.
+    // Optional — with no brain the user just describes the art themselves.
+    forgeBrainProvider: 'xai',
+    forgeBrainEndpoint: '',
+    forgeBrainModel: '',
+    forgeBrainKey: '',
+    // Grok's Live Search over X is the whole reason to wire a brain at all;
+    // it is still a toggle because it costs more per call and some keys are
+    // not entitled to it.
+    forgeSearchX: true,
+    // Lane 2, the "hands": renders pixels. Required.
+    forgeImageProvider: 'openai',
+    forgeImageEndpoint: '',
+    forgeImageModel: '',
+    forgeImageKey: '',
+    // The escape hatch for providers we ship no adapter for. Empty unless the
+    // user picks the custom provider and writes a request template.
+    forgeImageHeaders: '',
+    forgeImageBody: '',
+    forgeImagePath: '',
+    forgeStyle: 'trench',
+    forgeVariants: 2,
   };
 
   function defaultSettings() {
     return JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
   }
-
-  // Bumped when a default changes in a way existing users should receive.
-  // Stored settings normally win over defaults, so without this a user who
-  // installed before the change would keep the old value forever.
-  const SETTINGS_REVISION = 7;
 
   /**
    * Merge stored settings over defaults, applying one-time migrations.
@@ -217,6 +291,14 @@
       cashSol: settings.balanceStartSol,
       startedAt: Date.now(),
       positions: {},   // mint -> position
+      // mint -> armed take-profit / stop-loss orders. Kept beside positions
+      // rather than inside them so the background poller can enumerate the
+      // whole work list without walking every position.
+      orders: {},
+      // mint -> armed market-cap alerts. Watch-only, so unlike `orders` these
+      // routinely name mints with no position at all — this map IS the
+      // watchlist.
+      alerts: {},
       rounds: [],      // closed round trips, newest first
       journal: [],     // every fill, newest first
       stats: { totalBuys: 0, totalSells: 0, realizedPnlSol: 0, feesPaidSol: 0 },
@@ -424,6 +506,18 @@
       mcap: o.mcap || null,
       chain: pos.chain || 'solana',
     };
+    // An exit fired by an armed order records what was ASKED for beside what
+    // the market GAVE. Without both numbers the journal quietly implies the
+    // stop filled where it was placed — see the chart-orders note above.
+    if (o.order && o.order.kind) {
+      trade.orderKind = o.order.kind;
+      trade.triggerPrice = Number(o.order.triggerPrice) || null;
+      trade.triggerMcap = Number(o.order.triggerMcap) || null;
+      // Measured against the RAW observed price, not the post-slippage fill:
+      // configured slippage is already its own line item (feeSol/txCostSol),
+      // and counting it here would charge the user for it twice.
+      trade.triggerSlipPct = orderSlipPct(o.order, Number(o.priceNative));
+    }
     state.journal.unshift(trade);
     pruneJournal(state);
 
@@ -431,6 +525,10 @@
     if (pos.qty <= Math.max(pos.investedSol, 1) * 1e-9 || pos.qty <= EPS) {
       round = closeRound(state, pos, o.ts);
       delete state.positions[o.mint];
+      // The bag is gone, so every level still armed against it is now an
+      // order with nothing behind it. Leaving them would fire phantom sells
+      // on the next tick — and would resurrect on the chart after a re-entry.
+      clearOrders(state, o.mint);
       // The After: px is the effective exit price the trader actually got —
       // the honest reference for everything that happens next.
       if (!settings || settings.postExitWatchEnabled !== false) {
@@ -863,6 +961,385 @@
       // Written BEFORE the outcome is known — that is what makes it evidence.
       at: Number(ts) || Date.now(),
     };
+  }
+
+  /* ---------------- chart orders: take profit & stop loss ----------------
+   *
+   * Padre's exit ergonomics, on paper: arm a level by dragging a line on the
+   * chart (or typing it), and the position exits itself when the market gets
+   * there. The order model lives here so the RULES are pure and testable —
+   * the chart drag, the panel and the background poller are all just ways to
+   * produce and consume these objects.
+   *
+   * THE FILL PRICE IS THE HONEST ONE (maintainer call, 2026-08-06).
+   *
+   * A stop does NOT fill at its level. It fills at the next price this
+   * machine actually OBSERVED after the level was crossed, and the journal
+   * records both, so the gap is visible instead of hidden:
+   *
+   *     stop 180K -> filled 154K (-14.4% worse than asked)
+   *
+   * On an illiquid memecoin that difference is the whole lesson. A paper
+   * stop that always fills exactly where you put it teaches an exit quality
+   * that does not exist, and this project treats flattering numbers as a
+   * safety defect, not a UX nicety. The trigger price is what you ASKED for;
+   * the fill price is what the market GAVE you. Both are recorded.
+   *
+   * Spot positions are long-only, so the rule is simply:
+   *   take profit  fires when the observed price is at or ABOVE its level
+   *   stop loss    fires when the observed price is at or BELOW its level
+   */
+
+  const ORDER_KINDS = ['tp', 'sl'];
+  const MAX_ORDERS_PER_MINT = 8;
+
+  function orderId(ts) {
+    return `o${Number(ts) || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /**
+   * Validate and clamp a raw order. Returns null for anything unusable —
+   * an order that cannot be honestly evaluated must never be armed.
+   *
+   * `referencePrice` is the live price at arm time. A take profit BELOW it
+   * (or a stop ABOVE it) would fire on the very next tick, which is not an
+   * order, it is a market sell wearing an order's costume — those are
+   * refused so the user is told, rather than surprised.
+   */
+  function normalizeOrder(raw, referencePrice, ts) {
+    if (!raw || typeof raw !== 'object') return null;
+    const kind = ORDER_KINDS.includes(raw.kind) ? raw.kind : null;
+    if (!kind) return null;
+
+    const triggerPrice = Number(raw.triggerPrice);
+    if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) return null;
+
+    const ref = Number(referencePrice);
+    if (Number.isFinite(ref) && ref > 0) {
+      if (kind === 'tp' && triggerPrice <= ref) return null;
+      if (kind === 'sl' && triggerPrice >= ref) return null;
+    }
+
+    // Size is a percentage of whatever the position holds WHEN IT FIRES, not
+    // a token count frozen at arm time: the user may sell part of the bag by
+    // hand first, and "take profit on half" must still mean half.
+    const sizePct = clamp(Math.round(Number(raw.sizePct)) || 100, 1, 100);
+
+    return {
+      id: raw.id || orderId(ts),
+      kind,
+      triggerPrice,
+      // Display-only: the market cap the level represents, captured at arm
+      // time. Never used for evaluation — mcap depends on a supply figure
+      // that can change, price is the thing actually compared.
+      triggerMcap: Number(raw.triggerMcap) > 0 ? Number(raw.triggerMcap) : null,
+      sizePct,
+      // The price the order was armed against, kept so the UI can show the
+      // move it is waiting for without guessing at the entry.
+      armedAtPrice: Number.isFinite(ref) && ref > 0 ? ref : null,
+      createdAt: Number(ts) || Date.now(),
+    };
+  }
+
+  /** Every armed order for a mint, oldest first. Never returns null. */
+  function ordersFor(state, mint) {
+    const all = (state && state.orders) || {};
+    return Array.isArray(all[mint]) ? all[mint] : [];
+  }
+
+  /**
+   * Arm an order against the open position for a mint.
+   *
+   * Refuses when there is no position to exit: an order with nothing behind
+   * it would fire into empty air and log a phantom sell.
+   */
+  function addOrder(state, mint, raw, referencePrice, ts) {
+    const pos = state && state.positions && state.positions[mint];
+    if (!pos || pos.qty <= EPS) throw new Error('No open paper position to attach an order to');
+    const order = normalizeOrder(raw, referencePrice, ts);
+    if (!order) throw new Error('That level cannot be armed — a take profit must sit above the price and a stop below it');
+    if (!state.orders || typeof state.orders !== 'object') state.orders = {};
+    const list = ordersFor(state, mint);
+    if (list.length >= MAX_ORDERS_PER_MINT) {
+      throw new Error(`At most ${MAX_ORDERS_PER_MINT} orders per token`);
+    }
+    order.mint = mint;
+    state.orders[mint] = [...list, order];
+    return order;
+  }
+
+  /** Move an armed order to a new level (the chart drag lands here). */
+  function moveOrder(state, mint, id, triggerPrice, triggerMcap) {
+    const list = ordersFor(state, mint);
+    const order = list.find((o) => o.id === id);
+    if (!order) return null;
+    const next = Number(triggerPrice);
+    if (!Number.isFinite(next) || next <= 0) return null;
+    order.triggerPrice = next;
+    order.triggerMcap = Number(triggerMcap) > 0 ? Number(triggerMcap) : null;
+    return order;
+  }
+
+  function removeOrder(state, mint, id) {
+    const list = ordersFor(state, mint);
+    const next = list.filter((o) => o.id !== id);
+    if (!state.orders) state.orders = {};
+    if (next.length) state.orders[mint] = next;
+    else delete state.orders[mint];
+    return next.length !== list.length;
+  }
+
+  /** Drop every order for a mint — used when the position is fully closed. */
+  function clearOrders(state, mint) {
+    if (!state || !state.orders) return false;
+    if (!state.orders[mint]) return false;
+    delete state.orders[mint];
+    return true;
+  }
+
+  /**
+   * Which armed orders does this observed price fire?
+   *
+   * Evaluated per tick. Because the FIRST tick on which the condition holds
+   * is by definition the next price observed after the level was crossed,
+   * filling at that tick is exactly the honest-fill rule — a gap straight
+   * through a stop is reported at the price the gap actually landed on.
+   *
+   * Highest-priority first: if a crash trips two stops at once, the LOWER
+   * one is the more urgent truth, and if a spike trips two take profits the
+   * HIGHER one is. Callers fill in the returned order.
+   */
+  function triggeredOrders(state, mint, observedPrice) {
+    const price = Number(observedPrice);
+    if (!Number.isFinite(price) || price <= 0) return [];
+    return ordersFor(state, mint)
+      .filter((o) => (o.kind === 'tp' ? price >= o.triggerPrice : price <= o.triggerPrice))
+      .sort((a, b) => (a.kind === 'sl' ? a.triggerPrice - b.triggerPrice : b.triggerPrice - a.triggerPrice));
+  }
+
+  /**
+   * How much worse (or better) the fill was than the level asked for.
+   *
+   * Signed from the TRADER's point of view, not the number line: negative
+   * always means "worse than you asked for", for both order kinds. A stop
+   * that gapped down and a take profit that filled below its target are the
+   * same kind of disappointment and must read the same way.
+   */
+  function orderSlipPct(order, filledPrice) {
+    const filled = Number(filledPrice);
+    const trigger = Number(order && order.triggerPrice);
+    if (!(filled > 0) || !(trigger > 0)) return null;
+    return ((filled - trigger) / trigger) * 100;
+  }
+
+  /**
+   * Every mint holding an armed order — the work list for the background
+   * poller, and for deciding whether a page needs a live feed at all.
+   */
+  function mintsWithOrders(state) {
+    const all = (state && state.orders) || {};
+    return Object.keys(all).filter((mint) => ordersFor(state, mint).length > 0);
+  }
+
+  /* -------------------- market-cap alerts -------------------- */
+
+  /**
+   * "Tell me when it hits 500K."
+   *
+   * An alert is NOT an order. It never touches the wallet, so it carries
+   * none of an order's obligations — and that frees it from the two rules
+   * that shape the order model above:
+   *
+   *   1. AN ALERT NEEDS NO POSITION. The token you most want a ping on is
+   *      the one you have not bought yet. addOrder refuses a mint with no
+   *      open position because an order with nothing behind it would log a
+   *      phantom sell; an alert has nothing to sell, so it simply watches.
+   *      This is the watchlist PaperTrench did not previously have.
+   *
+   *   2. AN ALERT IS EVALUATED ON MARKET CAP, NOT PRICE. Orders are
+   *      deliberately price-anchored (see normalizeOrder's triggerMcap note)
+   *      because a FILL must be reproducible and a supply figure can move
+   *      under it. An alert makes no claim about a fill. The trader asked a
+   *      question in market cap — "ping me at 500K" — and answering it in
+   *      anything else would be answering a question nobody asked. So the
+   *      cap is the compared quantity, and the arm-time price is kept only
+   *      as a fallback basis for sources that quote a price with no cap.
+   *
+   * One-shot by design: an alert that re-fired every tick above its level
+   * would train the trader to ignore it, which is worse than no alert.
+   */
+
+  const ALERT_KINDS = ['above', 'below'];
+  const MAX_ALERTS_PER_MINT = 6;
+
+  function alertId(ts) {
+    return `a${Number(ts) || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /**
+   * A market cap the way a trader says it out loud: 500K, 2.4M, 1.1B.
+   *
+   * Deliberately NOT fmtUsd, which signs its output (`+$500,000`) because it
+   * exists to render P&L. A market cap has no sign, and "+$500,000 MC" reads
+   * as a gain that never happened.
+   */
+  function fmtCap(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v) || v <= 0) return '—';
+    if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+    return '$' + v.toFixed(0);
+  }
+
+  /**
+   * Validate a raw alert. Returns null for anything unusable.
+   *
+   * `reference` is what the market showed at arm time, `{ mcap, priceNative }`.
+   * An "above" alert armed at or BELOW the current cap would fire on the very
+   * next poll — that is not an alert, it is a notification with extra steps.
+   * Refused, so the user is told rather than surprised, mirroring how a take
+   * profit below the price is refused.
+   */
+  function normalizeAlert(raw, reference, ts) {
+    if (!raw || typeof raw !== 'object') return null;
+    const kind = ALERT_KINDS.includes(raw.kind) ? raw.kind : null;
+    if (!kind) return null;
+
+    const mcap = Number(raw.mcap);
+    if (!Number.isFinite(mcap) || mcap <= 0) return null;
+
+    const refMcap = Number(reference && reference.mcap);
+    if (Number.isFinite(refMcap) && refMcap > 0) {
+      if (kind === 'above' && mcap <= refMcap) return null;
+      if (kind === 'below' && mcap >= refMcap) return null;
+    }
+
+    // The price that corresponded to the armed cap at arm time. Used ONLY
+    // when a later quote carries a price but no cap, so a source outage
+    // downgrades the alert instead of silencing it.
+    const refPrice = Number(reference && reference.priceNative);
+    const basisPrice = Number.isFinite(refPrice) && refPrice > 0
+      && Number.isFinite(refMcap) && refMcap > 0
+      ? refPrice * (mcap / refMcap)
+      : null;
+
+    return {
+      id: raw.id || alertId(ts),
+      kind,
+      mcap,
+      basisPrice,
+      // What the market read when the alert was armed, so the ping can say
+      // "500K (armed at 210K)" without guessing after the fact.
+      armedAtMcap: Number.isFinite(refMcap) && refMcap > 0 ? refMcap : null,
+      symbol: typeof raw.symbol === 'string' ? raw.symbol.slice(0, 24) : null,
+      chain: typeof raw.chain === 'string' ? raw.chain : 'solana',
+      createdAt: Number(ts) || Date.now(),
+      firedAt: null,
+    };
+  }
+
+  /** Every alert for a mint, oldest first. Never returns null. */
+  function alertsFor(state, mint) {
+    const all = (state && state.alerts) || {};
+    return Array.isArray(all[mint]) ? all[mint] : [];
+  }
+
+  /** Alerts still waiting on the market — the set worth spending a poll on. */
+  function armedAlertsFor(state, mint) {
+    return alertsFor(state, mint).filter((a) => !a.firedAt);
+  }
+
+  /**
+   * Arm an alert on a mint. No position required — that is the whole point.
+   */
+  function addAlert(state, mint, raw, reference, ts) {
+    if (!mint) throw new Error('No token to watch');
+    const alert = normalizeAlert(raw, reference, ts);
+    if (!alert) {
+      const ref = Number(reference && reference.mcap);
+      throw new Error(ref > 0
+        ? `That level is already behind the market — it reads ${fmtCap(ref)} now`
+        : 'That alert level cannot be read as a market cap');
+    }
+    if (!state.alerts || typeof state.alerts !== 'object') state.alerts = {};
+    if (armedAlertsFor(state, mint).length >= MAX_ALERTS_PER_MINT) {
+      throw new Error(`At most ${MAX_ALERTS_PER_MINT} alerts per token`);
+    }
+    alert.mint = mint;
+    state.alerts[mint] = [...alertsFor(state, mint), alert];
+    return alert;
+  }
+
+  /** Disarm one alert. Returns true when something was actually removed. */
+  function removeAlert(state, mint, id) {
+    const list = alertsFor(state, mint);
+    const next = list.filter((a) => a.id !== id);
+    if (next.length === list.length) return false;
+    if (next.length) state.alerts[mint] = next;
+    else delete state.alerts[mint];
+    return true;
+  }
+
+  /** Disarm every alert on a mint. */
+  function clearAlerts(state, mint) {
+    if (!state.alerts || !state.alerts[mint]) return false;
+    delete state.alerts[mint];
+    return true;
+  }
+
+  /**
+   * Every mint with an alert still waiting — the work list for the poller.
+   *
+   * Fired alerts are excluded: they cost a network slot and can never fire
+   * again, and the batch request is shared with the positions bar.
+   */
+  function alertMints(state) {
+    const all = (state && state.alerts) || {};
+    return Object.keys(all).filter((mint) => armedAlertsFor(state, mint).length > 0);
+  }
+
+  /**
+   * Which armed alerts does this observation trip?
+   *
+   * `observed` is a quote, `{ mcap, priceNative }`. The cap is compared when
+   * the source supplied one; only when it did not does the arm-time basis
+   * price stand in. An observation carrying neither trips nothing — a missing
+   * number must never be read as a crossed level.
+   */
+  function triggeredAlerts(state, mint, observed) {
+    const mcap = Number(observed && observed.mcap);
+    const price = Number(observed && observed.priceNative);
+    const haveMcap = Number.isFinite(mcap) && mcap > 0;
+    const havePrice = Number.isFinite(price) && price > 0;
+    if (!haveMcap && !havePrice) return [];
+
+    return armedAlertsFor(state, mint).filter((a) => {
+      const level = haveMcap ? a.mcap : a.basisPrice;
+      const value = haveMcap ? mcap : price;
+      if (!(level > 0)) return false;
+      return a.kind === 'above' ? value >= level : value <= level;
+    });
+  }
+
+  /**
+   * Claim an alert as fired. Returns true only for the caller that won it.
+   *
+   * Every dex tab runs the same watcher, so without a claim a trader with
+   * three terminals open gets three pings for one level. The winner is
+   * whoever writes firedAt first; everyone else observes it already set and
+   * stays quiet. Idempotent, so a replayed message cannot re-ping either.
+   */
+  function markAlertFired(state, mint, id, ts, observed) {
+    const alert = alertsFor(state, mint).find((a) => a.id === id);
+    if (!alert || alert.firedAt) return false;
+    alert.firedAt = Number(ts) || Date.now();
+    // The reading that actually tripped it, recorded beside the level asked
+    // for. The same both-numbers rule the journal uses for a gapped stop:
+    // a cap that jumped straight through 500K to 720K must say so.
+    const mcap = Number(observed && observed.mcap);
+    alert.firedAtMcap = Number.isFinite(mcap) && mcap > 0 ? mcap : null;
+    return true;
   }
 
   /** Attach a thesis to the open position for a mint. */
@@ -1388,6 +1865,30 @@
     positionPnlPct,
     beginPostWatch,
     notePostExitPrice,
+    // Chart orders (take profit / stop loss)
+    ORDER_KINDS,
+    MAX_ORDERS_PER_MINT,
+    normalizeOrder,
+    ordersFor,
+    addOrder,
+    moveOrder,
+    removeOrder,
+    clearOrders,
+    triggeredOrders,
+    orderSlipPct,
+    mintsWithOrders,
+    // Market-cap alerts (watchlist; no position required)
+    ALERT_KINDS,
+    MAX_ALERTS_PER_MINT,
+    normalizeAlert,
+    alertsFor,
+    armedAlertsFor,
+    addAlert,
+    removeAlert,
+    clearAlerts,
+    alertMints,
+    triggeredAlerts,
+    markAlertFired,
     finalizePostWatches,
     postWatchMints,
     guardCheck,
