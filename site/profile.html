@@ -536,7 +536,7 @@
               ${record && !record.stats.rankable ? '<span class="ar-provisional">Unranked · 5 rounds minimum</span>' : ''}
               ${tier ? `<div class="ar-badge t-${esc(tier)}" title="Highest badge tier in this trader's case. The card's edge follows it."><div class="mark" aria-hidden="true">★</div><div><div class="nm">${esc(tier[0].toUpperCase() + tier.slice(1))} case</div><div class="ev">${esc(String((record.badges || []).length))} badge${(record.badges || []).length === 1 ? '' : 's'} earned</div></div></div>` : ''}
             </div>
-            ${clanLine(profile.clan)}
+            ${clanLine(profile.clan, record)}
           </div>
         </div>
         ${spec}
