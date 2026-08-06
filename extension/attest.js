@@ -94,6 +94,10 @@
       // uncommitted but replayed — so the chain-derived P&L keeps agreeing
       // with an honest wallet when cost emulation is on.
       txCostSol: Number(fill.txCostSol) || 0,
+      // Multichain: which chain the fill's token lives on. Uncommitted-but-
+      // stored (the solNet pattern — the frozen preimage is untouched) so a
+      // verifier prices the fill against the RIGHT chain's history.
+      chain: typeof fill.chain === 'string' && fill.chain ? fill.chain : 'solana',
       amount: Number(fill.side === 'buy'
         ? (fill.solGross !== undefined ? fill.solGross : fill.solNet)
         : (fill.solNet !== undefined ? fill.solNet : fill.solGross)

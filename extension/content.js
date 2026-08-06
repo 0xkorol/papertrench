@@ -24,7 +24,7 @@
     return (reply && typeof reply === 'object' && !reply.error) ? reply : null;
   }
   const R = {
-    resolve: (address, opts) => sendMessage({ type: 'pt_resolve', address, maxAgeMs: opts && opts.maxAgeMs }).then(okOrNull),
+    resolve: (address, opts) => sendMessage({ type: 'pt_resolve', address, maxAgeMs: opts && opts.maxAgeMs, chain: opts && opts.chain }).then(okOrNull),
     refresh: (token) => sendMessage({ type: 'pt_refresh', token }).then(okOrNull),
     solUsd: () => sendMessage({ type: 'pt_sol_usd' }).then((r) => (typeof r === 'number' && r > 0 ? r : 0)).catch(() => 0),
     onchainWatch: (mint, pool) => sendMessage({ type: 'pt_onchain_watch', mint, pool }).then(okOrNull),
@@ -32,7 +32,7 @@
     rugCheck: (mint) => sendMessage({ type: 'pt_rug_check', mint }).then(okOrNull),
     onchainUnwatch: (mint) => sendMessage({ type: 'pt_onchain_unwatch', mint }).catch(() => null),
     onchainQuote: (mint) => sendMessage({ type: 'pt_onchain_quote', mint }).then(okOrNull),
-    batchPrices: (mints) => sendMessage({ type: 'pt_batch_prices', mints }).then((r) => (r && typeof r === 'object' && !r.error) ? r : {}),
+    batchPrices: (mints, chains) => sendMessage({ type: 'pt_batch_prices', mints, chains }).then((r) => (r && typeof r === 'object' && !r.error) ? r : {}),
     clearCache: () => { if (resolver && typeof resolver.clearCache === 'function') resolver.clearCache(); },
   };
   const HOST_ID = 'papertrench-host';
@@ -730,17 +730,16 @@
         mint: candidate.kind === 'mint' ? candidate.address : null,
       });
       // Warm the SOL/USD rate so a USD on-screen price can be filled the moment
-      // it appears. resolveViaJupiter will also populate this cache shortly.
+      // it appears — and, multichain, so a foreign token's SOL price can be
+      // derived. resolveViaJupiter also populates this cache shortly.
       R.solUsd().then((rate) => { if (rate > 0) pendingSolUsd = rate; }).catch(() => {});
-      // The sniping path: a pump.fun coin exists on chain minutes before any
-      // aggregator indexes it. Ask the feed to find and watch its bonding
-      // curve NOW — from the pair address (Axiom) or the mint (Padre) — and
-      // the reply carries the coin's first real price.
-      prewatchPending(candidate);
+      // The sniping path is SOLANA-ONLY machinery (bonding curves, on-chain
+      // pool watching): a foreign-chain token skips it instead of failing it.
+      if (!candidate.chain || candidate.chain === 'solana') prewatchPending(candidate);
     }
 
     try {
-      const data = await R.resolve(candidate.address);
+      const data = await R.resolve(candidate.address, { chain: candidate.chain });
       // The page may have navigated while the resolve was in flight. Adopting
       // the result now would resurrect the old token on the new page — and
       // route fills to it. Bail; the next tick handles the current URL.
@@ -759,8 +758,11 @@
       }
       data.srcAddress = candidate.address;
       data.kind = candidate.kind;
+      if (candidate.chain && !data.chain) data.chain = candidate.chain;
       setToken(data);
-      refreshRugVerdict(data.mint);
+      // Rug verdicts read Solana holder state — a foreign chain has no
+      // verdict, and the guard stays silent rather than pretending.
+      if (!data.chain || data.chain === 'solana') refreshRugVerdict(data.mint);
       // Tell the bridge which address this page is about, so ticks, exports
       // and drawing only come from the chart instance showing THIS token.
       sendPadreMarker('paper-axis', { pairAddress: data.pairAddress, mint: data.mint, symbol: data.symbol });
@@ -771,7 +773,8 @@
       startTitleSignal();
       // Start streaming live pool state. Until this connects, prices come from
       // the aggregator and are labelled as such rather than presented as live.
-      if (data.pairAddress) {
+      // Solana RPC cannot watch a foreign chain's pool — skip, never fake.
+      if (data.pairAddress && (!data.chain || data.chain === 'solana')) {
         R.onchainWatch(data.mint, data.pairAddress).then((reply) => {
           if (token && token.mint === data.mint) {
             onchainLive = Boolean(reply && reply.live);
@@ -1819,6 +1822,7 @@
           ts: Date.now(), mint: token.mint, pairAddress: token.pairAddress,
           symbol: token.symbol, name: token.name, site: site.id,
           priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
+          chain: token.chain || 'solana',
           solAmount,
         });
         // Commit the fill to the evidence chain before persisting the wallet,
@@ -4535,6 +4539,13 @@
       if (E.finalizePostWatches(state) > 0) persistSoon();
       return;
     }
+    // Multichain: the batch parser must know each foreign mint's chain —
+    // the same 0x address can exist on several EVM chains.
+    const chains = {};
+    for (const mint of mints) {
+      const pos = state.positions && state.positions[mint];
+      if (pos && pos.chain && pos.chain !== 'solana') chains[mint] = pos.chain;
+    }
 
     const now = Date.now();
     const interval = document.hidden ? BAR_POLL_HIDDEN_MS : BAR_POLL_MS;
@@ -4543,7 +4554,7 @@
     barPollInFlight = true;
     barPollAt = now;
     try {
-      const prices = await R.batchPrices(mints);
+      const prices = await R.batchPrices(mints, Object.keys(chains).length ? chains : undefined);
       let changed = false;
       for (const mint of Object.keys(prices)) {
         const quote = prices[mint];

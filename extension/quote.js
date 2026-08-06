@@ -17,6 +17,30 @@
 
   var WSOL_MINT = 'So11111111111111111111111111111111111111112';
   var BASE58_RE = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
+  var EVM_RE = /^0x[0-9a-fA-F]{40}$/;
+
+  /* Multichain (docs/MULTICHAIN.md, live-verified 2026-08-05): fomo chain
+   * slug -> Dexscreener chainId. solana/bnb/ethereum/robinhood probed live
+   * against real trending tokens; the last three come from the site's chain
+   * registry and must be re-verified on first real sighting. */
+  var CHAIN_MAP = {
+    solana: 'solana',
+    bnb: 'bsc',
+    ethereum: 'ethereum',
+    robinhood: 'robinhood',
+    base: 'base',
+    monad: 'monad',
+    hyperliquid: 'hyperliquid',
+  };
+
+  /** Case-tolerant address equality: Dexscreener returns checksummed EVM
+   *  addresses while page URLs are usually lowercase. Base58 is case-
+   *  SENSITIVE and must never be lowercased. */
+  function sameAddress(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    if (a === b) return true;
+    return EVM_RE.test(a) && EVM_RE.test(b) && a.toLowerCase() === b.toLowerCase();
+  }
 
   /* ------------------------------------------------------------------ *
    * 1. Identity + anchor quote from a Dexscreener payload
@@ -31,22 +55,27 @@
    * base, or where it is the quote against wrapped SOL. This stops a stablecoin
    * or unrelated token from being returned as the resolved identity.
    */
-  function pickBestPair(pairs, requestedAddress) {
+  function pickBestPair(pairs, requestedAddress, chainId) {
     if (!Array.isArray(pairs)) return null;
-    const usable = pairs.filter(
-      (p) => p && p.chainId === 'solana' && Number(p.priceNative) > 0
-    );
+    // Multichain: filter to the REQUESTED chain (default solana). On EVM
+    // chains Dexscreener's priceNative is denominated in that chain's gas
+    // token, not SOL — priceUsd is the number that is true everywhere, so
+    // usability is judged on it off-Solana.
+    const wantChain = chainId || 'solana';
+    const usable = pairs.filter((p) => p && p.chainId === wantChain
+      && (wantChain === 'solana' ? Number(p.priceNative) > 0 : Number(p.priceUsd) > 0));
     if (!usable.length) return null;
 
-    const requested = typeof requestedAddress === 'string' && BASE58_RE.test(requestedAddress)
+    const requested = typeof requestedAddress === 'string'
+      && (BASE58_RE.test(requestedAddress) || EVM_RE.test(requestedAddress))
       ? requestedAddress
       : null;
     if (requested) {
       const relevant = usable.filter((p) => {
         const base = (p.baseToken && p.baseToken.address) || '';
         const quote = (p.quoteToken && p.quoteToken.address) || '';
-        if (base === requested) return true;
-        if (quote === requested && base === WSOL_MINT) return true;
+        if (sameAddress(base, requested)) return true;
+        if (sameAddress(quote, requested) && base === WSOL_MINT) return true;
         return false;
       });
       if (relevant.length) {
@@ -65,13 +94,25 @@
     });
   }
 
-  /** Normalize one Dexscreener pair into our token record, or null if unusable. */
-  function normalizePair(pair, fallbackAddress) {
+  /**
+   * Normalize one Dexscreener pair into our token record, or null if unusable.
+   *
+   * Multichain (`opts.chain` = fomo slug, `opts.solUsd` = SOL/USD rate): on a
+   * non-Solana chain the pair's priceNative is in that chain's gas token and
+   * is DISCARDED. The record's priceNative — the number the SOL-denominated
+   * book trades in — is derived as priceUsd / solUsd, and the rate used is
+   * RECORDED on the record (solUsdAtResolve). No usable rate → null, never a
+   * guess: a wrong rate silently corrupts every fill downstream.
+   */
+  function normalizePair(pair, fallbackAddress, opts) {
     if (!pair) return null;
+    const chain = (opts && opts.chain) || 'solana';
+    const foreign = chain !== 'solana';
     const rawPrice = Number(pair.priceNative);
-    if (!(rawPrice > 0)) return null;
+    if (!foreign && !(rawPrice > 0)) return null;
 
-    const requested = typeof fallbackAddress === 'string' && BASE58_RE.test(fallbackAddress)
+    const requested = typeof fallbackAddress === 'string'
+      && (BASE58_RE.test(fallbackAddress) || EVM_RE.test(fallbackAddress))
       ? fallbackAddress
       : null;
     const base = pair.baseToken || {};
@@ -79,13 +120,13 @@
 
     let isQuote = false;
     if (requested) {
-      if (requested === pair.pairAddress) {
+      if (sameAddress(requested, pair.pairAddress)) {
         isQuote = false;
-      } else if (base.address === requested) {
+      } else if (sameAddress(base.address, requested)) {
         isQuote = false;
-      } else if (quote.address === requested && base.address === WSOL_MINT) {
+      } else if (sameAddress(quote.address, requested) && base.address === WSOL_MINT) {
         isQuote = true;
-      } else if (quote.address === requested) {
+      } else if (sameAddress(quote.address, requested)) {
         return null;
       } else {
         isQuote = false;
@@ -93,8 +134,18 @@
     }
 
     const token = isQuote ? quote : base;
-    const priceNative = isQuote ? 1 / rawPrice : rawPrice;
     const priceUsd = pair.priceUsd != null ? Number(pair.priceUsd) : null;
+    const usdOk = Number.isFinite(priceUsd) && priceUsd > 0;
+    let priceNative;
+    let solUsdAtResolve = null;
+    if (foreign) {
+      const rate = Number(opts && opts.solUsd);
+      if (!usdOk || !(rate > 0)) return null;
+      priceNative = priceUsd / rate;
+      solUsdAtResolve = rate;
+    } else {
+      priceNative = isQuote ? 1 / rawPrice : rawPrice;
+    }
     const mcap = Number(pair.marketCap != null ? pair.marketCap : pair.fdv);
 
     return {
@@ -103,11 +154,13 @@
       symbol: token.symbol || null,
       name: token.name || token.symbol || null,
       priceNative,
-      priceUsd: Number.isFinite(priceUsd) && priceUsd > 0 ? priceUsd : null,
+      priceUsd: usdOk ? priceUsd : null,
       mcap: Number.isFinite(mcap) && mcap > 0 && !isQuote ? mcap : null,
       dex: pair.dexId || null,
       priceSource: 'resolver',
       resolvedAt: Date.now(),
+      chain: chain,
+      solUsdAtResolve: solUsdAtResolve,
     };
   }
 
@@ -115,11 +168,14 @@
    * Accept either Dexscreener response shape:
    *   /tokens/<mint>          -> { pairs: [...] }
    *   /pairs/solana/<pair>    -> { pair: {...} }  (or { pairs: [...] })
+   * `opts.chain` (fomo slug) selects the chain family; `opts.solUsd` powers
+   * the off-Solana SOL-price derivation (see normalizePair).
    */
-  function tokenFromPayload(payload, fallbackAddress) {
+  function tokenFromPayload(payload, fallbackAddress, opts) {
     if (!payload || typeof payload !== 'object') return null;
-    const pair = payload.pair || pickBestPair(payload.pairs, fallbackAddress);
-    return normalizePair(pair, fallbackAddress);
+    const chainId = CHAIN_MAP[(opts && opts.chain) || 'solana'] || 'solana';
+    const pair = payload.pair || pickBestPair(payload.pairs, fallbackAddress, chainId);
+    return normalizePair(pair, fallbackAddress, opts);
   }
 
   /* ------------------------------------------------------------------ *
@@ -762,15 +818,20 @@
    * grouping by baseToken.address is required; taking array order would quote
    * a token from whichever shallow pool happened to come back first.
    */
-  function pricesFromBatch(payload) {
+  function pricesFromBatch(payload, opts) {
     const out = {};
     if (!payload || typeof payload !== 'object') return out;
     const pairs = Array.isArray(payload.pairs) ? payload.pairs : [];
+    // Multichain: one batch call carries ONE chain family (the resolver
+    // groups by chain); default remains solana with SOL-native usability.
+    const chain = (opts && opts.chain) || 'solana';
+    const chainId = CHAIN_MAP[chain] || 'solana';
+    const foreign = chain !== 'solana';
 
     const byMint = new Map();
     for (const pair of pairs) {
-      if (!pair || pair.chainId !== 'solana') continue;
-      if (!(Number(pair.priceNative) > 0)) continue;
+      if (!pair || pair.chainId !== chainId) continue;
+      if (foreign ? !(Number(pair.priceUsd) > 0) : !(Number(pair.priceNative) > 0)) continue;
       const mint = pair.baseToken && pair.baseToken.address;
       if (!mint) continue;
       const prev = byMint.get(mint);
@@ -780,7 +841,7 @@
     }
 
     for (const [mint, pair] of byMint) {
-      const quote = normalizePair(pair, mint);
+      const quote = normalizePair(pair, mint, opts);
       if (quote) out[mint] = quote;
     }
     return out;
@@ -1016,6 +1077,8 @@
     jupiterEntry,
     preferResolved,
     WSOL_MINT,
+    CHAIN_MAP,
+    sameAddress,
     pricesFromBatch,
     positionRows,
     portfolioSummary,

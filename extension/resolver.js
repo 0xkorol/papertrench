@@ -96,6 +96,25 @@
     var cached = cacheGet(address, opts && opts.maxAgeMs);
     if (cached) return cached;
 
+    var chain = (opts && opts.chain) || 'solana';
+    if (chain !== 'solana') {
+      // Multichain (docs/MULTICHAIN.md): Dexscreener's /tokens/ endpoint is
+      // chain-agnostic and covers every fomo chain (live-verified, incl.
+      // robinhood). Jupiter and the Solana pair lookup are SKIPPED, not
+      // failed — they can only answer for Solana. The SOL/USD rate rides
+      // along so the record's SOL price is derived and recorded honestly.
+      var foreign = await Promise.all([
+        getJson(BASE + '/tokens/' + address),
+        solUsd().catch(function () { return 0; }),
+      ]);
+      var record = Q.tokenFromPayload(foreign[0], address, { chain: chain, solUsd: foreign[1] });
+      if (record) {
+        if (!record.mint) record.mint = address;
+        cachePut(record);
+      }
+      return record;
+    }
+
     var results = await Promise.all([
       getJson(BASE + '/tokens/' + address),
       getJson(BASE + '/pairs/solana/' + address),
@@ -118,6 +137,19 @@
   /** Re-quote an already-resolved token (slow safety net behind the live feed). */
   async function refresh(token) {
     if (!token) return null;
+
+    // Multichain: an off-Solana token re-quotes through the same
+    // chain-filtered /tokens/ path it resolved through — Jupiter and the
+    // Solana pair endpoint can never know it.
+    if (token.chain && token.chain !== 'solana') {
+      var foreign = await Promise.all([
+        getJson(BASE + '/tokens/' + token.mint),
+        solUsd().catch(function () { return 0; }),
+      ]);
+      var record = Q.tokenFromPayload(foreign[0], token.mint, { chain: token.chain, solUsd: foreign[1] });
+      if (record) { cachePut(record); return record; }
+      return null;
+    }
 
     // A token first resolved through Jupiter is, by definition, one that
     // Dexscreener did not have. Re-quoting it there would return nothing and
@@ -151,7 +183,7 @@
    */
   var BATCH_CHUNK = 25;
 
-  async function batchPrices(mints) {
+  async function batchPrices(mints, chainByMint) {
     var unique = [];
     var seen = Object.create(null);
     for (var i = 0; i < (mints || []).length; i++) {
@@ -160,22 +192,37 @@
     }
     if (!unique.length) return {};
 
-    var chunks = [];
-    for (var j = 0; j < unique.length; j += BATCH_CHUNK) {
-      chunks.push(unique.slice(j, j + BATCH_CHUNK));
+    // Multichain: one batch call carries one chain family, because the same
+    // 0x address can exist on several EVM chains and the parser must know
+    // which one the position actually lives on.
+    var groups = Object.create(null);
+    for (var g = 0; g < unique.length; g++) {
+      var chain = (chainByMint && chainByMint[unique[g]]) || 'solana';
+      (groups[chain] = groups[chain] || []).push(unique[g]);
     }
-
-    var payloads = await Promise.all(chunks.map(function (chunk) {
-      return getJson(BASE + '/tokens/' + chunk.join(','), 6000);
-    }));
+    var anyForeign = Object.keys(groups).some(function (c) { return c !== 'solana'; });
+    var rate = anyForeign ? await solUsd().catch(function () { return 0; }) : 0;
 
     var out = {};
-    for (var k = 0; k < payloads.length; k++) {
-      var parsed = Q.pricesFromBatch(payloads[k]);
-      for (var mint in parsed) {
-        if (Object.prototype.hasOwnProperty.call(parsed, mint)) {
-          out[mint] = parsed[mint];
-          cachePut(parsed[mint]);
+    var chainNames = Object.keys(groups);
+    for (var c = 0; c < chainNames.length; c++) {
+      var chainName = chainNames[c];
+      var list = groups[chainName];
+      var chunks = [];
+      for (var j = 0; j < list.length; j += BATCH_CHUNK) {
+        chunks.push(list.slice(j, j + BATCH_CHUNK));
+      }
+      var payloads = await Promise.all(chunks.map(function (chunk) {
+        return getJson(BASE + '/tokens/' + chunk.join(','), 6000);
+      }));
+      var parseOpts = chainName === 'solana' ? null : { chain: chainName, solUsd: rate };
+      for (var k = 0; k < payloads.length; k++) {
+        var parsed = Q.pricesFromBatch(payloads[k], parseOpts);
+        for (var mint in parsed) {
+          if (Object.prototype.hasOwnProperty.call(parsed, mint)) {
+            out[mint] = parsed[mint];
+            cachePut(parsed[mint]);
+          }
         }
       }
     }

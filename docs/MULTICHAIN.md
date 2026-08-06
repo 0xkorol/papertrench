@@ -25,6 +25,14 @@ pulled from LIVE surfaces on 2026-08-05 — no assumption ships unverified.
    ethereum→ethereum, robinhood→robinhood, base→base, monad→monad,
    hyperliquid→hyperliquid (last three unprobed — verify on first sighting).
 
+## Status: LANDED (2026-08-05, one commit, 979 tests green)
+
+All six steps below are implemented and locked. The trust boundary became
+chain-aware, never looser (per-chain shape validation at every message
+handler). Cross-terminal warm links still build /tokens/solana/ URLs —
+correct today because the other terminals are Solana-only, revisit if that
+changes.
+
 ## The build (one focused pass, in order)
 
 1. **sites.js**: fomo detect() accepts all corpus slugs; returns

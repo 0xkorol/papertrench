@@ -89,12 +89,17 @@ const MATRIX = [
   // Fomo (fomo.family) — multichain app, token pages at /tokens/<chain>/<address>
   ['https://fomo.family/tokens/solana/' + MINT, 'fomo', 'mint', MINT, 'token route (solana chain slug + whole-mint address)'],
   ['https://fomo.family/tokens/solana/' + MINT + '?ref=abc', 'fomo', 'mint', MINT, 'query strings do not change the route'],
-  ['https://fomo.family/tokens/base/' + EVM_B58ISH, 'fomo', null, null, 'EVM chain slugs must not reach the Solana resolver (O-11)'],
-  // Captured live 2026-08-05: fomo's own /token entry point dropped a logged-in
-  // user straight onto this Robinhood-chain page — EVM landings are routine, not
-  // hypothetical.
-  ['https://fomo.family/tokens/robinhood/0xdc29db7d4396ed738710a5373a30afc197e7268a', 'fomo', null, null, 'live-captured EVM landing must not mount (O-11)'],
-  ['https://fomo.family/tokens/ethereum/' + MINT, 'fomo', null, null, 'a base58-shaped address under a non-solana slug is still not ours (O-11)'],
+  // MULTICHAIN (maintainer order, docs/MULTICHAIN.md): every corpus slug
+  // mounts — with O-11 surviving as strict per-chain shape validation.
+  ['https://fomo.family/tokens/robinhood/0xdc29db7d4396ed738710a5373a30afc197e7268a', 'fomo', 'mint', '0xdc29db7d4396ed738710a5373a30afc197e7268a', 'live-captured robinhood token mounts with its chain'],
+  ['https://fomo.family/tokens/bnb/0xfe189e97832da1573e4e4ff034f4ffc3a15c7777', 'fomo', 'mint', '0xfe189e97832da1573e4e4ff034f4ffc3a15c7777', 'live-corpus bnb token mounts'],
+  ['https://fomo.family/tokens/ethereum/0x32708538a107253b51a735a724330a23106ca4ca', 'fomo', 'mint', '0x32708538a107253b51a735a724330a23106ca4ca', 'live-corpus ethereum token mounts'],
+  ['https://fomo.family/tokens/base/' + EVM_B58ISH, 'fomo', 'mint', EVM_B58ISH, 'a valid 0x40-hex address under an EVM slug mounts (multichain)'],
+  ['https://fomo.family/tokens/base/0x' + 'gg'.repeat(20), 'fomo', null, null, 'non-hex under an EVM slug is refused (O-11, shape-strict)'],
+  ['https://fomo.family/tokens/base/0x' + 'ab'.repeat(19), 'fomo', null, null, 'a short 0x run is refused (O-11, shape-strict)'],
+  ['https://fomo.family/tokens/ethereum/' + MINT, 'fomo', null, null, 'a base58 mint under an EVM slug is still refused (O-11, shape-strict)'],
+  ['https://fomo.family/tokens/solana/0x32708538a107253b51a735a724330a23106ca4ca', 'fomo', null, null, 'an EVM address under the solana slug is refused (O-11, shape-strict)'],
+  ['https://fomo.family/tokens/notachain/0x32708538a107253b51a735a724330a23106ca4ca', 'fomo', null, null, 'unknown chain slugs never mount'],
   ['https://fomo.family/u/sometrader', 'fomo', null, null, 'profile routes must not mount (O-10)'],
   ['https://fomo.family/profile/sometrader', 'fomo', null, null, 'profile routes must not mount (O-10)'],
   ['https://fomo.family/prices/bonk', 'fomo', null, null, 'ticker-slug price pages carry no mint — never guess'],
@@ -111,6 +116,13 @@ test('overlay presence matrix: every audited URL shape gates correctly', () => {
       assert.ok(got.token, `${href}: ${why}`);
       assert.equal(got.token.kind, kind, `${href}: wrong kind — ${why}`);
       assert.equal(got.token.address, address, `${href}: wrong address — ${why}`);
+      // Multichain: fomo results carry their chain; EVM slugs must NEVER
+      // come back tagged solana (that would route them to Solana pricing).
+      if (id === 'fomo') {
+        const slug = href.match(/\/tokens\/([a-z-]+)\//);
+        assert.equal(got.token.chain, slug ? slug[1] : 'solana',
+          `${href}: the detected chain must match the URL slug`);
+      }
     }
   }
 });

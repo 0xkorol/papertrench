@@ -1995,16 +1995,46 @@ function isSolanaAddress(s) {
   return typeof s === 'string' && BASE58_RE.test(s);
 }
 
+/* Multichain trust boundary (docs/MULTICHAIN.md): the validators stay
+ * STRICT — they become chain-aware, never looser. A claimed chain must be a
+ * known fomo slug, and the address must match THAT chain's shape exactly. */
+const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+const KNOWN_CHAINS = ['solana', 'base', 'monad', 'bnb', 'ethereum', 'hyperliquid', 'robinhood'];
+
+function isEvmAddress(s) {
+  return typeof s === 'string' && EVM_ADDR_RE.test(s);
+}
+
+function chainOfClaim(chain) {
+  return typeof chain === 'string' && KNOWN_CHAINS.indexOf(chain) >= 0 ? chain : null;
+}
+
+function isAddressForChain(s, chain) {
+  return chain === 'solana' || !chain ? isSolanaAddress(s) : isEvmAddress(s);
+}
+
 function sanitizeMints(list) {
   if (!Array.isArray(list)) return null;
-  const clean = list.filter(isSolanaAddress);
+  const clean = list.filter((m) => isSolanaAddress(m) || isEvmAddress(m));
   return clean.length ? clean.slice(0, MAX_MINTS_PER_BATCH) : null;
+}
+
+/** chains map for a batch: only known slugs, only for mints in the batch. */
+function sanitizeChains(map, mints) {
+  if (!map || typeof map !== 'object' || !Array.isArray(mints)) return undefined;
+  const out = {};
+  for (const mint of mints) {
+    const chain = chainOfClaim(map[mint]);
+    if (chain && chain !== 'solana' && isEvmAddress(mint)) out[mint] = chain;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function isValidTokenForRefresh(t) {
   if (!t || typeof t !== 'object') return false;
-  if (!isSolanaAddress(t.mint)) return false;
-  if (t.pairAddress && !isSolanaAddress(t.pairAddress)) return false;
+  const chain = chainOfClaim(t.chain) || 'solana';
+  if (!isAddressForChain(t.mint, chain)) return false;
+  if (t.pairAddress && !(isSolanaAddress(t.pairAddress) || (chain !== 'solana' && isEvmAddress(t.pairAddress)))) return false;
   return true;
 }
 
@@ -2180,9 +2210,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // the page origin's CORS or CSP. The content script supplies only mints
       // and addresses; the background decides which public APIs to call.
       case 'pt_resolve': {
-        if (!isSolanaAddress(message.address)) { sendResponse(null); break; }
+        const chain = chainOfClaim(message.chain) || 'solana';
+        if (!isAddressForChain(message.address, chain)) { sendResponse(null); break; }
         const maxAgeMs = Number(message.maxAgeMs);
-        const opts = Number.isFinite(maxAgeMs) && maxAgeMs >= 0 ? { maxAgeMs } : undefined;
+        const opts = {};
+        if (Number.isFinite(maxAgeMs) && maxAgeMs >= 0) opts.maxAgeMs = maxAgeMs;
+        if (chain !== 'solana') opts.chain = chain;
         try { sendResponse(await R.resolve(message.address, opts)); } catch (e) { sendResponse(null); }
         break;
       }
@@ -2199,7 +2232,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'pt_batch_prices': {
         const mints = sanitizeMints(message.mints);
         if (!mints) { sendResponse({}); break; }
-        try { sendResponse(await R.batchPrices(mints)); } catch (e) { sendResponse({}); }
+        const chains = sanitizeChains(message.chains, mints);
+        try { sendResponse(await R.batchPrices(mints, chains)); } catch (e) { sendResponse({}); }
         break;
       }
 
@@ -2300,3 +2334,70 @@ chrome.runtime.onInstalled.addListener(() => {
   attestSerial(ensureAttestMigratedLocked).catch(() => {});
 });
 refreshFrameInterval().catch(() => {});
+
+/* -------------------- site bridge (leaderboard sync) --------------------
+ * The extension's ONLY external surface, and it is answer-only: the site
+ * (allow-listed in manifest.json's externally_connectable) asks, on a user
+ * click over there, and this listener replies. Nothing here initiates a
+ * connection, fetches, or pushes — the no-phone-home doctrine survives the
+ * leaderboard. Gate: the dashboard's "Site sync" toggle
+ * (settings.leaderboardBridge), off by default. The payload is the same
+ * buildSubmission() JSON the manual export produces, so both hand-off paths
+ * are byte-equivalent evidence. */
+
+const BRIDGE_ORIGINS = new Set(['https://papertrench.com', 'https://www.papertrench.com']);
+
+async function bridgeRecord() {
+  const settings = await getSettings();
+  if (!settings.leaderboardBridge) return { ok: false, reason: 'bridge-disabled' };
+  const { chain } = await AT.readChainStore(attestGet);
+  if (!chain.length) return { ok: false, reason: 'chain-empty' };
+  const start = Number(settings.balanceStartSol) || 0;
+  // The claim mirrors the chain-derived replay on purpose: the server ranks
+  // on its own replay anyway, and a bridge claim that disagreed with the
+  // chain would only flag honest users whose local display drifted.
+  const replayed = AT.replayChain(chain, start);
+  return {
+    ok: true,
+    payload: AT.buildSubmission({
+      chain,
+      identity: settings.leaderboardIdentity || null,
+      startingBalanceSol: start,
+      stats: {
+        equitySol: replayed.cashSol,
+        realizedPnlSol: replayed.realizedPnlSol,
+        rounds: replayed.rounds,
+        wins: replayed.wins,
+        losses: replayed.losses,
+      },
+    }),
+  };
+}
+
+if (chrome.runtime.onMessageExternal) {
+  chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+    const origin = sender && (sender.origin || (sender.url ? new URL(sender.url).origin : '')) || '';
+    if (!BRIDGE_ORIGINS.has(origin)) {
+      sendResponse({ ok: false, reason: 'origin-not-allowed' });
+      return false;
+    }
+    (async () => {
+      switch (message && message.type) {
+        // Install/state probe, so the site can say "enable Site sync in the
+        // dashboard" instead of showing a dead button. Reveals presence and
+        // the toggle state, nothing else.
+        case 'pt_bridge_ping': {
+          const settings = await getSettings();
+          sendResponse({ ok: true, bridgeEnabled: settings.leaderboardBridge === true });
+          break;
+        }
+        case 'pt_bridge_get_record':
+          sendResponse(await bridgeRecord());
+          break;
+        default:
+          sendResponse({ ok: false, reason: 'unknown-request' });
+      }
+    })().catch((error) => sendResponse({ ok: false, reason: (error && error.message) || 'error' }));
+    return true;
+  });
+}

@@ -228,21 +228,28 @@
       name: 'Fomo',
       tokenUrl: (mint) => 'https://fomo.family/tokens/solana/' + mint,
       match: (h) => /(^|\.)fomo\.family$/.test(h),
-      // fomo.family/tokens/<chainSlug>/<tokenAddress>. The route shape comes
-      // from the site's own SPA route manifest and chain registry (verified
-      // 2026-08-05) — token pages are login-gated for anonymous visitors, so
-      // the URL, not the rendered DOM, is the contract here. Fomo is
-      // multichain (solana / base / monad / bnb / ethereum / hyperliquid /
-      // robinhood slugs): only the solana slug is ours, and the address must
-      // be a WHOLE base58 value — EVM addresses can contain base58-passing
-      // runs (DEFECT O-11). Profile and user routes (/u/<handle>,
-      // /profile/<handle>) and the ticker-slug /prices/ pages carry handles
-      // and tickers, not mints, and must never mount the panel (O-10).
+      // fomo.family/tokens/<chainSlug>/<tokenAddress>. The route shape and
+      // the live URL corpus are in docs/MULTICHAIN.md (harvested from the
+      // real site 2026-08-05: solana=base58, robinhood/bnb/ethereum=0x40hex).
+      // MULTICHAIN (maintainer order): every corpus slug mounts the panel,
+      // with per-chain address validation — the O-11 rule survives as
+      // shape-strictness per slug: a solana slug never accepts an EVM run,
+      // an EVM slug never accepts base58. Profile and user routes
+      // (/u/<handle>, /profile/<handle>) and ticker-slug /prices/ pages
+      // carry handles and tickers, not mints, and never mount (O-10).
       detect: () => {
         const m = location.pathname.match(/^\/tokens\/([a-z-]+)\/([A-Za-z0-9]+)(?:$|[/?#])/);
-        if (!m || m[1] !== 'solana') return null;
-        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m[2])) return null;
-        return { kind: 'mint', address: m[2] };
+        if (!m) return null;
+        const chain = m[1];
+        const addr = m[2];
+        if (chain === 'solana') {
+          if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) return null;
+          return { kind: 'mint', address: addr, chain: 'solana' };
+        }
+        const EVM_SLUGS = ['base', 'monad', 'bnb', 'ethereum', 'hyperliquid', 'robinhood'];
+        if (EVM_SLUGS.indexOf(chain) < 0) return null;
+        if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return null;
+        return { kind: 'mint', address: addr, chain };
       },
     },
     {

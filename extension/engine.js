@@ -303,6 +303,10 @@
         openedAt: o.ts,
         lastPriceNative: px,
         lastPriceUsd: o.priceUsd || null,
+        // Multichain: the chain the token lives on ('solana' default). Off-
+        // Solana fills price in derived SOL (docs/MULTICHAIN.md) and the
+        // batch poller needs the chain to re-quote the right family.
+        chain: o.chain || 'solana',
       };
     }
     // Upgrade a legacy open position in place so replays can still be attached
@@ -346,6 +350,7 @@
       txCostSol: flat,
       solNet: net,
       mcap: o.mcap || null,
+      chain: pos.chain || o.chain || 'solana',
     };
     state.journal.unshift(trade);
     pruneJournal(state);
@@ -410,6 +415,7 @@
       solNet: net,
       pnlSol: pnl,
       mcap: o.mcap || null,
+      chain: pos.chain || 'solana',
     };
     state.journal.unshift(trade);
     pruneJournal(state);
@@ -444,6 +450,7 @@
       openedAt: pos.openedAt,
       closedAt: ts,
       heldMs: ts - pos.openedAt,
+      chain: pos.chain || 'solana',
       investedSol: pos.investedSol,
       returnedSol: returned,
       pnlSol: returned - pos.investedSol,
