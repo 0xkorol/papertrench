@@ -18,7 +18,7 @@
 'use strict';
 
 const { verifyChain, replayChain } = require('./chain.js');
-const { recordStats } = require('./ranking.js');
+const { recordStats, minCashDuringReplay } = require('./ranking.js');
 const { priceChain, recordVerdict } = require('./pricing.js');
 
 const MAX_CHAIN_LINKS = 50000;
@@ -81,6 +81,18 @@ async function fastChecks(payload, previous) {
   }
 
   const start = Number(payload.claim.startingBalanceSol);
+
+  // The bankroll is the denominator of every ranked figure and the one input
+  // the chain cannot prove — so it is pinned across submissions above, and
+  // floored by the chain itself here. Declaring a tiny balance to multiply the
+  // return is the cheapest possible cheat and needs no forgery at all: just
+  // edit the exported file before uploading it. But the committed fills show
+  // what was actually spent, and cash that goes negative is proof the declared
+  // balance never existed.
+  if (minCashDuringReplay(payload.chain, start) < -1e-9) {
+    return { accepted: false, reason: 'bankroll-too-small' };
+  }
+
   const replayed = replayChain(payload.chain, start);
   const claimedPnl = Number(payload.claim.realizedPnlSol) || 0;
   const claimMismatch = Math.abs(replayed.realizedPnlSol - claimedPnl) > 1e-6;

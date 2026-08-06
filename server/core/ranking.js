@@ -45,6 +45,32 @@ function committedAmount(link) {
 }
 
 /**
+ * The lowest the wallet's cash ever got while replaying the chain.
+ *
+ * The declared starting bankroll is the denominator of ROI and the one input
+ * the chain cannot prove — but it is not entirely unconstrained, because you
+ * cannot spend SOL you never had. Replaying the committed cash flows from the
+ * declared balance and watching for a negative gives a hard floor: a chain
+ * whose buys total 4 SOL is proof the declarer started with at least 4, no
+ * matter what number they typed.
+ *
+ * Committed amounts only, so the floor cannot be dodged by editing the fields
+ * the preimage does not cover.
+ */
+function minCashDuringReplay(links, startingSol) {
+  let cash = Number(startingSol) || 0;
+  let lowest = cash;
+  for (const link of Array.isArray(links) ? links : []) {
+    const qty = Number(link.qty) || 0;
+    const price = Number(link.priceNative) || 0;
+    if (!(qty > 0) || !(price > 0)) continue;
+    cash += link.side === 'buy' ? -committedAmount(link) : committedAmount(link);
+    if (cash < lowest) lowest = cash;
+  }
+  return lowest;
+}
+
+/**
  * Reconstruct closed rounds from chain links.
  *
  * A round is a mint's position going flat, carrying entry/exit times, cost
@@ -179,5 +205,6 @@ function recordStats(links, startingSol) {
 
 module.exports = {
   REVENGE_WINDOW_MS, MIN_RANKED_ROUNDS,
-  committedAmount, roundsFromChain, maxDrawdown, revengeRatio, seasonScore, recordStats,
+  committedAmount, minCashDuringReplay, roundsFromChain, maxDrawdown, revengeRatio,
+  seasonScore, recordStats,
 };

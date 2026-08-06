@@ -701,7 +701,7 @@
     if (record.status === 'partial') {
       return 'The chain is valid and the book replayed cleanly, but only <strong>' +
         esc(coverage || 'some') + '</strong> of the fills had public candle data to check against. ' +
-        'This record is shown, labeled, and ranked below fully verified ones. Missing data is not a ' +
+        'This record is shown and labeled here, but it does not take a place on the board: a fill we could not check is not a fill we can rank. Missing data is not a ' +
         'pass and not a failure — it is missing, and saying so is cheaper than pretending.';
     }
     if (record.status === 'rejected') {

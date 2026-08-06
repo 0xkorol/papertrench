@@ -248,7 +248,20 @@ async function handleLeaderboard(env) {
     FROM records r JOIN users u ON u.id = r.user_id
     LEFT JOIN clan_members cm ON cm.user_id = r.user_id
     LEFT JOIN clans cl ON cl.id = cm.clan_id
-    WHERE r.status != 'rejected'
+    -- ONLY verified records rank.
+    --
+    -- attest.js is open source, so a determined user can fabricate fills AND
+    -- compute valid hashes for them; the chain check cannot tell that apart
+    -- from an honest record. Re-pricing against real market history is what
+    -- actually catches it — but a fill whose mint has no public candle data
+    -- comes back 'no-data', not 'implausible', so a chain built entirely from
+    -- unlisted mints lands at 'partial' with nothing disproved.
+    --
+    -- Ranking anything below 'verified' therefore ranks the one class of
+    -- record we could not check, which is exactly the class a fabricator
+    -- would choose. Unverified records still appear on their own profile,
+    -- labeled — they simply do not take a position on the board.
+    WHERE r.status = 'verified'
     ORDER BY r.submitted_at DESC LIMIT 500`).all();
   const entries = rows.results
     .map((row) => {
@@ -284,7 +297,9 @@ async function handleSprint(env) {
     LEFT JOIN records r ON r.user_id = s.user_id
     LEFT JOIN clan_members cm ON cm.user_id = s.user_id
     LEFT JOIN clans cl ON cl.id = cm.clan_id
-    WHERE s.week_id = ? AND s.rounds > 0 AND (r.status IS NULL OR r.status != 'rejected')
+    -- Same rule as the season board: a week's slice of an unverified record
+    -- is still an unverified record.
+    WHERE s.week_id = ? AND s.rounds > 0 AND r.status = 'verified'
     ORDER BY s.score DESC LIMIT 200`).bind(window.weekId).all();
   return json({
     weekId: window.weekId,

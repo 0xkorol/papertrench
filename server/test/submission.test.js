@@ -114,6 +114,39 @@ test('the declared bankroll is pinned — shrinking it cannot inflate ROI', asyn
   assert.equal((await fastChecks(first, previous)).accepted, true);
 });
 
+test('a bankroll smaller than the chain proves is rejected on the FIRST submission', async () => {
+  // Reported by a real user: "I download the export, change the code in it,
+  // then upload it." Pinning only stops the bankroll CHANGING — the first
+  // submission set it freely, and shrinking the denominator multiplies every
+  // ranked figure without forging a single hash.
+  //
+  // The chain itself is the floor: this one spends 1 SOL on its first buy, so
+  // a declared balance of 0.01 is not a preference, it is impossible.
+  const payload = await honestPayload();
+  payload.claim.startingBalanceSol = 0.01;
+  const result = await fastChecks(payload, null);   // null = first submission
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, 'bankroll-too-small');
+
+  // A balance the fills actually fit inside still goes through.
+  const honest = await honestPayload();
+  honest.claim.startingBalanceSol = 1;
+  assert.equal((await fastChecks(honest, null)).accepted, true);
+});
+
+test('the floor reads committed fields, so editing unhashed ones cannot dodge it', async () => {
+  // solNet on a buy is not in the preimage. Zeroing it would make the spend
+  // look free to any replay that trusted it.
+  const payload = await honestPayload();
+  payload.claim.startingBalanceSol = 0.01;
+  payload.chain[0].solNet = 0;
+  payload.chain[0].amount = 0;
+  payload.chain[0].txCostSol = 0;
+  const result = await fastChecks(payload, null);
+  assert.equal(result.accepted, false, 'the committed solGross still proves the spend');
+  assert.equal(result.reason, 'bankroll-too-small');
+});
+
 test('an extended chain from the committed head is accepted', async () => {
   const first = await honestPayload();
   const previous = { head: first.head, chainLen: first.chain.length, startingSol: 10 };
