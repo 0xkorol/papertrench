@@ -124,6 +124,75 @@ test('an unverified-gap position carries its honesty note into the row', () => {
   assert.match(rows[0].gapNote, /real borrow would be higher/);
 });
 
+test('the ATR × leverage bridge: liq distance in noise units when a warm ATR exists', () => {
+  // $10 at 20x from 100: liq 97.4359, distance 2.5641. ATR 0.5 → 5.1 ATR.
+  const pv = T.buildPreview(Object.assign({}, HL_ARGS, { atr: 0.5 }));
+  const dist = 100 - pv.rows.liqPx;
+  assert.ok(Math.abs(pv.rows.liqDistAtr - dist / 0.5) < CLOSE);
+  assert.match(pv.rows.liqDistText, /5\.1 ATR/);
+  assert.equal(pv.warnings.length, 0, '5 ATRs of room trips no warning');
+
+  // ATR 2 → 1.28 ATRs of room: the warning names the noise unit.
+  const tight = T.buildPreview(Object.assign({}, HL_ARGS, { atr: 2 }));
+  assert.equal(tight.warnings.length, 1);
+  assert.match(tight.warnings[0], /1\.3 ATR away on the 5m/);
+
+  // No ATR (cold store): the number is absent, never padded.
+  const cold = T.buildPreview(HL_ARGS);
+  assert.equal(cold.rows.liqDistAtr, null);
+  assert.ok(!/ATR/.test(cold.rows.liqDistText));
+});
+
+test('position rows carry the ATR distance only when the ATR is real', () => {
+  const state = P.defaultPerpsState({ perpsStartUsd: 1000 });
+  P.openPerp(state, {
+    venue: 'hyperliquid', market: 'SOL', side: 'long',
+    marginUsd: 10, leverage: 20, price: 100, t: 1000, params: { maxLeverage: 20 },
+  });
+  const withAtr = T.buildPositionRows(state, { venue: 'hyperliquid', market: 'SOL', px: 100, atr: 0.5 });
+  assert.match(withAtr[0].liqText, /ATR/);
+  // liqDistPct is (px - liq)/px in percent; at px 100 the absolute distance
+  // is liqDistPct itself, so the ATR distance is that over 0.5.
+  assert.ok(Math.abs(withAtr[0].liqDistAtr - withAtr[0].liqDistPct / 0.5) < 1e-9);
+  const noAtr = T.buildPositionRows(state, { venue: 'hyperliquid', market: 'SOL', px: 100 });
+  assert.equal(noAtr[0].liqDistAtr, null);
+  assert.ok(!/ATR/.test(noAtr[0].liqText));
+});
+
+test('the TA strip: regime line, setups with their wrong-if, warm-up truth, and silence', () => {
+  assert.equal(T.buildTaStrip(null), null, 'no reads, no strip — silence is a valid output');
+
+  const cold = T.buildTaStrip({
+    warm: { bars: 5, needed: { emaSlow: 21 } },
+    regime: null, setups: [],
+  });
+  assert.match(cold.regimeText, /5\/21 bars observed/);
+  assert.equal(cold.setups.length, 0);
+
+  const warmNoRead = T.buildTaStrip({
+    warm: { bars: 60, needed: { emaSlow: 21 } },
+    regime: null, setups: [],
+  });
+  assert.match(warmNoRead.regimeText, /structure unclear/);
+
+  const live = T.buildTaStrip({
+    warm: { bars: 60, needed: { emaSlow: 21 } },
+    regime: 'uptrend', rsi: 61.4, atr: 0.52,
+    setups: [{ setup: 'trend-pullback', direction: 'long', invalidation: 97.4, targets: [103.2] }],
+  });
+  assert.match(live.regimeText, /^Uptrend · RSI 61 · ATR 0\.52/);
+  assert.equal(live.setups.length, 1);
+  assert.equal(live.setups[0].text, 'Pullback long');
+  assert.match(live.setups[0].detail, /wrong if 97\.40/);
+  assert.match(live.setups[0].detail, /→ 103\.20/, 'target shown when one exists');
+
+  const noTarget = T.buildTaStrip({
+    warm: { bars: 60, needed: { emaSlow: 21 } },
+    regime: 'range', setups: [{ setup: 'break-retest', direction: 'short', invalidation: 101, targets: [] }],
+  });
+  assert.ok(!/→/.test(noTarget.setups[0].detail), 'no invented targets');
+});
+
 test('formatting: tabular money and prices', () => {
   assert.equal(T.fmtUsd(1234.5), '$1,234.50');
   assert.equal(T.fmtUsd(-2), '-$2.00');

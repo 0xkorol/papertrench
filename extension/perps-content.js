@@ -27,7 +27,9 @@
   const P = window.PaperPerps;
   const T = window.PaperPerpsTicket;
   const RC = window.PaperPerpsReconcile;
-  if (!S || !V || !P || !T || !RC) return;
+  const BARS = window.PaperBars;
+  const TAC = window.PaperTA;
+  if (!S || !V || !P || !T || !RC || !BARS || !TAC) return;
 
   const STORE_KEY = 'pt_perps';
   const UI_KEY = 'pt_perps_ui';
@@ -36,6 +38,9 @@
   const LOCATION_POLL_MS = 1000;
   const PERSIST_SEEN_MS = 60000;
   const ACCEPT_RATIO = 20; // same magnitude gate doctrine as quote.js
+  const BARS_REFRESH_MS = 60000;
+  const BARS_LOOKBACK_MS = 12 * 3600 * 1000; // ~144 5m bars: emaSlow warms honestly
+  const RES_SEC = 300;
 
   /* ------------------------- lifetime hygiene ------------------------- */
 
@@ -78,6 +83,8 @@
   let state = null;          // the perps book (pt_perps.state)
   let stateRev = 0;
   let reconciled = false;
+  let barStore = null;       // TA bar ring for the current HL market
+  let taReads = null;        // assembleReads() context pack, or null
 
   function anchorPx() {
     if (adapter && adapter.venue === 'hyperliquid' && hlAssets && hlAssets[adapter.market]) {
@@ -103,6 +110,31 @@
     });
     if (!res.ok) throw new Error('hl-info-' + res.status);
     return res.json();
+  }
+
+  /* TA bars: the venue's own candles feed the bar store (provenance
+   * backfill:hl-api), and every read downstream stays warm-up honest —
+   * a failed fetch leaves the strip saying how many bars it has, never
+   * inventing the rest. Hyperliquid only: Jupiter has no verified candle
+   * source yet, so its strip stays silent rather than approximate. */
+  async function refreshBars() {
+    if (!adapter || adapter.venue !== 'hyperliquid' || !barStore) return;
+    try {
+      const nowMs = Date.now();
+      const rows = await fetchHlInfo({
+        type: 'candleSnapshot',
+        req: { coin: adapter.market, interval: '5m', startTime: nowMs - BARS_LOOKBACK_MS, endTime: nowMs },
+      });
+      if (!Array.isArray(rows)) return;
+      for (const r of rows) {
+        const b = { t: Math.floor(r.t / 1000), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c) };
+        const v = Number(r.v);
+        if (Number.isFinite(v)) b.v = v;
+        BARS.noteBar(barStore, adapter.market, RES_SEC, b, 'backfill:hl-api');
+      }
+      taReads = TAC.assembleReads(BARS.bars(barStore, adapter.market, RES_SEC));
+      scheduleRender();
+    } catch (e) { /* strip stays on its last honest state */ }
   }
 
   async function refreshParams() {
@@ -295,6 +327,10 @@
     .prev .k { color: #768390; }
     .prev .v { text-align: right; }
     .prev .liq { color: #e5484d; }
+    .ta { border: 1px solid #2d333b; border-radius: 6px; padding: 5px 8px; margin-bottom: 8px;
+      color: #9da7b1; font-size: 11px; }
+    .ta .setup { color: #e6edf3; margin-top: 3px; }
+    .ta .setup .d { color: #768390; }
     .warn { color: #f0b429; margin: 6px 0; }
     .refuse { color: #9da7b1; font-style: italic; margin: 6px 0; }
     button.open { width: 100%; padding: 8px 0; border: 0; border-radius: 6px; font: inherit;
@@ -339,6 +375,9 @@
     hdr.appendChild(tgl);
     const body = el('div', 'body');
 
+    const ta = el('div', 'ta');
+    ta.style.display = 'none';
+
     const sideRow = el('div', 'row');
     const longBtn = el('div', 'seg on-long', 'LONG');
     const shortBtn = el('div', 'seg', 'SHORT');
@@ -360,12 +399,12 @@
     const notice = el('div', 'notice', '');
     const foot = el('div', 'foot', 'Paper trading — zero real money. Liquidations fill at the venue’s trigger; real ones usually fare worse.');
 
-    body.append(sideRow, marginLbl, margin, levLbl, lev, preview, openBtn, positions, bal, notice, foot);
+    body.append(ta, sideRow, marginLbl, margin, levLbl, lev, preview, openBtn, positions, bal, notice, foot);
     card.append(hdr, body);
     shadow.appendChild(card);
     document.documentElement.appendChild(root);
 
-    els = { card, hdr, px: hdr.children[2], tgl, longBtn, shortBtn, margin, lev, levVal: levLbl.children[1], preview, openBtn, positions, bal, notice };
+    els = { card, hdr, px: hdr.children[2], tgl, longBtn, shortBtn, margin, lev, levVal: levLbl.children[1], ta, preview, openBtn, positions, bal, notice };
 
     longBtn.addEventListener('click', () => { inputs.side = 'long'; scheduleRender(); });
     shortBtn.addEventListener('click', () => { inputs.side = 'short'; scheduleRender(); });
@@ -463,6 +502,24 @@
       els.lev.max = '250';
     }
 
+    // The TA strip: regime + setups when we have real bars, warm-up truth
+    // when we do not, nothing at all on venues without a candle source.
+    const strip = adapter.venue === 'hyperliquid' ? T.buildTaStrip(taReads) : null;
+    if (strip) {
+      const box = el('div');
+      box.appendChild(el('div', '', strip.regimeText));
+      for (const su of strip.setups) {
+        const line = el('div', 'setup', su.text + ' ');
+        line.appendChild(el('span', 'd', su.detail));
+        box.appendChild(line);
+      }
+      els.ta.replaceChildren(box);
+      els.ta.style.display = '';
+    } else {
+      els.ta.style.display = 'none';
+    }
+
+    const atr = adapter.venue === 'hyperliquid' && taReads ? taReads.atr : null;
     const marketConfirmed = adapter.venue !== 'hyperliquid'
       ? true : Boolean(hlAssets && hlAssets[adapter.market]);
     const pv = T.buildPreview({
@@ -470,7 +527,7 @@
       marginUsd: inputs.marginUsd, leverage: inputs.leverage,
       price: lastPx > 0 ? lastPx : NaN, t: Math.floor(Date.now() / 1000),
       cashUsd: state.cashUsd, params: paramsFor(), carry: carryFor(),
-      marketConfirmed,
+      marketConfirmed, atr,
     });
 
     const prev = el('div', 'prev');
@@ -489,7 +546,7 @@
     for (const w of (pv.ok ? pv.warnings : [])) warnBox.appendChild(el('div', 'warn', '⚠ ' + w));
     els.preview.replaceChildren(prev, warnBox);
 
-    const rows = T.buildPositionRows(state, { venue: adapter.venue, market: adapter.market, px: lastPx > 0 ? lastPx : NaN });
+    const rows = T.buildPositionRows(state, { venue: adapter.venue, market: adapter.market, px: lastPx > 0 ? lastPx : NaN, atr });
     const box = el('div');
     for (const r of rows) {
       const pr = el('div', 'prow');
@@ -581,6 +638,10 @@
     }
     mountTicket();
     watchTitle();
+    if (adapter.venue === 'hyperliquid') {
+      barStore = BARS.createStore({ cap: 250 });
+      refreshBars();
+    }
     await reconcileOnBoot();
     scheduleRender();
   }
@@ -589,6 +650,8 @@
     if (root) { root.remove(); root = null; shadow = null; els = null; }
     if (titleObserver) { titleObserver.disconnect(); titleObserver = null; }
     adapter = null;
+    barStore = null;
+    taReads = null;
   }
 
   let lastHref = '';
@@ -608,6 +671,7 @@
 
   managedInterval(pollLocation, LOCATION_POLL_MS);
   managedInterval(refreshParams, PARAMS_REFRESH_MS);
+  managedInterval(refreshBars, BARS_REFRESH_MS);
   managedInterval(persistSeen, PERSIST_SEEN_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && alive()) persistSeen();

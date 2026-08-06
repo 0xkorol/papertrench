@@ -148,8 +148,8 @@ test('the manifest no longer injects into every page on the internet', () => {
     'xray-core.js', 'xray-main.js', 'xray-panel.js',
   ]);
   const PERPS_FILES = new Set([
-    'perps-venues.js', 'perps.js', 'perps-sites.js',
-    'perps-reconcile.js', 'perps-ticket.js', 'perps-content.js',
+    'perps-venues.js', 'perps.js', 'bar-store.js', 'ta-core.js',
+    'perps-sites.js', 'perps-reconcile.js', 'perps-ticket.js', 'perps-content.js',
   ]);
   const PERPS_HOSTS = new Set([
     'https://app.hyperliquid.xyz/*', 'https://jup.ag/*', 'https://*.jup.ag/*',

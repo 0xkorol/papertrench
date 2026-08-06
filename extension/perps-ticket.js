@@ -85,12 +85,21 @@
 
     const notionalUsd = o.marginUsd * o.leverage;
     const liqDistPct = isNum(pos.liqPx) ? (Math.abs(o.price - pos.liqPx) / o.price) * 100 : null;
+    // The ATR × leverage bridge (spec §5): liquidation distance in noise
+    // units, when a warm ATR exists for this market. Null when it does not
+    // — never a padded value.
+    const atr = isNum(o.atr) && o.atr > 0 ? o.atr : null;
+    const liqDistAtr = atr !== null && isNum(pos.liqPx)
+      ? Math.abs(o.price - pos.liqPx) / atr : null;
     const carryPerHourUsd = o.venue === 'hyperliquid'
       ? (pos.side === 1 ? 1 : -1) * notionalUsd * carry.fundingHourlyFrac
       : notionalUsd * carry.borrowRateFrac;
 
     const warnings = [];
-    if (isNum(liqDistPct) && liqDistPct < 1) {
+    if (liqDistAtr !== null && liqDistAtr < 1.5) {
+      warnings.push('Liquidation is ' + liqDistAtr.toFixed(1)
+        + ' ATR away on the 5m — this market moves that much routinely.');
+    } else if (isNum(liqDistPct) && liqDistPct < 1) {
       warnings.push('Liquidation is ' + fmtPct(liqDistPct) + ' away — ordinary noise covers that.');
     }
     const feePctOfMargin = (pos.feesUsd / o.marginUsd) * 100;
@@ -109,7 +118,9 @@
         liqPx: pos.liqPx,
         liqText: fmtPx(pos.liqPx),
         liqDistPct,
-        liqDistText: fmtPct(liqDistPct),
+        liqDistText: fmtPct(liqDistPct)
+          + (liqDistAtr !== null ? ' · ' + liqDistAtr.toFixed(1) + ' ATR' : ''),
+        liqDistAtr,
         carryPerHourUsd,
         carryText: fmtUsd(Math.abs(carryPerHourUsd)) + '/hr'
           + (o.venue === 'hyperliquid' && carryPerHourUsd < 0 ? ' (received)' : ''),
@@ -130,6 +141,8 @@
       const m = P.markPerp(clone, pos.id, { price: o.px });
       if (!m.ok) continue;
       const uPnlPct = (m.uPnlUsd / pos.marginUsd0) * 100;
+      const rowAtr = isNum(o.atr) && o.atr > 0 && isNum(pos.liqPx)
+        ? Math.abs(o.px - pos.liqPx) / o.atr : null;
       rows.push({
         id: pos.id,
         label: (pos.side === 1 ? 'LONG' : 'SHORT') + ' ' + pos.leverage + 'x',
@@ -138,8 +151,9 @@
         uPnlUsd: m.uPnlUsd,
         uPnlText: fmtUsd(m.uPnlUsd, { signed: true }) + ' (' + fmtPct(Math.abs(uPnlPct)) + ')',
         equityText: fmtUsd(m.equityUsd),
-        liqText: fmtPx(pos.liqPx),
+        liqText: fmtPx(pos.liqPx) + (rowAtr !== null ? ' · ' + rowAtr.toFixed(1) + ' ATR' : ''),
         liqDistPct: isNum(pos.liqPx) ? (Math.abs(o.px - pos.liqPx) / o.px) * 100 : null,
+        liqDistAtr: rowAtr,
         liquidatable: m.liquidatable,
         gapNote: pos.unverifiedGapSec > 0
           ? Math.round(pos.unverifiedGapSec / 60) + ' min unobserved — real borrow would be higher'
@@ -150,7 +164,39 @@
     return rows;
   }
 
-  const api = { buildPreview, buildPositionRows, fmtUsd, fmtPx, fmtPct, REASON_TEXT };
+  /* The TA strip (spec §2): one line of regime truth, plus detected setups
+   * with their invalidation in the same breath. Silence is a valid output —
+   * null means "render nothing". Warm-up states say exactly what is
+   * missing instead of faking a read. */
+  const SETUP_LABEL = {
+    'trend-pullback': 'Pullback',
+    'break-retest': 'Break + retest',
+    'vwap-reversion': 'VWAP reversion',
+    'rsi-divergence': 'RSI divergence',
+  };
+
+  function buildTaStrip(reads) {
+    if (!reads || !reads.warm) return null;
+    if (reads.regime === null) {
+      const needed = reads.warm.needed ? reads.warm.needed.emaSlow : 21;
+      if (reads.warm.bars < needed) {
+        return { regimeText: 'TA warming up: ' + reads.warm.bars + '/' + needed + ' bars observed', setups: [] };
+      }
+      return { regimeText: 'No trend read — structure unclear', setups: [] };
+    }
+    const label = { uptrend: 'Uptrend', downtrend: 'Downtrend', range: 'Range' }[reads.regime] || reads.regime;
+    const bits = [label];
+    if (isNum(reads.rsi)) bits.push('RSI ' + Math.round(reads.rsi));
+    if (isNum(reads.atr)) bits.push('ATR ' + fmtPx(reads.atr));
+    const setups = (reads.setups || []).map((s) => ({
+      text: (SETUP_LABEL[s.setup] || s.setup) + ' ' + s.direction,
+      detail: 'wrong if ' + fmtPx(s.invalidation)
+        + (s.targets && s.targets.length ? ' → ' + fmtPx(s.targets[0]) : ''),
+    }));
+    return { regimeText: bits.join(' · '), setups };
+  }
+
+  const api = { buildPreview, buildPositionRows, buildTaStrip, fmtUsd, fmtPx, fmtPct, REASON_TEXT };
 
   if (typeof window !== 'undefined') window.PaperPerpsTicket = api;
   if (typeof self !== 'undefined') self.PaperPerpsTicket = api;

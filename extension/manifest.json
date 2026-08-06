@@ -145,6 +145,8 @@
       "js": [
         "perps-venues.js",
         "perps.js",
+        "bar-store.js",
+        "ta-core.js",
         "perps-sites.js",
         "perps-reconcile.js",
         "perps-ticket.js",
