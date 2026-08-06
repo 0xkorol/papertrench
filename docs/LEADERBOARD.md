@@ -182,6 +182,24 @@ Other rules that follow from the doctrine above:
   charset with a normalised uniqueness key (so `Trench Rats` and `trenchrats`
   collide). A clan that could rename itself after collecting a roster could
   rename itself into an impersonation of another one.
+- **Content moderation is deliberately narrow: slurs and sexualised-minor
+  terms, and nothing else.** Profanity, crude sexual humour, drug references,
+  violence as market metaphor, hostility to institutions and trash talk about
+  rival traders all pass — that register is the product's own, and a filter
+  that sanded it off would be a worse failure than a rude clan name.
+
+  Matching is on **tokens**, not on the collapsed key: a blocked term has to
+  *be* a word, not merely hide inside one. This is not a stylistic choice. A
+  collapsed-key design was measured against a corpus of legitimate names and
+  rejected between 10 and 23 of them — `Chin Kickers`, `Flame Retardant`,
+  `Spicy Gains`, `Tycoon Society`. Substring matching survives only for a
+  hand-audited handful of terms, each with its innocent English hosts carved
+  out explicitly and each carve-out proven not to work as cover.
+
+  The filter is a **floor, not a guarantee**. It does not read intent, and a
+  spelling nobody has thought of will get through. The maintainer's ability to
+  delete a clan is the real backstop, and saying so here is cheaper than
+  implying a coverage that does not exist.
 - **Clan standings are the current season and current week only.** No frozen
   historical clan tables are claimed, because membership changes and a past
   week's clan standing computed from today's roster would be a different

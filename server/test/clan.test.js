@@ -396,3 +396,180 @@ test('a sixth member who joined yesterday cannot lift yesterday\'s standing', as
   assert.equal(C.standing(roster).score, before,
     'their record came with them; their past did not');
 });
+
+/* ===================== moderation: the narrowest filter ================== */
+/*
+ * Two directions, and the SECOND one is the one that matters more here.
+ *
+ * A slur on a public board is the obvious failure. The quieter failure is a
+ * filter that rejects "Spicy Gains" — because the maintainer asked for the
+ * minimum, the audience is degen crypto, and a trainer that sands the culture
+ * off is a trainer nobody uses. The must-pass corpus below is therefore a
+ * first-class contract, not a nicety: it is the measured list that killed an
+ * earlier collapsed-key design which rejected 10-23 of these 54.
+ */
+
+/** Legitimate names that MUST survive. Every entry is here because a plausible
+ * filter design rejected it. */
+const MUST_PASS = [
+  // Innocent words hosting a blocked substring — the Scunthorpe family.
+  'Chin Kickers', 'Flame Retardant', 'Tardigrade Gang', 'Mustard Gains',
+  'Suspicious Volume', 'Spicy Gains', 'Spice Traders', 'Tycoon Society',
+  'Raccoon Raiders', 'Cocoon Capital', 'Transmission Repair', 'Turnip Farmers',
+  'Torpedo Bags', 'Gypsum Miners', 'Squawk Box', 'Nutcracker', 'Mickey Mouse Money',
+  // Place, nation and surname collisions. Global audience, not a US one.
+  'Niger Delta Bulls', 'Japan Pump Squad', 'Pakistan Apes', 'Van Dyke Traders',
+  'Honky Tonk Heroes', 'Sauerkraut Squad', 'Paddy Fields',
+  // Ape culture is self-identification, not attack.
+  'Indian Apes', 'Nigerian Apes',
+  // The culture's own vocabulary, including its euphemisms.
+  'With Regards To Entries', 'Regarded Traders', 'Autists Anonymous',
+  'Dumb Money', 'Insane Leverage', 'Crazy Candles', 'Idiot Savants', 'Jeeted Again',
+  // Profanity, crude humour, drugs, nihilism — all explicitly allowed.
+  'Fuckin Bagholders', 'Cumrocket Capital', 'Coked Up Candles',
+  'Financial Suicide Squad', 'Rugged And Reckless',
+  // Violence as market metaphor, and hostility to institutions and rivals.
+  'Nuke China Longs', 'Kill The Yen', 'Fuck The SEC', 'Your Exit Liquidity',
+  'Punch Nazis', 'Grammar Nazi',
+  // Found by a red team RUNNING the filter rather than reading it. Every one of
+  // these was rejected by the first implementation.
+  'Snigger Squad', 'Sniggering Bears', 'Spiced Rum Runners', 'Spicing Up The Chart',
+  'Spicer Capital', 'Spicers Of Solana', 'Tardies And Tendies', 'Fire Retarding Bags',
+  'Exhaust Retarder Gang', 'Jape Squad', 'Niggling Doubts',
+  // Prices. The hate code lived in the token list until "14.88" - a number a
+  // trader types constantly - came back refused. On a product whose pitch is
+  // that its numbers are true, that was the worst-placed false positive here.
+  '14.88 Club', '0.1488 Entry Club',
+];
+
+/** Mottos that must survive. The motto is 120 characters of free text, so it is
+ * where an over-eager rule does the most damage. */
+const MUST_PASS_MOTTOS = [
+  'We snigger at your stop losses.',
+  'We keep the charts spiced and the hands diamond.',
+  'Filled at 14.88, sold at 3.',
+  'Ran it up 1,488 percent, gave it back.',
+  'Sharpe of 1.488 and a death wish.',
+  // Joining adjacent words would block these three, which is why it is not
+  // done: "shot as", "chin king" and "goo king" are all real word pairs.
+  'we only get one shot as a team',
+  'a chin king among traders',
+  'fuck the fed, buy the dip',
+];
+
+test('the filter rejects NONE of the 54 legitimate names it was measured against', () => {
+  const rejected = MUST_PASS.filter((name) => C.nameProblem(name) !== null);
+  assert.deepEqual(rejected, [],
+    'over-blocking is the primary failure mode for this product, not under-blocking');
+});
+
+test('a blocked term must BE a word, not merely hide inside one', () => {
+  // This is the whole reason matching is on tokens rather than the collapsed
+  // key. Each of these contains a blocked term as a substring of a real word.
+  for (const name of ['Chin Kickers', 'Flame Retardant', 'Spicy Gains', 'Tycoon Society']) {
+    assert.equal(C.nameProblem(name), null, name + ' must pass');
+  }
+  assert.equal(C.blockedContent('chinkickers'), false,
+    'the collapsed key must never be substring-matched against token-tier entries');
+});
+
+test('slurs are refused in a name, a tag and a motto alike', () => {
+  assert.equal(C.nameProblem('Retard Squad'), 'name-blocked');
+  assert.equal(C.tagProblem('SPIC'), 'tag-blocked');
+  assert.equal(C.mottoProblem('we are the retards'), 'motto-blocked');
+  // The motto is the only field editable after creation, so it is the one that
+  // could otherwise be laundered past a create-time check.
+  assert.equal(C.createProblem({ tag: 'OK', name: 'Fine Name', motto: 'pedo jokes' }),
+    'motto-blocked');
+});
+
+test('spelling around the list does not get you past it', () => {
+  const attempts = [
+    'R3tard Squad',        // digits read as letters
+    'Reeeetard Squad',     // padded repeats
+    'R.e.t.a.r.d Squad',   // separators inside a word
+    'Team.Retard.Squad',   // separators as word breaks
+    'R E T A R D Squad',   // letters spaced out
+    'Retards Squad',       // plural via the suffix set
+    'Retarded Squad',      // inflection via the suffix set
+  ];
+  for (const name of attempts) {
+    assert.equal(C.nameProblem(name), 'name-blocked', name + ' must be refused');
+  }
+});
+
+test('a refusal never names the term that matched', () => {
+  // The code is the whole message. Naming the match turns every refusal into an
+  // oracle for probing the list, and reads the term back to someone who may
+  // have typed it by accident.
+  const problem = C.nameProblem('Retard Squad');
+  assert.equal(problem, 'name-blocked');
+  assert.ok(!/retard/i.test(problem), 'the refusal must not echo the matched term');
+});
+
+test('the substring tier stays small enough to argue for entry by entry', () => {
+  // It is the tier that manufactures false positives. A hand-audited list
+  // cannot grow without a code review; a length heuristic can, which is why
+  // this no longer asserts one - see the carve-out test below for the rule that
+  // actually holds.
+  assert.ok(C.BLOCKED_SUBSTRINGS.length <= 6,
+    'if this list is growing, the growth belongs in BLOCKED_TOKENS instead');
+});
+
+test('every innocent host carved out of the substring tier actually needs it', () => {
+  // This tier once claimed in a comment that its entries had no innocent host
+  // in English. A scan of the full system dictionary proved that false. The
+  // claim is now enforced rather than asserted: a carve-out that contains no
+  // blocked term is dead weight, and a blocked term whose host is missing is a
+  // false positive waiting for the user who types it.
+  for (const host of C.ALLOWED_SUBSTRINGS) {
+    assert.ok(C.BLOCKED_SUBSTRINGS.some((bad) => host.includes(bad)),
+      host + ' contains no blocked term, so it carves out nothing');
+  }
+});
+
+test('an innocent host cannot be used as cover for the real term', () => {
+  // Stripping the host has to leave a genuine occurrence behind, or the
+  // carve-out above becomes the bypass it was added to avoid.
+  assert.equal(C.nameProblem('sniggernigger squad'), 'name-blocked');
+  assert.equal(C.nameProblem('Snigger Squad'), null);
+});
+
+test('the mottos a red team could break all pass', () => {
+  const rejected = MUST_PASS_MOTTOS.filter((m) => C.mottoProblem(m) !== null);
+  assert.deepEqual(rejected, [],
+    'free text is where an over-eager rule does the most damage');
+});
+
+test('the hate code is a word, not a price', () => {
+  assert.equal(C.nameProblem('1488 gang'), 'name-blocked');
+  assert.equal(C.tagProblem('1488'), 'tag-blocked');
+  assert.equal(C.mottoProblem('Filled at 14.88, sold at 3.'), null);
+  assert.equal(C.mottoProblem('Ran it up 1,488 percent, gave it back.'), null);
+});
+
+test('padding, digit insertion and compounds do not get past the list', () => {
+  // Every one of these was an OPEN bypass in the first implementation, found by
+  // running it. Digit deletion was documented and dead code; the run-collapse
+  // made tripling a letter easier than doubling it.
+  const attempts = [
+    'Ni0gger Crew', 'Nig0ger Crew', 'N0igger Crew',   // a digit read as padding
+    'Niigger Crew', 'Niggger Crew',                   // doubled, and tripled
+    'Trannies Only',                                  // -ies rewrites its stem
+    'Faggotry Capital', 'Nigganaut',                  // compounds
+    'Nig Gas', 'Ni Gga Boys',                         // split across a space
+    'Jap Traders', 'J.A.P Squad',                     // the tokenizer's own example
+  ];
+  for (const name of attempts) {
+    assert.equal(C.nameProblem(name), 'name-blocked', name + ' must be refused');
+  }
+});
+
+test('every blocked entry is stored in the form the matcher actually compares', () => {
+  // A blocked entry that does not survive its own normalization would silently
+  // never match, and nothing else would notice.
+  for (const entry of C.BLOCKED_TOKENS) {
+    if (/\s/.test(entry)) continue; // the spaced hate-code form is matched via tokenize
+    assert.equal(entry, entry.toLowerCase(), entry + ' must be stored lowercase');
+  }
+});

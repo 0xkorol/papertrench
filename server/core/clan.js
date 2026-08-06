@@ -93,6 +93,290 @@ const RESERVED_NAME_KEYS = ['papertrench'];
 const MOTTO_MAX = 120;
 const MOTTO_RE = /^[A-Za-z0-9 .,!?'"&:;()\/-]*$/;
 
+/* ----------------------------------------------------------- moderation -- */
+/*
+ * THE NARROWEST FILTER THAT STILL MEANS SOMETHING.
+ *
+ * Scope, set deliberately: slurs and sexualised-minor terms. Nothing else.
+ * Profanity is allowed. Crude sexual humour is allowed. Drug references,
+ * nihilism, hostility to regulators, exchanges, whales and each other are all
+ * allowed. "Provocative" is the register this product is written in, and a
+ * filter that sanded that off would be a worse failure than one that let a
+ * rude clan name through.
+ *
+ * WHY TOKENS, NOT SUBSTRINGS. `nameKey()` strips every separator, so matching
+ * blocked terms as substrings of it manufactures collisions nobody typed:
+ * "Chin Kickers" collapses to "chinkickers", "Flame Retardant" contains the
+ * ableist term, "Spicy Gains" contains an ethnic one. A design that matched
+ * the collapsed key was measured against a corpus of 50 legitimate names and
+ * rejected between 10 and 23 of them. So matching happens on TOKENS — a
+ * blocked term must BE a word here, not merely hide inside one — with one
+ * closed set of suffixes so plurals cannot walk through.
+ *
+ * Substring matching survives for exactly one tier: terms with no innocent
+ * host word in English, listed individually and audited by hand. It is not a
+ * length heuristic; it is a list, and it is short on purpose.
+ *
+ * WHAT THIS DOES NOT DO. It does not detect intent, sentiment, or a slur
+ * spelled in a way nobody has thought of yet. It is a floor, not a guarantee,
+ * and the maintainer's ability to delete a clan is the real backstop. Saying
+ * so here is cheaper than implying a coverage nobody has.
+ */
+
+/** Blocked as whole tokens (plus SUFFIXES below). Every entry is a term with
+ * no ordinary use as a standalone word in this product's register. */
+const BLOCKED_TOKENS = new Set([
+  // Racial and ethnic.
+  'nigga', 'niggas', 'niggaz', 'nigg', 'coon', 'spic', 'wetback', 'chink',
+  'gook', 'kike', 'kaffir', 'paki', 'raghead', 'towelhead', 'beaner',
+  'gyppo', 'pikey', 'wog', 'darkie', 'squaw', 'zipperhead', 'slopehead',
+  // Homophobic and transphobic. The anti-lesbian term is deliberately ABSENT:
+  // it is an ordinary English noun (an embankment), a common surname, and
+  // heavily reclaimed — "Van Dyke Traders" was a measured false positive. It is
+  // the one entry whose cost exceeded its value under a minimum-moderation
+  // mandate, and it is left out as a decision rather than an oversight.
+  'faggot', 'fag', 'tranny', 'shemale',
+  // Ableist. 'mong' is deliberately absent: it makes "fear monger" and "war
+  // mongers" collide through the suffix rule, and it is the mildest term here.
+  'retard', 'retarded', 'tard', 'spastic', 'spaz', 'spazz', 'mongoloid',
+  'jap', 'wop', 'dago', 'jigaboo', 'nggr',
+  // Sexualised minors — the one category the mandate names outright, so
+  // completeness here is cheap and worth having. 'cp' is absent: two letters,
+  // and a legitimate abbreviation for half a dozen things.
+  'pedo', 'paedo', 'pedophile', 'paedophile', 'pedobear', 'hebephile',
+  'loli', 'lolicon', 'shota', 'shotacon', 'jailbait',
+  // Explicit hate-group signalling. The bare 2-digit component is NOT here:
+  // it is an ordinary number, and blocking it would be pure over-blocking.
+  // The 4-digit code is handled by HATE_CODE, not here — see the note there.
+  'heilhitler', 'siegheil',
+]);
+
+/**
+ * Blocked anywhere, even inside a longer word.
+ *
+ * Reserved for terms whose only English hosts are listed in ALLOWED_SUBSTRINGS
+ * below. Each one earns its place individually — this is the tier that produces
+ * false positives, so it stays at the size where every entry can be argued for
+ * out loud. Substring matching is what catches the compounds ("…naut", "…ry",
+ * "…tron") that no closed suffix set can, and the space-splits that tokens miss.
+ */
+const BLOCKED_SUBSTRINGS = [
+  'nigger', 'nigga', 'faggot', 'childporn', 'childrape',
+];
+
+/**
+ * The innocent hosts, removed from the key before the substring test runs.
+ *
+ * The tier above was first written claiming its entries had "no innocent host
+ * in English". A scan of all 104,334 words in the system dictionary proved that
+ * false: snigger/sniggers/sniggered/sniggering and the niggard family are real
+ * words, and "Snigger Squad" is a name a British trader would plausibly pick.
+ * The claim is now enforced by carve-out rather than asserted by comment.
+ *
+ * One removal pass is deliberate and sufficient: "sniggernigger" still blocks,
+ * because removing the host leaves the term behind.
+ */
+const ALLOWED_SUBSTRINGS = ['snigger', 'niggard'];
+
+/**
+ * The four-digit hate code, matched ONLY as a bare unseparated word.
+ *
+ * It lived in the token list until a red team pointed out that tokenize()
+ * strips the separators inside a word, so "14.88" — a price — became the token
+ * 1488 and got a motto refused. On a product whose entire pitch is that its
+ * numbers are true, refusing someone for typing a price is the worst-placed
+ * false positive available. "1488 gang" still blocks; "Filled at 14.88",
+ * "1,488 percent" and "Sharpe of 1.488" do not.
+ */
+const HATE_CODE = '1488';
+
+/**
+ * Tokens that pass even though the suffix rule would otherwise catch them.
+ *
+ * Each is a real word that happens to be a blocked term plus a suffix:
+ * "spic"+y, "tard"+y. Without these the filter rejects "Spicy Gains", which
+ * is exactly the kind of refusal that makes a product feel hostile.
+ */
+const ALLOWED_TOKENS = new Set([
+  'spicy', 'spice', 'spices', 'spicier', 'spiced', 'spicer', 'spicers', 'spicing',
+  'tardy', 'tardies',
+  // The -ing/-er forms of the ableist term are machinery vocabulary (an engine
+  // retarder, a retarding agent) and are not used as insults in any register.
+  // Same decision already made for "retardant" by leaving 'ant' out of SUFFIXES.
+  'retarding', 'retarder', 'retarders',
+  // Jape is an ordinary word for a prank; it is the only English host of the
+  // ethnic term above plus a suffix from the closed set.
+  'jape', 'japes', 'japed', 'japing',
+]);
+
+/** Suffixes a blocked token may carry and still be the same word. Closed set:
+ * anything longer is a different word ("retard" + "ant" is a fire retardant). */
+const SUFFIXES = ['', 's', 'z', 'es', 'ed', 'er', 'ers', 'ing', 'y', 'ies'];
+
+/**
+ * Digits read as letters, and the option of reading them as nothing at all.
+ *
+ * Only digits: NAME_RE, MOTTO_RE and TAG_RE admit no `$` or `@`, so folding
+ * those would be dead code. Deletion matters as much as substitution —
+ * "n1gger" folds to the term, but "nig0ger" only reaches it by dropping the
+ * digit, and both spellings are one keystroke apart for whoever is trying.
+ */
+const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 6: 'g', 7: 't', 8: 'b', 9: 'g', 2: 'z' };
+/** Bound on the per-digit and per-run expansions, so a token of nothing but
+ * digits cannot make this explode. Six is far past any real spelling. */
+const MAX_LEET_DIGITS = 6;
+const MAX_RUNS = 6;
+const MAX_READINGS = 4096;
+
+/**
+ * Every plausible reading of one token.
+ *
+ * Two expansions, and BOTH were wrong in the first version — a red team caught
+ * each by running it rather than reading it.
+ *
+ * DIGITS get three states, not two: kept, read as a letter, or read as
+ * NOTHING. Deletion was documented from the start and was dead code: the fold
+ * was `LEET[c] || ''` and LEET maps all ten digits, so the fallback could never
+ * fire and "nig0ger" sailed through the exact case the comment named. Insertion
+ * is the highest-value bypass there is and it has no dictionary surface at all.
+ *
+ * RUNS of a repeated character are emitted at BOTH one and two characters. The
+ * first version collapsed runs of 3+ down to one, which missed plain doubling
+ * ("niigger") and — worse — made tripling *easier* than doubling, because
+ * "niggger" collapsed to a harmless "niger". Emitting both lengths handles the
+ * padded spellings without destroying legitimate double letters.
+ */
+function tokenReadings(token) {
+  const digits = [];
+  for (let i = 0; i < token.length; i++) {
+    if (token[i] >= '0' && token[i] <= '9') digits.push(i);
+  }
+  const capped = digits.slice(0, MAX_LEET_DIGITS);
+
+  // Base-3 over the capped digits: 0 = keep, 1 = fold to a letter, 2 = drop.
+  const folded = new Set();
+  let combos = 1;
+  for (let i = 0; i < capped.length; i++) combos *= 3;
+  for (let n = 0; n < combos; n++) {
+    let out = '';
+    let code = n;
+    const state = [];
+    for (let i = 0; i < capped.length; i++) { state.push(code % 3); code = Math.floor(code / 3); }
+    for (let i = 0; i < token.length; i++) {
+      const slot = capped.indexOf(i);
+      if (slot === -1) { out += token[i]; continue; }
+      if (state[slot] === 0) out += token[i];
+      else if (state[slot] === 1) out += LEET[token[i]] || '';
+      // state 2 appends nothing — the digit is read as padding.
+    }
+    folded.add(out);
+  }
+
+  const readings = new Set();
+  for (const candidate of folded) {
+    readings.add(candidate);
+    // Runs at both lengths. `runs` holds [start, length] for each run of 2+.
+    const runs = [];
+    for (let i = 0; i < candidate.length;) {
+      let j = i;
+      while (j < candidate.length && candidate[j] === candidate[i]) j++;
+      if (j - i >= 2) runs.push([i, j - i]);
+      i = j;
+    }
+    const used = runs.slice(0, MAX_RUNS);
+    const variants = 1 << used.length;
+    for (let mask = 0; mask < variants; mask++) {
+      let out = '';
+      let cursor = 0;
+      used.forEach(([start, length], index) => {
+        out += candidate.slice(cursor, start);
+        out += candidate[start].repeat((mask >> index) & 1 ? 2 : 1);
+        cursor = start + length;
+      });
+      out += candidate.slice(cursor);
+      readings.add(out);
+      if (readings.size > MAX_READINGS) return readings;
+    }
+  }
+  return readings;
+}
+
+const INTRA_WORD = /[._'&!,?"();:/-]/g;
+
+/**
+ * The token sets a name is judged on.
+ *
+ * TWO tokenizations, because either alone leaves a hole. Splitting on
+ * whitespace and then dropping separators inside each word catches "j.a.p";
+ * splitting on separators too catches "Team.Jap.Squad". Neither ever joins
+ * across a space, which is what keeps "Ape Exit" from becoming "apexit".
+ *
+ * Runs of single-character tokens are also joined, because "C H I N K" is a
+ * spelling, not five words.
+ */
+function tokenize(raw) {
+  const lower = squash(raw).toLowerCase();
+  const tokens = new Set();
+
+  const bySpace = lower.split(' ').filter(Boolean);
+  for (const word of bySpace) {
+    const stripped = word.replace(INTRA_WORD, '');
+    if (stripped) tokens.add(stripped);
+    for (const piece of word.split(INTRA_WORD)) if (piece) tokens.add(piece);
+  }
+
+  let run = [];
+  const flush = () => { if (run.length >= 3) tokens.add(run.join('')); run = []; };
+  for (const word of bySpace) {
+    const stripped = word.replace(INTRA_WORD, '');
+    if (stripped.length === 1) run.push(stripped);
+    else flush();
+  }
+  flush();
+
+  return tokens;
+}
+
+/**
+ * Why a user-authored string is refused, or null.
+ *
+ * Returns only that something was blocked — never which term matched. Naming
+ * it turns every refusal into an oracle for probing the list, and tells a user
+ * acting in good faith something they did not ask to read.
+ */
+function blockedContent(raw) {
+  // The hate code, and ONLY as a bare word — see HATE_CODE. Checked against the
+  // raw whitespace split so that "14.88" keeps its separator and stays a price.
+  for (const word of squash(raw).toLowerCase().split(' ')) {
+    if (word === HATE_CODE) return true;
+  }
+
+  const key = nameKey(raw);
+  for (const reading of tokenReadings(key)) {
+    // Strip the known innocent hosts first. Removing them leaves any genuine
+    // occurrence behind, so this cannot be used as cover.
+    let scrubbed = reading;
+    for (const host of ALLOWED_SUBSTRINGS) scrubbed = scrubbed.split(host).join('');
+    for (const bad of BLOCKED_SUBSTRINGS) if (scrubbed.includes(bad)) return true;
+  }
+
+  for (const token of tokenize(raw)) {
+    if (ALLOWED_TOKENS.has(token)) continue;
+    for (const reading of tokenReadings(token)) {
+      if (ALLOWED_TOKENS.has(reading)) continue;
+      for (const suffix of SUFFIXES) {
+        if (!reading.endsWith(suffix)) continue;
+        const stem = suffix ? reading.slice(0, -suffix.length) : reading;
+        if (!stem) continue;
+        if (BLOCKED_TOKENS.has(stem)) return true;
+        // "-ies" is the one suffix that rewrites its stem: trannies -> tranny.
+        if (suffix === 'ies' && BLOCKED_TOKENS.has(stem + 'y')) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Collapse every run of whitespace to one plain space, then trim.
  *
@@ -116,6 +400,10 @@ function tagProblem(raw) {
   const tag = normalizeTag(raw);
   if (!TAG_RE.test(tag)) return 'tag-shape';
   if (RESERVED_TAGS.has(tag)) return 'tag-reserved';
+  // A tag is a single token by construction (2-5 alphanumerics, no separators),
+  // so this is an exact match against the list once digits are read as letters.
+  // Kept as a separate code from 'tag-reserved' so the two stay distinguishable.
+  if (blockedContent(tag)) return 'tag-blocked';
   return null;
 }
 
@@ -130,6 +418,7 @@ function nameProblem(raw) {
   // a two-letter name is.
   if (key.length < NAME_MIN) return 'name-too-short';
   if (RESERVED_NAME_KEYS.some((reserved) => key.includes(reserved))) return 'name-reserved';
+  if (blockedContent(name)) return 'name-blocked';
   return null;
 }
 
@@ -137,6 +426,10 @@ function mottoProblem(raw) {
   const motto = cleanMotto(raw);
   if (motto.length > MOTTO_MAX) return 'motto-too-long';
   if (!MOTTO_RE.test(motto)) return 'motto-charset';
+  // The motto is the one field a founder can change after creation, so it is
+  // also the one that could be laundered past a create-time check. Same rule,
+  // same list — `handleClanUpdate` already routes through here.
+  if (blockedContent(motto)) return 'motto-blocked';
   return null;
 }
 
@@ -306,6 +599,8 @@ module.exports = {
   COUNTING_MEMBERS, MAX_MEMBERS, MIN_SEASON_ROUNDS, MIN_WEEK_ROUNDS,
   SEASON_END_TS, SEASON_WINDOW,
   TAG_RE, NAME_MIN, NAME_MAX, MOTTO_MAX, RESERVED_TAGS,
+  BLOCKED_TOKENS, BLOCKED_SUBSTRINGS, ALLOWED_SUBSTRINGS, ALLOWED_TOKENS,
+  HATE_CODE, blockedContent, tokenize,
   normalizeTag, normalizeName, normalizeCode, cleanMotto, nameKey,
   tagProblem, nameProblem, mottoProblem,
   contributionWindow, memberEntry, standing, publicEntry,

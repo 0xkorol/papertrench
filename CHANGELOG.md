@@ -100,6 +100,17 @@ website so the extension stays lightweight, open-source and disconnected.
   on the roster, labeled, reading *not counted*, with no figures borrowed
   into the clan's totals. Without that a clan would have been the way to
   launder exactly the records the boards stopped ranking.
+- **Clan names: swear freely, slurs are the line.** The narrowest filter that
+  still means something. Profanity, crude humour, drugs, violence as market
+  metaphor and trash talk about anyone all pass; slurs and sexualised-minor
+  terms do not. That is the entire list, and the refusal never repeats the
+  term back at you. Matching is on whole words rather than on the squashed
+  string, because squashing invents collisions nobody typed — an earlier
+  design rejected "Chin Kickers", "Flame Retardant" and "Spicy Gains", and a
+  red team later caught it refusing "Filled at 14.88" because a hate code
+  hides inside that price. Both failure directions are locked by a corpus of
+  real names and mottos in the suite. It is a floor rather than a guarantee,
+  and it says so out loud.
 - **Achievements, on the house doctrine.** Badges derived from your
   committed fills — and, exactly as in the extension, **none for profit,
   win streaks, or volume.** Losses taken without chasing the mint that took

@@ -217,10 +217,14 @@
           <div style="font-family:var(--mono);font-size:13px;color:var(--muted)">
             ${esc(String(standing.qualified))} of ${esc(String(clan.countingMembers))} qualified members</div>
         </div>
+        <!-- "N more members" would read as "N more people to recruit", but a
+             member already on the roster counts the moment they clear the bar.
+             Recruiting is one way to get there and not the only one. -->
         <p class="ar-note">This clan has no score yet, and is not shown with one. It needs
-          ${esc(String(standing.needed))} more member${standing.needed === 1 ? '' : 's'} with a
-          <strong>fully verified</strong> record and
-          ${mode === 'week' ? 'a closed round this week' : esc(String(clan.minSeasonRounds)) + ' closed rounds since joining'}.</p>`;
+          ${esc(String(standing.needed))} more qualifying
+          member${standing.needed === 1 ? '' : 's'} — a <strong>fully verified</strong> record and
+          ${mode === 'week' ? 'a closed round this week' : esc(String(clan.minSeasonRounds)) + ' closed rounds since joining'}.
+          Anyone already on the roster counts as soon as they clear that bar; nobody new has to join.</p>`;
       return;
     }
     scoreEl.innerHTML = `
@@ -400,9 +404,15 @@
           open: document.getElementById('m-open').checked,
         }),
       });
+      // The motto is the one field editable after creation, so it is the one
+      // place a founder meets the content filter after joining. A bare reason
+      // code would read as a glitch rather than a decision.
+      const why = body && body.reason === 'motto-blocked'
+        ? 'That motto won\'t fly. Profanity is fine here; slurs are not. Reword it and save again.'
+        : 'Could not save: ' + ((body && body.reason) || 'server-error');
       document.getElementById('m-status').innerHTML = body && body.ok
         ? '<p class="ar-note" style="color:var(--green)">Saved.</p>'
-        : `<p class="ar-note">Could not save: ${esc((body && body.reason) || 'server-error')}</p>`;
+        : `<p class="ar-note">${esc(why)}</p>`;
       if (body && body.ok) window.setTimeout(() => window.location.reload(), 600);
     });
 

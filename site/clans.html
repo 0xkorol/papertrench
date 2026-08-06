@@ -170,11 +170,15 @@
                 on the roster. Expelling someone can only cost you the five-member minimum.</p>
             </li>
             <li>
-              <b style="font-size:13px">Names are checked, not moderated.</b>
-              <p class="ar-note">Tags and names are validated for shape and uniqueness, and cannot be
-                changed after creation — a clan that could rename itself later could rename itself
-                into an impersonation. Report anything abusive on
-                <a href="https://github.com/OnlyTerp/papertrench/issues" target="_blank" rel="noopener">GitHub</a>.</p>
+              <b style="font-size:13px">Swear all you like. Slurs are the line.</b>
+              <p class="ar-note">The filter is deliberately narrow: profanity, crude humour, drugs,
+                violence-as-market-metaphor and trash talk about literally anyone all pass. What does
+                not pass is slurs and sexualised-minor content — that is the whole list. It is checked
+                against a corpus of real clan names so it does not reject yours by accident, and it is
+                a floor rather than a guarantee: report anything it misses on
+                <a href="https://github.com/OnlyTerp/papertrench/issues" target="_blank" rel="noopener">GitHub</a>.
+                Tags and names are also permanent — a clan that could rename itself later could rename
+                itself into an impersonation.</p>
             </li>
           </ol>
           <p class="ar-note" style="margin-top:16px">Full protocol:
@@ -346,6 +350,13 @@
       'name-too-long': 'Names are 3 to 24 characters.',
       'name-charset': 'Names use plain letters, digits, spaces and . _ \' & ! - only. Non-ASCII characters are refused because they can impersonate another clan.',
       'name-reserved': 'That name is reserved.',
+      // Deliberately plain, and deliberately not preachy. The bar here is low
+      // and saying so is the honest thing: someone who tripped it by accident
+      // should know it is narrow, and someone who tripped it on purpose does
+      // not need a lecture. The refusal never names the term it matched.
+      'name-blocked': 'That name won\'t fly. The bar is deliberately low — swear, be rude, be provocative — but slurs are out. Pick something else and carry on.',
+      'tag-blocked': 'That tag won\'t fly. The bar is deliberately low, but slurs are out. Try another.',
+      'motto-blocked': 'That motto won\'t fly. Profanity is fine here; slurs are not. Reword it and save again.',
       'motto-too-long': 'The motto is a little long.',
       'motto-charset': 'The motto uses plain text only.',
       'bad-code': 'That invite code does not match a clan. Codes are case-blind but otherwise exact.',
