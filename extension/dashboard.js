@@ -232,8 +232,11 @@ const store = {
 // overwrites the real one.
 let storageReadFailed = false;
 
-const SECTIONS = ['overview', 'game', 'calendar', 'journal', 'rounds', 'replay', 'leaderboard', 'coach', 'settings'];
+const SECTIONS = ['overview', 'game', 'calendar', 'journal', 'rounds', 'perps', 'replay', 'leaderboard', 'coach', 'settings'];
 let currentSection = 'overview';
+// The PERPS book (pt_perps). Deliberately a separate variable from
+// `state`: nothing in this file may sum the two.
+let perpsState = null;
 
 async function init() {
   await loadAll();
@@ -332,7 +335,14 @@ function renderInitError(err) {
  */
 function dataFingerprint() {
   const positions = Object.values(state.positions || {});
+  const perpsPositions = perpsState ? Object.values(perpsState.positions || {}) : [];
   return [
+    // Perps: a fill, a close or a liquidation must repaint the tab. Like
+    // the spot line above, position IDENTITY and SIZE only — never the
+    // mark, which would churn the fingerprint on every tick.
+    perpsState ? (perpsState.journal || []).length : -1,
+    perpsState ? (perpsState.rounds || []).length : -1,
+    perpsPositions.map((p) => `${p.id}:${p.marginUsd0}`).join(','),
     (state.journal || []).length,
     (state.rounds || []).length,
     positions.length,
@@ -506,7 +516,7 @@ function watchDashboardStorage() {
  */
 async function loadAll(changedKeys) {
   const wantFrames = !changedKeys || changedKeys.has('pt_frames');
-  const keys = ['pt_state', 'pt_settings', 'pt_turbo_stats', RP.STORAGE_KEY];
+  const keys = ['pt_state', 'pt_settings', 'pt_turbo_stats', 'pt_perps', RP.STORAGE_KEY];
   if (wantFrames) keys.push('pt_frames');
   const s = await store.get(keys);
   if (s === null) {
@@ -524,6 +534,12 @@ async function loadAll(changedKeys) {
   state = s.pt_state || E.defaultState(settings);
   if (wantFrames) frames = s.pt_frames || [];
   turboStats = s.pt_turbo_stats || {};
+  // The perps book is revision-wrapped by its content script ({rev, state}).
+  // A shape that is not a book degrades to null so the tab says "nothing
+  // yet" rather than throwing on a half-written record.
+  const perpsRec = s.pt_perps && s.pt_perps.state;
+  perpsState = perpsRec && typeof perpsRec === 'object' && perpsRec.positions
+    && typeof perpsRec.cashUsd === 'number' ? perpsRec : null;
   replays = RP.normalizeReplayList(s[RP.STORAGE_KEY]);
 
   // F-14: the chain lives in segmented storage. A failed read keeps the
@@ -719,6 +735,7 @@ function renderSection(id) {
   else if (id === 'calendar') renderCalendar(staged);
   else if (id === 'journal') renderJournal(staged);
   else if (id === 'rounds') renderRounds(staged);
+  else if (id === 'perps') renderPerps(staged);
   else if (id === 'leaderboard') renderLeaderboard(staged);
   else if (id === 'coach') renderCoach(staged);
   else if (id === 'settings') renderSettings(staged);
@@ -1641,6 +1658,157 @@ function renderAfterCell(r) {
     <span class="dim">/</span>
     <span class="${down <= -30 ? 'green' : 'dim'}">↓${down.toFixed(0)}%</span>
   </span>`;
+}
+
+/* ---------------------------------------------------------------- perps
+ *
+ * A SEPARATE BOOK, shown separately. The perps wallet, its rounds and its
+ * totals are never added to the spot numbers anywhere in this dashboard —
+ * F-30's rule, applied to the thing it was written about: two books must
+ * never be indistinguishable. A leveraged run of luck must not flatter the
+ * spot track record that graduation is measured on, and vice versa. Every
+ * figure here is labelled as perps and lives under its own tab.
+ *
+ * The user report this answers: "on the perp trade it doesn't transfer" —
+ * the fills were being recorded correctly in pt_perps and simply had
+ * nowhere to appear.
+ */
+
+function perpsUsd(n, opts) {
+  if (!Number.isFinite(n)) return '—';
+  const sign = n < 0 ? '-' : (opts && opts.signed && n > 0 ? '+' : '');
+  const a = Math.abs(n);
+  const digits = a >= 1000 ? 2 : a >= 1 ? 2 : a >= 0.01 ? 4 : 6;
+  return sign + '$' + a.toFixed(digits).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function perpsPx(n) {
+  if (!Number.isFinite(n)) return '—';
+  const a = Math.abs(n);
+  return n.toFixed(a >= 1000 ? 1 : a >= 10 ? 2 : a >= 0.1 ? 4 : 6)
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+const PERPS_VENUE_LABEL = { hyperliquid: 'Hyperliquid', jupiter: 'Jupiter', axiom: 'Axiom' };
+
+function renderPerps(el) {
+  const P = window.PaperPerps;
+  const book = perpsState;
+  const positions = book && book.positions ? Object.values(book.positions) : [];
+  const rounds = book && Array.isArray(book.rounds) ? book.rounds : [];
+  const totals = (book && book.totals) || {};
+  const archived = (book && book.archived) || {};
+
+  if (!book) {
+    el.innerHTML = `
+      <div class="card">
+        <h2>Perps</h2>
+        <p class="dim">No perps book yet. Open the ticket on a supported venue
+        (Hyperliquid or Jupiter Perps) and your first paper position will
+        appear here.</p>
+      </div>`;
+    return;
+  }
+
+  // Equity is marked at each position's LAST OBSERVED price, which is not
+  // necessarily current — the dashboard has no venue feed of its own. Say so
+  // rather than implying a live mark.
+  let openEquity = 0;
+  let anyMark = false;
+  const posRows = positions.map((pos) => {
+    const m = P && Number.isFinite(pos.lastPx) && pos.lastPx > 0 ? P.perpMark(pos, pos.lastPx) : null;
+    const uPnl = m && m.ok ? m.uPnlUsd : null;
+    const equity = m && m.ok ? m.equityUsd : null;
+    if (Number.isFinite(equity)) { openEquity += equity; anyMark = true; }
+    const liqPx = m && m.ok ? m.liqPx : pos.liqPx;
+    const long = pos.side === 1;
+    const gap = Number(pos.unverifiedGapSec) > 0
+      ? `<br><span class="dim" style="font-size:10.5px">${Math.round(pos.unverifiedGapSec / 60)} min unobserved — real carry would be higher</span>`
+      : '';
+    return `
+      <tr>
+        <td><strong>${esc(pos.market || '?')}</strong><br><span class="dim" style="font-size:10.5px">${esc(PERPS_VENUE_LABEL[pos.venue] || pos.venue || '')}</span></td>
+        <td class="${long ? 'green' : 'red'}" style="font-weight:700">${long ? 'LONG' : 'SHORT'} ${esc(String(pos.leverage || ''))}x</td>
+        <td class="num">${perpsUsd(pos.marginUsd0)}</td>
+        <td class="num">${perpsPx(pos.entryPx)}</td>
+        <td class="num">${perpsPx(pos.lastPx)}</td>
+        <td class="num red">${perpsPx(liqPx)}</td>
+        <td class="num ${Number(uPnl) >= 0 ? 'green' : 'red'}" style="font-weight:800">${perpsUsd(uPnl, { signed: true })}</td>
+        <td class="num">${perpsUsd(equity)}${gap}</td>
+      </tr>`;
+  }).join('');
+
+  const roundRows = rounds.slice().reverse().map((r) => {
+    const win = Number(r.netUsd) >= 0;
+    const liquidated = r.cause === 'liquidated';
+    const prov = r.provenance
+      ? `<br><span class="dim" style="font-size:10.5px">${esc(String(r.provenance).split(';')[0])}</span>`
+      : '';
+    return `
+      <tr>
+        <td><strong>${esc(r.market || '?')}</strong><br><span class="dim" style="font-size:10.5px">${esc(PERPS_VENUE_LABEL[r.venue] || r.venue || '')}</span></td>
+        <td class="${r.side === 'long' ? 'green' : 'red'}" style="font-weight:700">${esc(String(r.side || '').toUpperCase())} ${esc(String(r.leverage || ''))}x</td>
+        <td class="num">${perpsUsd(r.marginUsd)}</td>
+        <td class="num">${perpsPx(r.entryPx)} <span class="dim">→</span> ${perpsPx(r.exitPx)}</td>
+        <td class="num ${win ? 'green' : 'red'}" style="font-weight:800">${perpsUsd(r.netUsd, { signed: true })}</td>
+        <td class="num dim">${perpsUsd(r.feesUsd)}</td>
+        <td class="num dim">${perpsUsd(r.carryUsd)}</td>
+        <td>${liquidated
+          ? '<span class="red" style="font-weight:700">LIQUIDATED</span>'
+          : '<span class="dim">closed</span>'}${prov}</td>
+      </tr>`;
+  }).join('');
+
+  const trimmed = Number(archived.roundsCount) > 0
+    ? `<p class="dim" style="font-size:11.5px">${archived.roundsCount} older round${archived.roundsCount === 1 ? '' : 's'} archived out of this table. Totals below still include them.</p>`
+    : '';
+
+  el.innerHTML = `
+    <div class="card">
+      <h2>Perps <span class="dim" style="font-weight:400;font-size:13px">— a separate book</span></h2>
+      <p class="dim">These numbers never mix with your spot wallet. Leverage results
+      do not flatter (or damage) the spot track record that graduation is measured
+      on, so both stay honest.</p>
+      <div class="stats">
+        <div class="stat"><span class="stat-label">Paper balance</span><span class="stat-value">${perpsUsd(book.cashUsd)}</span></div>
+        <div class="stat"><span class="stat-label">Open positions</span><span class="stat-value">${positions.length}</span></div>
+        <div class="stat"><span class="stat-label">Closed rounds</span><span class="stat-value">${rounds.length}</span></div>
+        <div class="stat"><span class="stat-label">Realized</span><span class="stat-value ${Number(totals.realizedUsd) >= 0 ? 'green' : 'red'}">${perpsUsd(totals.realizedUsd, { signed: true })}</span></div>
+      </div>
+      <div class="stats">
+        <div class="stat"><span class="stat-label">Fees paid</span><span class="stat-value">${perpsUsd(totals.feesUsd)}</span></div>
+        <div class="stat"><span class="stat-label">Funding paid</span><span class="stat-value">${perpsUsd(totals.fundingPaidUsd)}</span></div>
+        <div class="stat"><span class="stat-label">Borrow paid</span><span class="stat-value">${perpsUsd(totals.borrowPaidUsd)}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Open positions</h3>
+      ${positions.length ? `
+      <p class="dim" style="font-size:11.5px">Marked at each position's last OBSERVED
+      price${anyMark ? '' : ' (none recorded yet)'} — this page has no live venue feed,
+      so these are not live ticks.</p>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Market</th><th>Side</th><th class="num">Margin</th><th class="num">Entry</th>
+          <th class="num">Last mark</th><th class="num">Liq.</th><th class="num">Unrealized</th><th class="num">Equity</th>
+        </tr></thead>
+        <tbody>${posRows}</tbody>
+      </table></div>` : '<p class="dim">Nothing open.</p>'}
+    </div>
+
+    <div class="card">
+      <h3>Closed rounds</h3>
+      ${trimmed}
+      ${rounds.length ? `
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Market</th><th>Side</th><th class="num">Margin</th><th class="num">Entry → Exit</th>
+          <th class="num">Net</th><th class="num">Fees</th><th class="num">Carry</th><th>Outcome</th>
+        </tr></thead>
+        <tbody>${roundRows}</tbody>
+      </table></div>` : '<p class="dim">No closed perps rounds yet.</p>'}
+    </div>`;
 }
 
 function renderRounds(el) {

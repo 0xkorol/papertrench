@@ -972,6 +972,10 @@ function fingerprintOf(stateObj) {
   const src = fnBlock(dashJs, 'function dataFingerprint()');
   const sandbox = {
     state: stateObj, frames: [], replays: [], recordings: {}, settings: {},
+    // The fingerprint also covers the PERPS book, which is a separate
+    // module variable and a separate storage key. Absent here on purpose:
+    // a dashboard with no perps activity must still fingerprint cleanly.
+    perpsState: null,
     JSON, Number, Object,
   };
   vm.createContext(sandbox);
