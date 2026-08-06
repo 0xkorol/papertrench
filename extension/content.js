@@ -68,6 +68,11 @@
   let thesisComposerOpen = false;
   // A buy requested before the first quote existed, to be executed on arrival.
   let armedBuy = null;
+  // Trade ids already drawn on THIS page's chart. What makes journal replay
+  // idempotent: state adoption re-runs it on every external write (a row
+  // snipe in another tab), and a fill already on the chart must never draw
+  // twice. Cleared exactly where the bridge is told to clear its marks.
+  const drawnFillIds = new Set();
   const ARMED_BUY_TTL_MS = 60_000;
   let lastRenderedPrice = null; // drives the tick flash
   let lastPriceAt = 0;
@@ -192,6 +197,7 @@
       svgFallbackActive = true;
       sendPadreMarker('paper-marker-clear');
       sendPadreMarker('paper-lines-clear');
+      drawnFillIds.clear(); // the bridge forgot; the replay ledger must too
       if (CM && usesSvgMarkers()) {
         CM.clearMarkers();
         CM.initChartMarkers();
@@ -864,6 +870,7 @@
       // C-19: a fresh token restarts the native-chart discovery window on
       // sites outside the known-native set.
       beginNativeProbe();
+      drawnFillIds.clear(); // fills drawn for the previous token
       if (usesNativeChart()) {
         // Padre uses its own TradingView getMarks pipeline. Clear native paper
         // marks for the previous token; do not mount the generic SVG overlay.
@@ -884,6 +891,7 @@
     }
     if (!token) {
       stopPriceLoop();
+      drawnFillIds.clear();
       if (CM) CM.destroyChartMarkers();
       if (usesNativeChart()) {
         sendPadreMarker('paper-marker-clear');
@@ -1507,6 +1515,10 @@
     // this event-driven refresh is what keeps streak math out of the tick path.
     refreshTrenchCache();
     syncAveragePriceLines();
+    // A fill adopted from another tab (row snipe on a list page while this
+    // chart was open) must appear on THIS chart too — replay is idempotent
+    // via drawnFillIds, so already-drawn fills never duplicate.
+    restoreMarkersFromJournal();
   }
 
   /**
@@ -1588,6 +1600,8 @@
       (t) => t.mint === token.mint && (t.side === 'buy' || t.side === 'sell')
     ).reverse(); // journal is newest-first; we want chronological
     for (const f of fills) {
+      if (f.id && drawnFillIds.has(f.id)) continue;
+      if (f.id) drawnFillIds.add(f.id);
       drawFillOnChart({
         ts: f.ts,
         side: f.side,
@@ -1857,6 +1871,8 @@
         await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'buy' });
+        // Adoption replay must know this fill is already on the chart.
+        drawnFillIds.add(trade.id);
         drawFillOnChart({
           ts: markerTs,
           side: 'buy',
@@ -2026,6 +2042,8 @@
         await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'sell' });
+        // Adoption replay must know this fill is already on the chart.
+        drawnFillIds.add(trade.id);
         drawFillOnChart({
           ts: markerTs,
           side: 'sell',
@@ -3978,6 +3996,7 @@
     // Chart drawings belong to the old wallet.
     sendPadreMarker('paper-marker-clear');
     sendPadreMarker('paper-lines-clear');
+    drawnFillIds.clear();
     if (site && site.id === 'gmgn') sendPadreMarker('gmgn-lines-clear');
     if (CM && usesSvgMarkers()) { CM.clearMarkers(); CM.clearAverageLines(); }
     marks = [];
@@ -5596,6 +5615,7 @@
     sendPadreMarker('paper-marker-clear');
     sendPadreMarker('paper-lines-clear');
     sendPadreMarker('gmgn-lines-clear');
+    drawnFillIds.clear();
     // One belt-and-braces message that clears every bridge artifact and
     // stops its line re-assert sweep (see 'standdown' in price-bridge.js).
     sendPadreMarker('standdown');

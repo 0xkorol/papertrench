@@ -62,6 +62,29 @@ test('a dollar buy on a still-resolving token arms in dollars and converts at fi
     'the guard deferred at request time must run at fire time');
 });
 
+test('a fill made off-chart appears when the chart is entered — and never draws twice', () => {
+  // Maintainer report: row-snipe a coin from a list page, open its chart —
+  // bubble and average line must be there on load-in. Two halves: resolve
+  // replays the journal (page entry), and ADOPTION replays it too (fill
+  // landed from another tab while this chart was open). Idempotence rides
+  // drawnFillIds, which forgets exactly when the bridge is told to forget.
+  const adoptAt = content.indexOf('function adoptState(');
+  assert.ok(adoptAt !== -1);
+  const adoptBlock = content.slice(adoptAt, content.indexOf('\n  }', adoptAt) + 4);
+  assert.match(adoptBlock, /restoreMarkersFromJournal\(\);/,
+    'adopting external state must replay new fills onto the open chart');
+  const restoreAt = content.indexOf('function restoreMarkersFromJournal(');
+  const restoreBlock = content.slice(restoreAt, content.indexOf('\n  }', restoreAt) + 4);
+  assert.match(restoreBlock, /if \(f\.id && drawnFillIds\.has\(f\.id\)\) continue;/,
+    'replay must skip fills already on this chart');
+  const liveNotes = content.match(/drawnFillIds\.add\(trade\.id\);/g) || [];
+  assert.ok(liveNotes.length >= 2,
+    'live buy AND sell paths must register their fills with the replay ledger');
+  const clears = content.match(/drawnFillIds\.clear\(\);/g) || [];
+  assert.ok(clears.length >= 5,
+    'every bridge marker-clear site must also clear the replay ledger — token switch, no-token, SVG handoff, wallet reset, teardown');
+});
+
 test('the engine defaults the USD ladder and records the dollars the trader tapped', () => {
   assert.deepEqual(E.DEFAULT_SETTINGS.presetsBuyUsd, [10, 100, 500, 1000],
     'the default USD ladder is the venue\'s own');

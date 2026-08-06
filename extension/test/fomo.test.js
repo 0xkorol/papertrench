@@ -146,11 +146,17 @@ function runFomoBridge(opts = {}) {
         timeScale: () => ({ timeToCoordinate: (sec) => (sec - paneT0Sec) / 10 }),
         mainSeries: () => ({
           priceScale: () => ({ priceToCoordinate: (v) => 420 - v / 50000 }),
-          firstValue: () => 1.4e6,
+          // Zooms and scale rebuilds null this out for a frame or two on
+          // the real chart — tests drive that via env.setFirstValue.
+          firstValue: () => fixtureFirstValue,
         }),
       }),
     },
   };
+  let fixtureFirstValue = 1.4e6;
+  // Models entering a token page: the chart iframe mounts AFTER the token
+  // resolves (and after restored journal fills were already posted).
+  let chartVisible = opts.chartVisible !== false;
   const brokerSurface = {
     createOrderLine: () => Promise.resolve(makeAsyncAdapter(orderLines)),
     createExecutionShape: () => Promise.resolve(makeAsyncAdapter(execShapes)),
@@ -218,8 +224,8 @@ function runFomoBridge(opts = {}) {
 
   const doc = {
     getElementById: () => null,
-    querySelector: (sel) => (String(sel).includes('iframe[id^="tradingview_"]') ? fomoIframe : null),
-    querySelectorAll: (sel) => (String(sel).includes('iframe[id^="tradingview_"]') ? [fomoIframe] : []),
+    querySelector: (sel) => (chartVisible && String(sel).includes('iframe[id^="tradingview_"]') ? fomoIframe : null),
+    querySelectorAll: (sel) => (chartVisible && String(sel).includes('iframe[id^="tradingview_"]') ? [fomoIframe] : []),
     createElement: (tag) => makeFakeEl(tag),
     body: makeFakeEl('body'),
   };
@@ -293,6 +299,8 @@ function runFomoBridge(opts = {}) {
     fomoDatafeed,
     setNow(t) { fakeNow = t; },
     advance(ms) { fakeNow = (fakeNow === null ? RealDate.now() : fakeNow) + ms; },
+    setFirstValue(v) { fixtureFirstValue = v; },
+    setChartVisible(v) { chartVisible = Boolean(v); },
     subscribed: () => subscribed,
     send(type, payload) {
       listeners.message({
@@ -576,6 +584,106 @@ test('F-39: standdown removes every bubble and the overlay host itself', async (
   env.send('standdown');
   assert.equal(env.doc.body.children.find((el) => 'data-pt-bubbles' in el.attrs), undefined,
     '"PaperTrench off" must leave the page exactly as it found it');
+});
+
+function chipOf(env) {
+  const host = env.doc.body.children.find((el) => 'data-pt-bubbles' in el.attrs);
+  return host && host.children.find((el) => el.attrs['data-pt-bubble']);
+}
+
+test('F-32-for-bubbles: the chip level FREEZES — quiet ledgers, moving closes and zoom churn never move or hide it', async () => {
+  // Maintainer field report (2026-08-05, first live test of the layer):
+  // "for a second you can see it, but then it disappears… blinks in while
+  // zooming… moving a little bit with the chart." Three symptoms, one
+  // cause: the level was recomputed every frame from moving evidence.
+  const env = runFomoBridge({ liveShape: true });
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env);
+  sendMcapLines(env);
+  await microtasks();
+  env.send('paper-marker', {
+    side: 'buy', priceNative: 0.0000065, priceUsd: 0.0013, mcap: 1300000,
+    solAmount: 0.5, ts: t0, symbol: 'Doom',
+  });
+  env.runTimeouts();
+  await microtasks();
+  const chip = chipOf(env);
+  assert.ok(chip && chip.style.visibility === 'visible', 'the chip draws');
+  const placed = chip.style.transform;
+
+  // 1) A quiet token: every ledger entry ages past BAR_CLOSE_FRESH_MS with
+  //    no new bars. The fill did not stop being real — the chip must stay.
+  env.advance(60_000);
+  env.runTimers(); // sweep -> drawShapeFallback -> fresh layout
+  assert.equal(chip.style.visibility, 'visible', 'a stale ledger must not evaporate a placed fill');
+  assert.equal(chip.style.transform, placed, 'a stale ledger must not move a placed fill');
+
+  // 2) The chart keeps ticking and the spec keeps re-posting (C-01): the
+  //    close and the current price both move — the LEVEL is already frozen.
+  const live = env.subscribed();
+  live.callback({ time: Date.now(), close: 9_000_000, volume: 1 });
+  env.send('paper-lines', {
+    enabled: true, axisBasis: 'mcap',
+    currentPriceNative: 0.000009, currentPriceUsd: 0.0018,
+    avgBuyNative: 0.0000065, avgBuyUsd: 0.0013, avgBuyMcap: 1300000,
+  });
+  await microtasks();
+  env.runTimers();
+  assert.equal(chip.style.transform, placed,
+    'a moving market must never move a FILLED order\'s chip — the level is frozen (F-32)');
+
+  // 3) Zoom churn: firstValue nulls out for a frame. Keep position, no blink.
+  env.setFirstValue(null);
+  env.runTimers();
+  assert.equal(chip.style.visibility, 'visible', 'a transient internals gap must not blink the chip');
+  assert.equal(chip.style.transform, placed);
+  env.setFirstValue(1.4e6);
+  env.runTimers();
+  assert.equal(chip.style.visibility, 'visible');
+});
+
+test('F-39 entry replay: fills posted BEFORE the chart exists draw once it appears — the off-chart snipe scenario', async () => {
+  // Maintainer: quick-buy from a row snipe off the chart, then open the
+  // chart — bubble and average line must be there on load-in. The content
+  // script already replays the journal at resolve time; this locks the
+  // bridge half: marks and specs that arrive while NO chart exists must
+  // draw the moment discovery finds one.
+  const env = runFomoBridge({ liveShape: true, chartVisible: false });
+  const t0 = Date.now();
+  env.setNow(t0);
+  announceToken(env);
+  env.runTimers(); // discovery finds nothing — the iframe is not mounted yet
+  sendMcapLines(env);
+  env.send('paper-marker', {
+    side: 'buy', priceNative: 0.0000065, priceUsd: 0.0013, mcap: 1300000,
+    solAmount: 0.5, ts: t0, symbol: 'Doom',
+  });
+  env.runTimeouts(); // 2s verification: fallback active, still nothing to draw on
+  await microtasks();
+  assert.equal(chipOf(env), undefined, 'no chart, no chip — nothing to glue to yet');
+
+  // The chart mounts (page finished loading) and its datafeed subscribes
+  // under the composite Codex symbol — the needle gate must recognize it.
+  env.setChartVisible(true);
+  env.runTimers(); // sweep: discovery + datafeed patch
+  env.fomoDatafeed.subscribeBars(
+    { ticker: `${FOMO_MINT.toUpperCase()}:${FOMO_NETWORK}` }, '1', () => {}, `${FOMO_MINT}_#_USD_-_1`
+  );
+  env.subscribed().callback({ time: Date.now(), close: LIVE_BAR_CLOSE, volume: 1 });
+  env.runTimers(); // sweep retry: fallback draw finds the chart now
+  await microtasks();
+  env.runTimers();
+  const chip = chipOf(env);
+  assert.ok(chip, 'the restored fill draws once the chart exists');
+  assert.equal(chip.style.visibility, 'visible');
+  const m = CHIP.exec(chip.style.transform || '');
+  const level = LIVE_BAR_CLOSE * (0.0000065 / CURRENT_PRICE_NATIVE);
+  const expectedY = 50 + 4 + (420 - level / 50000) - 10;
+  assert.ok(Math.abs(Number(m[2]) - expectedY) < 0.6,
+    `the late-drawn chip still lands on the exact fill level, got ${m && m[2]}`);
+  const line = env.lineShapes.find((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.ok(line, 'the average line also draws on late chart arrival');
 });
 
 /* ------------------------------------------------------------------ *

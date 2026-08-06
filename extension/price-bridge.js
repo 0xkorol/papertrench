@@ -1855,6 +1855,14 @@
     for (const el of bubbleLayer.nodes.values()) el.style.visibility = 'hidden';
   }
 
+  // Consecutive frames where the chart's internals were unreadable. Zooms
+  // and scale rebuilds null out firstValue for a frame or two — hiding on
+  // every such frame made the chips BLINK (maintainer field report,
+  // 2026-08-05). Positions are kept through short gaps; only a persistent
+  // gap (chart genuinely gone) hides them.
+  let bubbleBadFrames = 0;
+  const BUBBLE_BAD_FRAME_LIMIT = 30; // ~0.5 s at 60 fps
+
   function layoutBubbles() {
     const chart = bubbleLayer.chart;
     const host = bubbleLayer.host;
@@ -1868,7 +1876,12 @@
         ? frame.getBoundingClientRect() : { left: 0, top: 0 };
       paneRect = internals && internals.paneDiv.getBoundingClientRect();
     } catch (_) { /* geometry unavailable this frame */ }
-    if (!internals || !paneRect) { hideAllBubbles(); return false; }
+    if (!internals || !paneRect) {
+      bubbleBadFrames += 1;
+      if (bubbleBadFrames >= BUBBLE_BAD_FRAME_LIMIT) hideAllBubbles();
+      return false;
+    }
+    bubbleBadFrames = 0;
 
     const capSec = freshBarTimeSec();
     const stacks = new Map();
@@ -1880,7 +1893,19 @@
       if (!levels) continue;
       const el = bubbleNode(mark, levels);
       if (!el.parentNode) host.appendChild(el);
-      const level = shapeLevelFor(levels);
+      // F-32, applied to bubbles (maintainer field report: the chip "moved
+      // a little with the chart", vanished seconds after filling, and
+      // blinked through zooms): a fill's level is a CONSTANT in axis units.
+      // Recomputing it per frame rode the moving close against a throttled
+      // current price, and evaporated entirely once every ledger entry aged
+      // past BAR_CLOSE_FRESH_MS on a quiet token. The level is computed
+      // ONCE, when evidence first allows, then FROZEN on the mark; frames
+      // only ever re-derive its screen coordinates.
+      let level = levels.frozenLevel;
+      if (!(level > 0)) {
+        level = shapeLevelFor(levels);
+        if (level > 0) levels.frozenLevel = level;
+      }
       // F-31: never place a fill ahead of the chart's newest FRESH bar.
       const t = capSec > 0 && mark.time > capSec ? capSec : mark.time;
       let x = null;
@@ -2404,9 +2429,17 @@
     }
 
     if (type === 'paper-lines') {
+      // A frozen bubble level is a constant IN ITS AXIS UNIT. If the chart
+      // flips unit (Price <-> MCap), every frozen level is stale evidence —
+      // clear them so the next frame re-freezes in the new unit.
+      const prevBasis = paperLineSpec && paperLineSpec.axisBasis;
+      const nextBasis = typeof (payload && payload.axisBasis) === 'string' ? payload.axisBasis : null;
+      if (prevBasis !== nextBasis) {
+        for (const levels of paperMarkLevels.values()) levels.frozenLevel = null;
+      }
       paperLineSpec = {
         enabled: Boolean(payload && payload.enabled),
-        axisBasis: typeof (payload && payload.axisBasis) === 'string' ? payload.axisBasis : null,
+        axisBasis: nextBasis,
         currentPriceNative: numberValue(payload && payload.currentPriceNative),
         currentPriceUsd: numberValue(payload && payload.currentPriceUsd),
         avgBuyUsd: numberValue(payload && payload.avgBuyUsd),

@@ -375,6 +375,30 @@ end-to-end feed prewatch test (bare curve address → watched mint → primed
 quote → reserve account remembered), bootstrap acceptance/ambiguity tests,
 and the existing armed-buy suite.
 
+**F-40 · S1 · The F-39 bubble showed "for a second", then vanished — and blinked through zooms — because its level was recomputed every frame from moving evidence; off-chart snipes also never replayed onto an already-open chart**
+`price-bridge.js` layoutBubbles · `content.js` adoptState · fomo.family,
+maintainer field test minutes after F-39 shipped ("for a 2nd you can see
+it, but then it disappears… blinks in while zooming… moving a little bit
+with the chart") · **fixed (unreleased)** — F-32's lesson, relearned one
+layer down: a fill's level is a CONSTANT in axis units, but the bubble
+layer called shapeLevelFor per FRAME — so the chip rode the moving close
+against the 2s-throttled current price ("moving with the chart"), and the
+moment every ledger entry aged past BAR_CLOSE_FRESH_MS on a quiet token
+the level evaporated and the chip hid ("disappears"). Zoom churn nulls
+mainSeries().firstValue() for a frame or two; hiding on every such frame
+was the "blink". Three changes: the level is computed once, FROZEN on the
+mark, and only re-derived to screen coordinates each frame (frozen levels
+invalidate on an axis-unit flip); a transient internals gap keeps last
+positions and only a persistent gap (~0.5 s) hides; and the row-snipe
+report exposed the adoption hole — a fill landing from ANOTHER tab synced
+the average line but never replayed the journal onto the open chart. Fills
+now replay idempotently (per-page drawnFillIds, cleared exactly where the
+bridge's marks are cleared) at resolve AND at adoption. Locked by a
+stability test that replays the maintainer's exact report (quiet ledger,
+moving market, firstValue churn — proven failing against the very build
+they tested), an entry-replay test (marks posted before any chart exists
+draw the moment discovery finds one), and adoption-replay source locks.
+
 **F-39 · S1 · fomo STILL showed no buys and no lines after F-38 — the standalone charting library THROWS on every broker draw call, and the fixture implemented what the field refuses**
 `price-bridge.js` syncLineSlot/spawnExecutionShape · fomo.family, maintainer
 report ("I asked you to fix a function. And you don't.") ·
