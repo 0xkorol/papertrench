@@ -5,6 +5,69 @@ details live in the commit messages.
 
 ## Unreleased
 
+**Paper perps on Hyperliquid and Jupiter.** Leverage, on the venues you
+actually use, with the venue's own costs. This is the first instrument in
+PaperTrench that can take your entire position in a single move: perps are
+not spot with a bigger number, and the notes below say plainly what is and
+isn't modelled yet. Open a paper long or short from a ticket that sits on the
+venue's own page, priced off the venue's own feed. $10 at 20x and $5 at 100x
+are both one slider away — and the ticket shows you what each actually costs
+before you click.
+
+- **Four numbers before every entry.** Position size, the fee you'll pay to
+  open, your liquidation price with how far away it is, and what the position
+  costs you per hour to hold. On Hyperliquid the liquidation distance is also
+  shown in ATRs — "1.3 ATR away on the 5m" tells you something a percentage
+  can't: whether ordinary noise reaches it.
+- **Real venue costs, not a house average.** Hyperliquid charges its own taker
+  and maker fees and funds hourly at the venue's live rate; Jupiter charges its
+  6 bps base fee, its own price-impact fee from the pool's published scalar,
+  and borrow at the hourly rate the venue displays. Longs pay funding when the
+  rate is positive and receive it when it's negative, exactly as the venue does
+  it.
+- **If the venue's live rate can't be read, the ticket won't open.** A perp
+  without funding isn't the instrument — it's a fantasy where leverage is free.
+  The ticket stays closed and says why.
+- **Liquidation is modelled, not simulated loosely.** Isolated margin: the most
+  a position can lose is the margin you put into it. Hyperliquid liquidations
+  fill at the venue's trigger price and return whatever survives; on Jupiter, a
+  liquidation forfeits all remaining collateral, which is what Jupiter does. The
+  ticket says out loud that paper liquidations fill at the trigger and real ones
+  usually fare worse.
+- **Positions keep costing you while you're away.** Funding and borrow accrue
+  while the tab is open, and when you come back after closing it, the position
+  is settled against the venue's own funding history and candles. If the price
+  crossed your liquidation while you were gone, the round is reconstructed from
+  that data and labelled as reconstructed. If the venue's data doesn't cover the
+  gap, nothing is invented — the time is recorded as unobserved and the row
+  tells you your real cost would have been higher.
+- **Your fills appear on the venue's chart.** Every entry, close and
+  liquidation draws where it happened, with a line for your entry price and a
+  line for your liquidation price — the number that actually decides a
+  leveraged trade.
+- **A perps tab in the dashboard, kept separate on purpose.** Balance, open
+  positions, closed rounds, and fees, funding and borrow counted apart. Nothing
+  from the perps book is ever added to a spot figure: a lucky leveraged run must
+  not flatter the spot record you're graduating against, and a liquidation must
+  not damage it. Equity there is marked at each position's last *observed*
+  price and says so, because that page has no live venue feed.
+
+**What perps does not do yet**
+
+- **Hyperliquid and Jupiter Perps only.** Axiom's perps route isn't supported.
+- **Isolated margin only.** No cross-margin.
+- **Hyperliquid liquidations use base-tier maintenance margin.** Accurate at
+  paper sizes; the tiers that apply to very large positions aren't modelled.
+- **Jupiter fees cover the base and price-impact components.** The extra
+  charge that applies when the pool's open interest is heavily imbalanced
+  isn't included, so Jupiter costs can read slightly low in those conditions.
+- **The TA strip is Hyperliquid-only**, because Jupiter has no candle source
+  we've verified. On Jupiter it shows nothing rather than guessing.
+- **Perps rounds don't affect your grades, streaks, rank or graduation.** The
+  spot record stays the spot record.
+- **A liquidation that happens while your browser is closed is discovered when
+  you next open the page**, not at the moment it occurs.
+
 **Market cap alerts — "tell me when it hits 500K."** Requested by
 meestershrek. Arm an alert above or below any market cap from the panel and
 get pinged when the market gets there. Type it the way you say it — `500K`,
@@ -248,10 +311,38 @@ website so the extension stays lightweight, open-source and disconnected.
   report: a first submission can no longer declare a bankroll smaller than
   its own fills prove spending (`bankroll-too-small` — you cannot have
   spent 4 ◎ from a 0.01 ◎ balance).
-- **Provenance note.** The clan backend (worker routes, `core/clan.js`,
-  schema) reached `main` across 710aa1e, bfd2b65 and this commit; 710aa1e's
-  message describes only the ranking-security work it was meant to carry.
-  The clan UI lands separately.
+- **What "verified" means, and what it does not.** Verified means every link
+  in your chain was re-hashed, your book was replayed from the raw fills on
+  our side rather than trusted from your file, and every fill's price was
+  checked against what that token actually traded at that minute. It does not
+  mean we watched you trade. A hash chain proves a history is internally
+  consistent — that it has not been edited since it was written — and
+  `attest.js` is open source, so someone determined can fabricate a history
+  and compute perfectly valid hashes for it. Re-pricing against real market
+  data is what catches that, and it catches exactly one thing: prices that
+  never existed. Someone who fabricates using real prices at real times is
+  claiming perfect hindsight, which the market bounds but cannot disprove.
+  Two things make that expensive rather than free: your declared bankroll
+  cannot be smaller than your own fills prove you spent, and once you have
+  submitted, your chain can only ever be extended — never replaced — so
+  hindsight is available before your first submission and never again. We
+  would rather say this plainly than let one word carry more than it earns.
+- **Paper trading is not trading.** No slippage on size you could never have
+  filled, no failed transactions, no MEV, and none of the weight that arrives
+  when the money is real. What it does rehearse is the part most accounts
+  actually die of: sizing, exits, and not chasing the coin that just took
+  your money.
+- **One ranked record per X account is expensive to sybil, not impossible.**
+  Ranking is bound to a real, public X account, so running ten identities
+  costs ten accounts with ten histories. That is a price, not a wall.
+- **Sign-in needs a Chromium browser for now.** The Arena's API lives on a
+  different domain than the site, and Safari and Firefox refuse or partition
+  cross-domain session cookies by default — a reasonable privacy stance our
+  current setup trips over. On those browsers you can complete the X sign-in
+  and still land signed out. The page now tells you that is what happened
+  instead of pretending you never signed in; Chrome, Edge and Brave hold the
+  session meanwhile. Moving the API onto papertrench.com fixes it properly
+  and is a DNS change we have not made yet.
 
 ## v2.11.1 — 2026-08-05
 
