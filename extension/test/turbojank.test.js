@@ -384,13 +384,16 @@ test('no longtask support: the sampler declines to run at all', () => {
   assert.equal(s.intervals.length, 0);
 });
 
-test('the sampler rides the master switch alone (source contract)', () => {
+test('the sampler rides the SPEED toggles (source contract)', () => {
+  // Maintainer (2026-08-05): jank sampling is speed telemetry — it follows
+  // the speed toggles and survives "PaperTrench off" like the rest of the
+  // speed plane; with no speed feature on there is nothing to receipt.
   const initFn = contentJs.slice(
     contentJs.indexOf('async function init()'),
     contentJs.indexOf('if (document.readyState'),
   );
-  assert.match(initFn, /if \(settings\.appEnabled !== false\) startJankSampling\(\);/,
-    'boot gates sampling on the master switch, before the overlay early-return');
+  assert.match(initFn, /if \(settings\.warmXLinksEnabled \|\| settings\.warmEverywhereEnabled\) startJankSampling\(\);/,
+    'boot gates sampling on the speed toggles, before the overlay early-return');
   const initTail = initFn.slice(initFn.indexOf('startJankSampling()'));
   assert.match(initTail, /appEnabled === false \|\| !settings\.overlayEnabled\) return/,
     'the overlay-off return comes AFTER sampling starts — view-only pages still measure');
@@ -399,9 +402,10 @@ test('the sampler rides the master switch alone (source contract)', () => {
     contentJs.indexOf('function watchStorage()'),
     contentJs.indexOf('const stateChange'),
   );
-  assert.match(settingsFlip, /if \(settings\.appEnabled !== false\) startJankSampling\(\);/);
+  assert.match(settingsFlip, /if \(settings\.warmXLinksEnabled \|\| settings\.warmEverywhereEnabled\) startJankSampling\(\);/,
+    'a settings flip re-derives sampling from the speed toggles');
   assert.match(settingsFlip, /else stopJankSampling\(\);/,
-    'flipping the master switch off silences the sampler immediately');
+    'turning the last speed toggle off silences the sampler immediately');
 });
 
 test('the background routes pt_turbo_jank (source contract)', () => {

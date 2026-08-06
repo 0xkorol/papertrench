@@ -96,19 +96,26 @@ function runFomoBridge(opts = {}) {
     onChartReady: () => {},
   };
   const fiberParent = {};
-  Object.defineProperty(fiberParent, '__reactFiber$fomo', {
-    value: {
-      return: null,
-      child: null,
-      sibling: null,
-      memoizedState: { memoizedState: { current: fomoWidget }, next: null },
-    },
-    enumerable: true,
-  });
+  // opts.liveShape models what the REAL site showed on 2026-08-05 (probed in
+  // a live browser): NO fiber anywhere, the widget api only reachable as
+  // contentWindow.tradingViewApi, and the options bag (with the datafeed)
+  // parked in window[frameId]. The fiber shape below is kept for the legacy
+  // tests but is NOT what production serves.
+  if (!opts.liveShape) {
+    Object.defineProperty(fiberParent, '__reactFiber$fomo', {
+      value: {
+        return: null,
+        child: null,
+        sibling: null,
+        memoizedState: { memoizedState: { current: fomoWidget }, next: null },
+      },
+      enumerable: true,
+    });
+  }
   const fomoIframe = {
     id: 'tradingview_90d6a',
     parentElement: fiberParent,
-    contentWindow: null, // the iframe api path must NOT be what carries this
+    contentWindow: opts.liveShape ? { tradingViewApi: { activeChart: () => fomoChart } } : null,
     getClientRects: () => [{}],
     clientWidth: 800,
   };
@@ -142,6 +149,7 @@ function runFomoBridge(opts = {}) {
     postMessage(message) { emitted.push(message); },
   };
   win.window = win;
+  if (opts.liveShape) win[fomoIframe.id] = { datafeed: fomoDatafeed };
 
   const timeouts = new Map();
   let timeoutSeq = 0;
@@ -224,6 +232,38 @@ function bootWithLiveBar(env, close = LIVE_BAR_CLOSE) {
 /* ------------------------------------------------------------------ *
  * 1. Discovery and hook status
  * ------------------------------------------------------------------ */
+
+test('F-38: the LIVE fomo shape — options bag + contentWindow api, NO fiber — hooks bars and draws lines', async () => {
+  // Maintainer: "FOMO still doesn't show the buys on the chart nor the
+  // line." Reverse-engineered on the real site (2026-08-05): production
+  // serves NO fiber; the widget api is contentWindow.tradingViewApi and the
+  // datafeed rides the options bag in window[frameId]. The old fiber-shaped
+  // fixture passed while production showed nothing — this test IS the live
+  // shape, and the composite discovery must hook bars and draw from it.
+  const env = runFomoBridge({ liveShape: true });
+  env.runTimers(); // sweep: discovery finds the pseudo widget + patches the bag's datafeed
+
+  // The site (re)subscribes after the patch — the next subscription in prod.
+  env.fomoDatafeed.subscribeBars({ ticker: 'LIVE' }, '1S', () => {}, 'live-sub');
+  const sub = env.subscribed();
+  assert.ok(sub, 'the subscription flows through the patched datafeed');
+  sub.callback({ time: 1_800_000_032_000, close: 8_200_000 }); // mcap-unit close
+  assert.ok(env.emitted.some((m) => m.type === 'tick' && m.payload && m.payload.source === 'padre-chart-bar'),
+    'a live fomo bar becomes a bridge tick without any fiber in sight');
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: 5e-9,
+    currentPriceUsd: 0.0082,
+    avgBuyUsd: 0.0164, // entry at 2x current => line at 2x the close
+  });
+  await microtasks();
+  const line = env.orderLines.find((l) => l.values.setPrice !== undefined);
+  assert.ok(line, 'the mcap average line draws on fomo');
+  assert.ok(Math.abs(line.values.setPrice - 16_400_000) < 1,
+    'levelled from the vetted ledger close x price ratio');
+});
 
 test('fomo: fiber-only discovery hooks bars and reports marks UNHOOKED', () => {
   const env = runFomoBridge();

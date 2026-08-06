@@ -492,23 +492,20 @@ test('the viewer navigating off X releases it', async () => {
   assert.equal(worker.session.pt_warm_tab, undefined, 'a tab steered off X is the user\'s, not our viewer');
 });
 
-test('the app-wide master switch outranks the warm-links toggle', async () => {
-  // appEnabled=false with warmXLinksEnabled=true: clicks behave natively,
-  // hovers do nothing, and the hidden idle viewer is released.
+test('the master switch does NOT outrank the warm-links toggle (speed survives paper-off)', async () => {
+  // Maintainer (2026-08-05): appEnabled is the PAPER switch. With paper off
+  // and warm links on: clicks still route warm, hovers still prefetch, and
+  // the hidden viewer is NOT torn down by a settings echo.
   const worker = warmWorker({ settings: { appEnabled: false } });
   const idle = worker.seedViewer({ used: false });
 
   const response = await send(worker.listener, { type: 'pt_warm_open', url: POST });
-  assert.equal(response.route, 'new_tab', 'master off must mean plain native-style opens');
-
-  await send(worker.listener, { type: 'pt_warm_hint', url: POST });
-  await worker.settle();
-  assert.equal(worker.calls.sent.length, 0, 'no prefetch under master off');
+  assert.notEqual(response.route, 'new_tab', 'paper off must not force cold native opens');
 
   await send(worker.listener, { type: 'pt_settings_changed' });
   await worker.settle();
-  assert.ok(worker.calls.removed.includes(idle.id),
-    '"PaperTrench off" includes the hidden viewer tab');
+  assert.ok(!worker.calls.removed.includes(idle.id),
+    'paper off never releases the speed plane’s viewer');
 });
 
 /* ---------------- hover prefetch (background side) ---------------- */

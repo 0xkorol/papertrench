@@ -775,11 +775,11 @@ function turboJankNote(site, sample) {
  * toggle, and the only logging is console.debug on this machine.
  */
 
-/** The warm feature runs only under BOTH switches: its own toggle and the
- * app-wide master switch (appEnabled). "PaperTrench off" must mean off —
- * including the hidden viewer tab and all link interception. */
+/** Maintainer (2026-08-05): the master switch is the PAPER switch — turning
+ * PaperTrench off must NOT take the speed plane down with it. Each speed
+ * feature runs on its own toggle alone. */
 function warmFeatureOn(settings) {
-  return settings.appEnabled !== false && settings.warmXLinksEnabled === true;
+  return settings.warmXLinksEnabled === true;
 }
 
 const WARM_IDLE_URL = 'https://x.com/home';
@@ -1273,7 +1273,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 const WD = self.PTWarmDest;
 
 function warmDestFeatureOn(settings) {
-  return settings.appEnabled !== false && settings.warmEverywhereEnabled === true;
+  return settings.warmEverywhereEnabled === true;
 }
 
 const WARM_DEST_FAMILIES = {
@@ -1573,7 +1573,8 @@ const xrayScanStamps = [];
 const xrayPending = new Map(); // requestId -> { restId, op, plannedAt }
 
 function xrayFeatureOn(settings) {
-  return settings.appEnabled !== false && settings.xrayEnabled === true;
+  // Speed plane: X-Ray survives "PaperTrench off" on its own toggle.
+  return settings.xrayEnabled === true;
 }
 
 let xrayChain = Promise.resolve();

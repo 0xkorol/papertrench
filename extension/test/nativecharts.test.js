@@ -1980,6 +1980,44 @@ test('Turbo source contract: the chip sweep separates reads from writes', () => 
 });
 
 /* ------------------------------------------------------------------ *
+ * F-37: marks snap to the grid of the series that TICKS
+ * ------------------------------------------------------------------ */
+
+test('F-37: a same-token subscription at another resolution cannot teleport new marks', async () => {
+  // Maintainer repro: first buy lands on the right bar, the second buy
+  // "teleports to a random spot". Padre multi-preset panels subscribe the
+  // SAME token at other resolutions; the snap grid followed whichever
+  // subscription came LAST, so a hidden 1m series moved every new mark to
+  // minute boundaries — up to 59 s away on a 1 s chart.
+  const env = runBridge({ axiom: true, href: 'https://axiom.trade/meme/Pair1' });
+  env.runTimers();
+
+  env.axiomDatafeed.subscribeBars({}, '1S', () => {}, 'visible-1s', () => {});
+  const oneSecSeries = env.axiomRealtime();
+  // The hidden preset panel subscribes LAST, at 1 minute.
+  env.axiomDatafeed.subscribeBars({}, '1', () => {}, 'hidden-1m', () => {});
+  // But the VISIBLE chart is the one that streams.
+  const base = 1_800_000_000_000; // a minute boundary
+  oneSecSeries({ time: base + 32_000, close: 100_000 });
+
+  // The fill lands ON the newest bar (the F-31 clamp is not in play):
+  // 32 s past the minute, where the 1 s and 1 m grids disagree by 32 s.
+  const ts = base + 32_000;
+  env.send('paper-marker', {
+    ts, side: 'buy', priceNative: 0.00001, priceUsd: 0.0021, mcap: 2_100_000, solAmount: 0.5, symbol: 'AX',
+  });
+  await microtasks();
+
+  let marks = null;
+  env.axiomDatafeed.getMarks({}, Math.floor(base / 1000) - 120, Math.floor(base / 1000) + 120, (r) => { marks = r; });
+  await microtasks();
+  const mark = marks.find((m) => String(m.id).startsWith('papertrench-buy-'));
+  assert.ok(mark, 'the fill must be served as a native mark');
+  assert.equal(mark.time, Math.floor(ts / 1000),
+    'the mark snaps to the TICKING 1 s grid — never the idle 1 m series that subscribed last');
+});
+
+/* ------------------------------------------------------------------ *
  * F-35: per-series unit vetting for average-line level math
  * ------------------------------------------------------------------ */
 

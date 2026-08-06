@@ -1545,10 +1545,10 @@
         // chart drawings, title signal, timers, pool subscriptions).
         if (settings.appEnabled !== false && settings.overlayEnabled) enableOverlay().catch(() => {});
         else disableOverlay();
-        // The jank sampler follows the master switch alone (see the sampling
-        // block): overlay off with the app on keeps measuring; app off stops
-        // the observer and flushes what it holds.
-        if (settings.appEnabled !== false) startJankSampling();
+        // The jank sampler is SPEED telemetry (Turbo receipts): it follows
+        // the speed toggles, not the paper master — the maintainer's rule is
+        // that "PaperTrench off" never takes the speed plane down.
+        if (settings.warmXLinksEnabled || settings.warmEverywhereEnabled) startJankSampling();
         else stopJankSampling();
         if (els.buyPresets) renderPresets();
         syncAveragePriceLines();
@@ -3008,6 +3008,12 @@
       .pt-buy::after { display: none; }
     }
 
+    /* Focus morph: one soft pulse masks the relayout when the panel
+       transforms between decorated and minimal. */
+    @keyframes pt-morph { from { transform: scale(0.985); opacity: 0.72; } to { transform: scale(1); opacity: 1; } }
+    .pt-box.pt-morph { animation: pt-morph 0.26s var(--pt-ease); }
+    .pt-hbtn.on { color: var(--pt-amber); }
+
     /* One movement system (UI-OVERHAUL Wave 1): every drag handle refuses
        the browser's scroll gesture — pointer capture alone never did that
        (O-25's real completion) — and every draggable surface says so with
@@ -3234,6 +3240,7 @@
             <div class="pt-icon">P</div>
             <div class="pt-title">PaperTrench<span class="sub" id="pt-subtitle">Quick paper buy box</span></div>
             <span class="pt-grow"></span>
+            <button class="pt-hbtn" id="pt-focus-toggle" title="Toggle focus mode — the minimal panel" aria-label="Toggle focus mode">◧</button>
             <button class="pt-hbtn" id="pt-edit" title="Edit presets &amp; fees right here" aria-label="Edit presets and fees">✎</button>
             <button class="pt-hbtn" id="pt-quickreset" title="Reset paper wallet (tap twice)" aria-label="Quick reset">⟲</button>
             <button class="pt-hbtn" id="pt-visibility" title="Toggle auto-hide when no token" aria-label="Toggle visibility">${ICONS.eye}</button>
@@ -3383,6 +3390,23 @@
 
     shadow.getElementById('pt-dash').addEventListener('click', openDashboard);
     shadow.getElementById('pt-settings').addEventListener('click', openDashboard);
+    // In-panel focus toggle (maintainer): the panel morphs between the
+    // decorated terminal and the minimal one in place, with a soft pulse —
+    // no dashboard round-trip. The flip persists so every surface agrees.
+    const focusToggle = shadow.getElementById('pt-focus-toggle');
+    if (focusToggle) {
+      focusToggle.addEventListener('click', async () => {
+        settings = { ...settings, panelFocusMode: settings.panelFocusMode !== true };
+        if (els.box) {
+          els.box.classList.remove('pt-morph');
+          void els.box.offsetWidth; // restart the pulse (the one sanctioned reflow)
+          els.box.classList.add('pt-morph');
+        }
+        applyFocusMode();
+        renderAll();
+        try { await store.set({ [E.STORAGE_KEYS.settings]: settings }); } catch (_) {}
+      });
+    }
     // Wave 1: the footer "Reset wallet" link is gone — the header's two-tap
     // ⟲ (formerly focus-only) is the panel's one reset in every mode.
     // Wave 1 (F-B7): the mint pill earns its pixels — click copies the mint.
@@ -3824,6 +3848,8 @@
     if (!els.box || !els.box.classList) return;
     const focus = settings.panelFocusMode === true;
     els.box.classList.toggle('pt-focus', focus);
+    const ft = shadow && shadow.getElementById('pt-focus-toggle');
+    if (ft) ft.classList.toggle('on', focus);
     // With one-tap presets the chips ARE the buttons, so compact mode drops
     // the big BUY too; with instant buy off the (slim) button must stay or
     // select-then-buy has no trigger.
@@ -4561,7 +4587,7 @@
     // terminal's kept-warm viewer instead and this tab stays put. Same-site
     // hops (and the feature off) keep the Padre-style same-tab swap.
     const WDs = window.PTWarmDest;
-    if (WDs && settings.appEnabled !== false && settings.warmEverywhereEnabled) {
+    if (WDs && settings.warmEverywhereEnabled) {
       const dest = WDs.classify(url);
       if (dest && WDs.familyOfHost(location.hostname) !== dest.family && contextAlive()) {
         try {
@@ -5603,12 +5629,12 @@
     watchStorage();
     // Jank sampling rides the master switch ALONE — it measures rather than
     // mounts, but "off means PaperTrench runs nothing on the page" is the
-    // master switch's promise, so off silences the sampler too. The overlay
-    // toggle below does not touch it: a view-only page still has a main
-    // thread worth measuring.
-    if (settings.appEnabled !== false) startJankSampling();
-    // The app-wide master switch outranks every sub-setting: off means
-    // PaperTrench mounts nothing at all until the user turns it back on.
+    // Speed telemetry rides the speed toggles (maintainer: paper off never
+    // silences the speed plane). The overlay toggle below does not touch
+    // it: a view-only page still has a main thread worth measuring.
+    if (settings.warmXLinksEnabled || settings.warmEverywhereEnabled) startJankSampling();
+    // The PAPER master switch outranks every paper sub-setting: off means
+    // no paper surface mounts at all until the user turns it back on.
     if (settings.appEnabled === false || !settings.overlayEnabled) return;
     await enableOverlay();
   }

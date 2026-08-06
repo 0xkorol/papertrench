@@ -55,10 +55,12 @@
   // master switch — "PaperTrench off" includes link interception. The two
   // hover-preview settings are opt-in refinements under the same umbrella.
   function applySettings(settings) {
-    const on = !!(settings && settings.appEnabled !== false && settings.warmXLinksEnabled);
+    // Maintainer (2026-08-05): the master switch is the PAPER switch — speed
+    // features live on their own toggles and survive "PaperTrench off".
+    const on = !!(settings && settings.warmXLinksEnabled);
     cardsEnabled = !!(settings && settings.warmHoverCardsEnabled);
     rowHoverEnabled = !!(settings && settings.warmHoverRowEnabled);
-    const everywhereOn = !!(settings && settings.appEnabled !== false && settings.warmEverywhereEnabled);
+    const everywhereOn = !!(settings && settings.warmEverywhereEnabled);
     const everywhereTurnedOn = everywhereOn && !everywhereEnabled;
     everywhereEnabled = everywhereOn;
     if (everywhereTurnedOn && contextAlive()) {

@@ -30,15 +30,19 @@ test('content.js gates BOTH mount paths on the master switch', () => {
     'the storage listener must run the full teardown when the master switch goes off');
 });
 
-test('warm-links interception honors the master switch', () => {
+test('warm-links run independently of the master switch (speed survives paper-off)', () => {
+  // Maintainer (2026-08-05): the master switch is the PAPER switch. Turning
+  // PaperTrench off must never take the speed plane down with it.
   const src = read('warm-links.js');
-  assert.match(src, /appEnabled !== false && settings\.warmXLinksEnabled/,
-    'click/hover interception must be off when PaperTrench is off');
+  assert.doesNotMatch(src, /appEnabled !== false && settings\.warm/,
+    'speed toggles stand alone — no master-switch condition on interception');
   const background = read('background.js');
-  assert.match(background, /function warmFeatureOn\(settings\)/,
-    'the background must gate the warm feature through one both-switches helper');
-  assert.match(background, /appEnabled !== false && settings\.warmXLinksEnabled === true/,
-    'the helper must require the master switch AND the feature toggle');
+  assert.match(background, /function warmFeatureOn\(settings\)\s*\{\s*\n?\s*return settings\.warmXLinksEnabled === true;/,
+    'the helper gates on the feature toggle alone');
+  assert.match(background, /function warmDestFeatureOn\(settings\)\s*\{\s*\n?\s*return settings\.warmEverywhereEnabled === true;/,
+    'warm destinations too');
+  assert.match(background, /return settings\.xrayEnabled === true;/,
+    'and X-Ray — the whole speed plane survives paper-off');
 });
 
 test('the background defaults the master switch to ON for existing installs', () => {

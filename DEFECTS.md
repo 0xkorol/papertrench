@@ -375,6 +375,36 @@ end-to-end feed prewatch test (bare curve address → watched mint → primed
 quote → reserve account remembered), bootstrap acceptance/ambiguity tests,
 and the existing armed-buy suite.
 
+**F-38 · S1 · fomo showed NO buys and NO lines — discovery never reached the datafeed, and the test fixture modeled a fiber production doesn't serve**
+`price-bridge.js` widgetsFromIframes · fomo.family, maintainer report ·
+**fixed (unreleased)** — reverse-engineered on the LIVE site (in-app browser,
+2026-08-05): the real fomo page has NO React fiber on or above the
+tradingview iframe; the widget api is `contentWindow.tradingViewApi` and the
+widget's OPTIONS BAG — including the datafeed — sits in `window[frameId]`.
+The shipped pseudo-widget found the api (draws) but had no `_options`, so
+bars never hooked: no ledger closes, mcap lines honestly refused, shapes had
+nothing to level against. The pseudo now re-attaches the bag every sweep
+(remounts re-hook, C-12). The fomo fixture gets a `liveShape` mode modeling
+what production actually serves — the old fiber-shaped fixture passed while
+the field showed nothing (the verify-live-DOM lesson, again). Bars attach
+from the widget's next (re)subscription after the patch — page load and
+timeframe changes both qualify. Locked by a live-shape test proven failing
+against the pre-fix bridge.
+
+**F-37 · S1 · The second buy "teleported to a random spot" — the mark snap grid followed whichever same-token subscription came LAST**
+`price-bridge.js` noteResolution/snapMarkTime · Padre (maintainer repro
+screenshot: 1s chart, multi-preset panels) · **fixed (unreleased)**
+F-35's twin in the TIME axis: the C-14 token gate admits every same-token
+subscription, and lastResolutionMs took the newest SUBSCRIBER — so a hidden
+1m preset panel flipped the grid and every new mark snapped to minute
+boundaries, up to 59 s from its bar on a 1 s chart. The first buy (before
+the stray subscription) sat true; later buys teleported. The grid now
+follows the subscription that most recently TICKED (the barCloseLedger
+carries resMs per entry); when the active grid changes, existing marks
+re-snap through the C-14 machinery. Locked by a two-subscription test
+proven failing against the pre-fix bridge — with the F-31 ahead-of-bar
+clamp deliberately kept out of play.
+
 **F-36 · S1 · OPEN — paper fills are "occasionally, on some charts, just not perfectly accurate" (maintainer, repeated report, 2026-08-05)**
 Fill price vs the chart's own price at fill time drifts on some site/chart
 combinations. Third report of this class after F-33 (vault-leg starvation)

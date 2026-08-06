@@ -141,6 +141,20 @@ the user's own thesis), stats that predict real-world survival (expectancy, hold
 discipline, tilt detection, revenge-trade flags), practice drills, and explicit
 graduation criteria surfaced in the dashboard.
 
+## Phase 7.5 — Multichain paper trading (maintainer, 2026-08-05)
+
+fomo (and the market) is multichain; PaperTrench refuses non-Solana tokens
+by design today (O-11: the fomo adapter only mounts on /tokens/solana/).
+The maintainer wants non-Solana coins tradeable. This is a designed
+release, not a patch: the wallet is SOL-denominated, and the resolver,
+quote validation, on-chain feed, and attestation chain are Solana-shaped
+end to end. Sketch: per-chain quote sources (Dexscreener covers EVM
+chains), fills recorded in USD with the book still SOL-denominated at a
+recorded conversion, no on-chain feed for non-SOL at first (aggregator
+prices only, stated honestly on the panel), attestation chain carrying the
+chain id per fill. Until it ships, non-Solana pages stay panel-less on
+purpose — mounting a Solana paper wallet on an EVM token would fake it.
+
 ## Phase 7 — Paper copy trader (community request, TheRedShark123 2026-08-05)
 
 "A simulated copy trader to test if some wallets are worth it" — exactly the

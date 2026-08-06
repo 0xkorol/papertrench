@@ -744,6 +744,17 @@
           };
           iframeWidgetCache.set(frame, pseudo);
         }
+        // F-38 (fomo, reverse-engineered live 2026-08-05): the top page
+        // keeps the widget's OPTIONS BAG — including the datafeed — in
+        // window[frameId] ("tradingview_xxxxx"). Without it the pseudo
+        // widget could draw but never hook bars: no closes, so mcap lines
+        // honestly refused and shapes had nothing to level against.
+        // Re-attach on every sweep so a chart remount with a fresh bag
+        // re-hooks (the C-12 remount lesson).
+        try {
+          const bag = window[frame.id];
+          if (bag && bag.datafeed) pseudo._options = bag;
+        } catch (_) { /* no bag: draws still work, bars stay unhooked */ }
         out.push(pseudo);
       }
     } catch (_) {}
@@ -781,13 +792,29 @@
     lastBarClose = close;
     // F-35: remember which subscription produced this close so line/shape
     // level math can vet closes by unit instead of taking the newest global.
+    // F-37: the entry also carries its subscription's RESOLUTION, so mark
+    // snapping can follow the series that is actually streaming.
     if (subscriberUID != null) {
-      barCloseLedger.set(String(subscriberUID), { close, atMs: Date.now() });
+      barCloseLedger.set(String(subscriberUID), {
+        close, atMs: Date.now(), resMs: resolutionToMs(resolution),
+      });
       if (barCloseLedger.size > 32) {
         const cutoff = Date.now() - BAR_CLOSE_FRESH_MS;
         for (const [uid, entry] of barCloseLedger) {
           if (entry.atMs < cutoff) barCloseLedger.delete(uid);
         }
+      }
+      // F-37 (maintainer: "another buy teleports to a random spot"): the
+      // snap grid used to be whichever same-token subscription came LAST —
+      // Padre's multi-preset panels subscribe the same token at other
+      // resolutions, so a hidden 1m series flipped the grid and every new
+      // mark snapped up to a minute away. The grid now follows the series
+      // that is actually TICKING; when the active grid changes, existing
+      // marks re-snap (the C-14 machinery, driven by the right signal).
+      const act = activeResolutionMs();
+      if (act && act !== lastResolutionMs) {
+        lastResolutionMs = act;
+        resnapPaperMarks();
       }
     }
     lastLiveBarAt = Date.now();
@@ -904,8 +931,22 @@
     if (moved) setTimeout(() => { try { refreshPadreMarks(); } catch (_) {} }, 0);
   }
 
+  /** The grid of the subscription that most recently TICKED (F-37). A
+   *  subscription that streams every second outvotes one that subscribed
+   *  last but sits idle — subscribe ORDER carries no authority. */
+  function activeResolutionMs() {
+    const now = Date.now();
+    let best = null;
+    for (const entry of barCloseLedger.values()) {
+      if (!(entry.resMs > 0) || now - entry.atMs > BAR_CLOSE_FRESH_MS) continue;
+      if (!best || entry.atMs > best.atMs) best = entry;
+    }
+    return best ? best.resMs : null;
+  }
+
   function snapMarkTime(tsMs) {
-    if (lastResolutionMs) return Math.floor(tsMs / lastResolutionMs) * lastResolutionMs / 1000;
+    const grid = activeResolutionMs() || lastResolutionMs;
+    if (grid) return Math.floor(tsMs / grid) * grid / 1000;
     return Math.floor(tsMs / 1000);
   }
 
