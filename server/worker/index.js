@@ -17,6 +17,10 @@ import { windowEntry } from '../core/window.js';
 import { awarded } from '../core/achievements.js';
 import * as duel from '../core/duel.js';
 import * as clan from '../core/clan.js';
+// Default-imported, not named: core/chain.js re-exports attest.js by property
+// assignment (`GENESIS: AT.GENESIS`), which Node's CJS named-export lexer
+// cannot see through — unlike the other cores, whose exports are literals.
+import chainCore from '../core/chain.js';
 import { sessionUser, startLogin, finishLogin, logout } from './auth.js';
 import { makeGetCandles } from './candles.js';
 
@@ -237,6 +241,46 @@ async function handleSubmit(request, env) {
     claimMismatch: result.claimMismatch,
     sprint: entry,
   });
+}
+
+/**
+ * Which attestation versions this DEPLOYMENT can verify — proven, not declared.
+ *
+ * Exists because of a real ordering hazard: `core/chain.js` re-exports
+ * `attest.js`, so a worker running older logic rebuilds a newer link's
+ * preimage under the old rules and rejects it as `hash-mismatch`. The worker
+ * must therefore always be deployed BEFORE an extension release that bumps the
+ * format — and until this route existed, "is the new worker actually live?"
+ * could only be answered by the person who ran the deploy saying so, or by
+ * submitting a real chain, which is a write to production.
+ *
+ * It builds a synthetic link at each version and re-verifies it here, so the
+ * answer is behaviour rather than a constant a stale build would also report.
+ * `writes` comes from appendFill rather than a hardcoded number, so this
+ * cannot drift when the format bumps again.
+ *
+ * Bounded at `writes` on purpose: the preimage builder treats any unknown
+ * version as the newest rules, so probing v99 would "pass" by tautology and
+ * advertise support for a format nobody has defined.
+ */
+async function attestSupport() {
+  const { GENESIS, sha256, fillPreimage, appendFill, verifyChain } = chainCore;
+  const probe = {
+    id: 'version-probe', sessionId: 'version-probe', mint: 'PROBE', side: 'buy',
+    qty: 1, priceNative: 1, solGross: 1, solNet: 1, ts: 0, chain: 'solana',
+  };
+  let writes = 0;
+  try { writes = Number((await appendFill(GENESIS, probe)).version) || 0; } catch {}
+
+  const verifies = [];
+  for (let version = 1; version <= writes; version++) {
+    try {
+      const link = { ...probe, version, prev: GENESIS, seq: 0 };
+      link.hash = await sha256(fillPreimage(link, GENESIS));
+      if ((await verifyChain([link])).valid) verifies.push(version);
+    } catch { /* a version this build cannot round-trip is simply not claimed */ }
+  }
+  return { ok: true, attest: { writes, verifies } };
 }
 
 async function handleLeaderboard(env) {
@@ -1095,6 +1139,7 @@ export default {
     let response;
     try {
       if (path === '/api/health') response = json({ ok: true });
+      else if (path === '/api/version') response = json(await attestSupport());
       else if (path === '/api/auth/x/start') response = await startLogin(request, env);
       else if (path === '/api/auth/x/callback') response = await finishLogin(request, env);
       else if (path === '/api/auth/logout' && request.method === 'POST') response = logout(env);
