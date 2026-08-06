@@ -24,7 +24,9 @@
         "https://papertrench.com/*",
         "https://www.papertrench.com/*"
       ],
-      "js": ["site-bridge.js"],
+      "js": [
+        "site-bridge.js"
+      ],
       "run_at": "document_start"
     },
     {
@@ -46,7 +48,8 @@
         "https://*.pump.fun/*",
         "https://fomo.family/*",
         "https://*.fomo.family/*",
-        "https://app.hyperliquid.xyz/*"
+        "https://app.hyperliquid.xyz/*",
+        "https://lute.gg/*"
       ],
       "js": [
         "xlinks.js",
@@ -75,7 +78,8 @@
         "https://pump.fun/*",
         "https://*.pump.fun/*",
         "https://fomo.family/*",
-        "https://*.fomo.family/*"
+        "https://*.fomo.family/*",
+        "https://lute.gg/*"
       ],
       "js": [
         "xlinks.js",
@@ -194,7 +198,8 @@
         "https://jup.ag/*",
         "https://pump.fun/*",
         "https://fomo.family/*",
-        "https://app.hyperliquid.xyz/*"
+        "https://app.hyperliquid.xyz/*",
+        "https://lute.gg/*"
       ]
     }
   ],

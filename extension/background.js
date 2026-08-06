@@ -1093,6 +1093,7 @@ const WARM_PLATFORM_URLS = [
   'https://birdeye.so/*', 'https://*.birdeye.so/*', 'https://jup.ag/*',
   'https://*.jup.ag/*', 'https://pump.fun/*', 'https://*.pump.fun/*',
   'https://fomo.family/*', 'https://*.fomo.family/*',
+  'https://lute.gg/*',
 ];
 
 // One in-flight SPA request per viewer tab; a newer click supersedes the
@@ -1653,6 +1654,12 @@ const WARM_DEST_FAMILIES = {
     idleUrl: null,
     hostRe: /(^|\.)jup\.ag$/,
     label: 'Jupiter',
+  },
+  lute: {
+    storageKey: 'pt_warm_tab_lute',
+    idleUrl: null,
+    hostRe: /(^|\.)lute\.gg$/,
+    label: 'Lute',
   },
 };
 

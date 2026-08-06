@@ -192,7 +192,7 @@
   // "hodlers" is fomo's own spelling; holder lists and balance sheets are
   // positions-of-SOMEONE either way, and prices inside them are entries,
   // not the market.
-  const POSITION_SUBTREE_KEY = /^(positions?|holdings?|portfolio|userPositions?|myPositions?|openOrders?|hodlers?|holders?|topHolders?|balances?)$/i;
+  const POSITION_SUBTREE_KEY = /^(positions?|holdings?|portfolio|userPositions?|myPositions?|openOrders?|hodlers?|holders?|topHolders?|toptraders?|balances?)$/i;
   const MCAP_KEY = /^(marketCap|marketCapInUsd|mcap|mcapInUsd|fdv|fullyDilutedValuation)$/i;
   // A record that IS a trade event — an id-carrying or user-attributed
   // swap/trade object (fomo's social feed, tx-hash trade tapes). Its price
@@ -224,7 +224,8 @@
   function looksLikePositionRecord(node) {
     return node.costBasis !== undefined || node.averageEntryPrice !== undefined
       || node.avgEntryPrice !== undefined || node.unrealizedPnl !== undefined
-      || node.realizedPnl !== undefined
+      || node.realizedPnl !== undefined || node.realizedPnlUSD !== undefined
+      || node.avgBuyPriceUSD !== undefined
       || (node.pnl !== undefined && node.value !== undefined && node.price !== undefined);
   }
   const MINT_KEY = /^(mint|tokenMint|tokenAddress|baseMint|address|contract|ca)$/i;

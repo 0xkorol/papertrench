@@ -43,6 +43,7 @@
   const DEXSCREENER_HOST_RE = /(^|\.)dexscreener\.com$/;
   const BIRDEYE_HOST_RE = /(^|\.)birdeye\.so$/;
   const JUP_HOST_RE = /(^|\.)jup\.ag$/;
+  const LUTE_HOST_RE = /(^|\.)lute\.gg$/;
   // Jupiter's swap routes name the quote side too — SOL/USDC/USDT are the
   // pair's other half, never the token the user meant to open.
   const QUOTE_MINTS = new Set([
@@ -181,6 +182,15 @@
       return { family: 'jupiter', kind: 'token', url: 'https://jup.ag' + path + url.search };
     }
 
+    if (LUTE_HOST_RE.test(host)) {
+      // lute.gg/trade/<base58> — Solana token pages only. Named routes
+      // (compass, momentum, portfolio, discover) are rejected by the
+      // {32,44} length constraint, same gate as the sites.js adapter.
+      const m = path.match(/^\/trade\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[\/?#])/);
+      if (!m) return null;
+      return { family: 'lute', kind: 'token', url: 'https://lute.gg' + path + url.search };
+    }
+
     if (SOLSCAN_HOSTS.has(host)) {
       const m = path.match(/^\/(token|account|address|tx)\/([^/?#]+)/);
       if (!m) return null;
@@ -222,6 +232,7 @@
     if (DEXSCREENER_HOST_RE.test(h)) return 'dexscreener';
     if (BIRDEYE_HOST_RE.test(h)) return 'birdeye';
     if (JUP_HOST_RE.test(h)) return 'jupiter';
+    if (LUTE_HOST_RE.test(h)) return 'lute';
     return null;
   }
 

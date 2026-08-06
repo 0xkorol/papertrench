@@ -58,6 +58,7 @@ const PAGES = [
   ['jupiter', `https://jup.ag/swap?inputMint=So11111111111111111111111111111111111111112&outputMint=${MINT}`],
   ['fomo', `https://fomo.family/tokens/solana/${MINT}`],
   ['pumpfun', `https://pump.fun/coin/${MINT}`],
+  ['lute', `https://lute.gg/trade/${MINT}`],
 ];
 
 test('every shipped adapter detects a token page into the promised shape', () => {

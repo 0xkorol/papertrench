@@ -116,6 +116,16 @@ const MATRIX = [
   ['https://fomo.family/profile/sometrader', 'fomo', null, null, 'profile routes must not mount (O-10)'],
   ['https://fomo.family/prices/bonk', 'fomo', null, null, 'ticker-slug price pages carry no mint — never guess'],
   ['https://fomo.family/', 'fomo', null, null, 'landing page is not a token page'],
+  // Lute (lute.gg) — Solana-only terminal, token pages at /trade/<base58>
+  ['https://lute.gg/trade/' + MINT, 'lute', 'mint', MINT, 'token route'],
+  ['https://lute.gg/trade/' + MINT + '?ref=abc', 'lute', 'mint', MINT, 'query strings do not change the route'],
+  ['https://lute.gg/trade/compass', 'lute', null, null, 'named route compass must not mount (O-10)'],
+  ['https://lute.gg/trade/momentum', 'lute', null, null, 'named route momentum must not mount (O-10)'],
+  ['https://lute.gg/trade/portfolio', 'lute', null, null, 'named route portfolio must not mount (O-10)'],
+  ['https://lute.gg/trade/discover', 'lute', null, null, 'named route discover must not mount (O-10)'],
+  ['https://lute.gg/', 'lute', null, null, 'landing page is not a token page'],
+  ['https://lute.gg/login', 'lute', null, null, 'login page must not mount (O-10)'],
+  ['https://lute.gg/signup', 'lute', null, null, 'signup page must not mount (O-10)'],
 ];
 
 test('overlay presence matrix: every audited URL shape gates correctly', () => {
@@ -134,6 +144,11 @@ test('overlay presence matrix: every audited URL shape gates correctly', () => {
         const slug = href.match(/\/tokens\/([a-z-]+)\//);
         assert.equal(got.token.chain, slug ? slug[1] : 'solana',
           `${href}: the detected chain must match the URL slug`);
+      }
+      // Lute is always Solana
+      if (id === 'lute' && got.token) {
+        assert.equal(got.token.chain, 'solana',
+          `${href}: lute is Solana-only`);
       }
     }
   }

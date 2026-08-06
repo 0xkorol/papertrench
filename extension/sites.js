@@ -403,6 +403,20 @@
         return null;
       },
     },
+    {
+      id: 'lute',
+      name: 'Lute',
+      tokenUrl: (mint) => 'https://lute.gg/trade/' + mint,
+      match: (h) => /(^|\.)lute\.gg$/.test(h),
+      // lute.gg/trade/<base58Address> — Solana token page. Named routes
+      // under /trade/ (compass, momentum, portfolio, discover) and non-trade
+      // routes (/, /login, /signup) are never token pages (O-10). The
+      // {32,44} length constraint naturally rejects short named routes.
+      detect: () => {
+        const m = location.pathname.match(/^\/trade\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[\/?#])/);
+        return m ? { kind: 'mint', address: m[1], chain: 'solana' } : null;
+      },
+    },
   ];
 
   function currentSite() {

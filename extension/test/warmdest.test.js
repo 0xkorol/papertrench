@@ -531,6 +531,7 @@ test('the classifier routes the main terminals token pages and refuses their oth
   assert.equal(WD.familyOfHost('trade.padre.gg'), 'padre');
   assert.equal(WD.familyOfHost('gmgn.ai'), 'gmgn');
   assert.equal(WD.familyOfHost('fomo.family'), 'fomo');
+  assert.equal(WD.familyOfHost('lute.gg'), 'lute');
 });
 
 test('terminal viewers are never pre-created — first click pays, then it is warm', async () => {
