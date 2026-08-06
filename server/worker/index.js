@@ -757,7 +757,10 @@ async function handleClanGet(env, tag) {
     status: m.status || 'pending',
     role: m.role,
     joinedAt: m.joined_at,
-    entry: bySlice.get(sliceId).get(m.user_id) || null,
+    // Sub-verified figures are withheld at the source (clan.publicEntry),
+    // not merely left for clients to skip — see the rationale in core.
+    entry: clan.publicEntry(m.status || 'pending',
+      bySlice.get(sliceId).get(m.user_id)),
   }));
 
   const seasonMembers = membersFor(SEASON_WINDOW_ID);

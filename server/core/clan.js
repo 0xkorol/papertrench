@@ -285,12 +285,29 @@ function successor(members, leavingUserId) {
     (Number(a.userId) || 0) - (Number(b.userId) || 0))[0];
 }
 
+/**
+ * What a clan payload may carry for one member's window slice: their entry
+ * when their record is verified, nothing otherwise.
+ *
+ * Below verified the figures are WITHHELD, not just unlabeled. standing()
+ * already refuses them a position in any aggregate, but a payload that still
+ * carries numbers no client may legitimately display is a loaded gun for the
+ * next consumer — the clan page shipped exactly that defect once, printing a
+ * partial member's rounds and return pixel-identical to a contributor's.
+ * `status` on the member row is what tells a page to render "not counted";
+ * it needs no figures to do it, and their real record stays on their own
+ * profile, labeled.
+ */
+function publicEntry(status, entry) {
+  return status === 'verified' ? (entry || null) : null;
+}
+
 module.exports = {
   COUNTING_MEMBERS, MAX_MEMBERS, MIN_SEASON_ROUNDS, MIN_WEEK_ROUNDS,
   SEASON_END_TS, SEASON_WINDOW,
   TAG_RE, NAME_MIN, NAME_MAX, MOTTO_MAX, RESERVED_TAGS,
   normalizeTag, normalizeName, normalizeCode, cleanMotto, nameKey,
   tagProblem, nameProblem, mottoProblem,
-  contributionWindow, memberEntry, standing,
+  contributionWindow, memberEntry, standing, publicEntry,
   createProblem, joinProblem, kickProblem, successor,
 };

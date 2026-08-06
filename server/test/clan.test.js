@@ -221,6 +221,20 @@ test('below verified, a member contributes NOTHING — not score, not volume', (
   assert.equal(C.standing([...five.slice(0, 4), fabricated]).ranked, false);
 });
 
+test('the payload contract: a sub-verified member ships no figures at all', () => {
+  // standing() refusing them a position is one defense; the payload is the
+  // other. The clan page once printed a partial member's rounds and return
+  // pixel-identical to a contributor's — because the payload carried them.
+  // publicEntry is what the worker routes every member slice through, so
+  // numbers no client may legitimately display never leave the server.
+  const entry = entryOf(9999, 40);
+  assert.equal(C.publicEntry('verified', entry), entry);
+  assert.equal(C.publicEntry('partial', entry), null, 'withheld, not just unlabeled');
+  assert.equal(C.publicEntry('pending', entry), null);
+  assert.equal(C.publicEntry('rejected', entry), null);
+  assert.equal(C.publicEntry('verified', undefined), null, 'absence is null, never undefined');
+});
+
 test('the five that make the number are named, best first', () => {
   const roster = [10, 90, 50, 70, 30, 60].map((v, i) => member('n' + i, entryOf(v, 10)));
   const s = C.standing(roster);
