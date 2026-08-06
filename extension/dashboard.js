@@ -1759,8 +1759,13 @@ function renderPerps(el) {
       </tr>`;
   }).join('');
 
-  const trimmed = Number(archived.roundsCount) > 0
-    ? `<p class="dim" style="font-size:11.5px">${archived.roundsCount} older round${archived.roundsCount === 1 ? '' : 's'} archived out of this table. Totals below still include them.</p>`
+  // Coerced to a NUMBER before it reaches the template. Everything rendered
+  // here is either esc()'d or numeric by construction, never "safe because
+  // the value happens to be a number today" — stored records are data, and
+  // data is the thing that turns out to be attacker-shaped later.
+  const archivedRounds = Number(archived.roundsCount) > 0 ? Math.floor(Number(archived.roundsCount)) : 0;
+  const trimmed = archivedRounds > 0
+    ? `<p class="dim" style="font-size:11.5px">${archivedRounds} older round${archivedRounds === 1 ? '' : 's'} archived out of this table. Totals below still include them.</p>`
     : '';
 
   el.innerHTML = `

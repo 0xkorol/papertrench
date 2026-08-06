@@ -100,6 +100,29 @@ test('a perps fill repaints the tab, without churning on every tick', () => {
     'the live mark must NOT be in the fingerprint — it would repaint every tick');
 });
 
+test('every value this view renders is escaped or numeric BY CONSTRUCTION', () => {
+  // The perps view builds innerHTML from a stored record. Stored records are
+  // data, and data is the thing that turns out to be attacker-shaped later —
+  // the same reasoning as treating log output as untrusted. "Safe because
+  // this value happens to be a number today" is not a defence; every
+  // interpolation must be esc()'d, a numeric formatter, or a local that was
+  // explicitly coerced to a number.
+  const start = js.indexOf('function renderPerps(');
+  const body = js.slice(start, js.indexOf('\nfunction ', start + 10));
+  const spots = body.match(/\$\{[^{}]*\}/g) || [];
+  assert.ok(spots.length > 20, 'the view really does interpolate a lot');
+
+  const SAFE = /^\$\{\s*(esc\(|perpsUsd\(|perpsPx\(|Math\.round\(|posRows|roundRows|trimmed|gap|prov|archivedRounds|positions\.length|rounds\.length)/;
+  const TERNARY = /\?\s*['"]/; // choosing between literal strings
+  const offenders = spots.filter((s) => !SAFE.test(s) && !TERNARY.test(s));
+  assert.deepEqual(offenders, [],
+    'these interpolations are neither escaped nor provably numeric: ' + offenders.join(' | '));
+
+  // archivedRounds is on the allowlist ONLY because it is coerced first.
+  assert.match(body, /const archivedRounds = Number\(archived\.roundsCount\) > 0 \? Math\.floor\(Number\(archived\.roundsCount\)\) : 0;/,
+    'the count must be coerced to a number before it reaches a template');
+});
+
 test('the archived-rounds note keeps the table honest about its own sample', () => {
   const start = js.indexOf('function renderPerps(');
   const body = js.slice(start, js.indexOf('\nfunction ', start + 10));
