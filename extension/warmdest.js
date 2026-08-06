@@ -3,11 +3,14 @@
  * The X classifier (xlinks.js) proved the pattern: a tiny, shared, paranoid
  * URL classifier loaded by every layer that must agree on what a link IS —
  * the background (routing), and the terminal-side ISOLATED world (click and
- * hover interception). This is the same contract for the two NON-X cold
- * destinations every token row on the supported terminals carries:
+ * hover interception). This is the same contract for every cold destination
+ * a token row can carry:
  *
  *   pumpfun — pump.fun coin pages (and the board / profiles)
  *   solscan — solscan.io token / account / tx pages
+ *   ...and token pages on every supported terminal. Turbo II closed the
+ *   matrix (Axiom, Padre, GMGN, Fomo, BullX, Photon, Dexscreener, Birdeye,
+ *   Jupiter): a token link between ANY two supported sites warm-routes.
  *
  * Contract, identical to xlinks.js:
  *   - https only; anything else is not ours.
@@ -32,6 +35,21 @@
   const PADRE_HOST_RE = /(^|\.)padre\.gg$/;
   const GMGN_HOST_RE = /(^|\.)gmgn\.ai$/;
   const FOMO_HOST_RE = /(^|\.)fomo\.family$/;
+  // Turbo II: the rest of the supported-terminal matrix, same discipline —
+  // token routes only, shapes mirrored from the sites.js adapters that live
+  // on these pages every day (wallet/portfolio/EVM routes never warm-route).
+  const BULLX_HOST_RE = /(^|\.)bullx\.io$/;
+  const PHOTON_HOST_RE = /(^|\.)tinyastro\.io$/;
+  const DEXSCREENER_HOST_RE = /(^|\.)dexscreener\.com$/;
+  const BIRDEYE_HOST_RE = /(^|\.)birdeye\.so$/;
+  const JUP_HOST_RE = /(^|\.)jup\.ag$/;
+  // Jupiter's swap routes name the quote side too — SOL/USDC/USDT are the
+  // pair's other half, never the token the user meant to open.
+  const QUOTE_MINTS = new Set([
+    'So11111111111111111111111111111111111111112',  // WSOL
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+  ]);
 
   function parse(href, baseHref) {
     try {
@@ -100,6 +118,69 @@
       return { family: 'fomo', kind: 'token', url: 'https://fomo.family' + path + url.search };
     }
 
+    if (BULLX_HOST_RE.test(host)) {
+      // neo.bullx.io/terminal?chainId=1399811149&address=<pair|mint>. The
+      // address param must be a WHOLE base58 value (O-11: EVM 0x addresses
+      // can embed base58-passing runs) and any explicit non-Solana chainId
+      // is not ours — the same gate as the sites.js adapter.
+      if (path !== '/terminal' && path !== '/terminal/') return null;
+      const chainId = url.searchParams.get('chainId');
+      if (chainId && chainId !== '1399811149') return null;
+      const address = url.searchParams.get('address') || '';
+      if (!BASE58_RE.test(address)) return null;
+      return { family: 'bullx', kind: 'token', url: 'https://neo.bullx.io/terminal' + url.search };
+    }
+
+    if (PHOTON_HOST_RE.test(host)) {
+      // photon-sol.tinyastro.io/<locale>/lp/<pair> and /<locale>/r/<mint> —
+      // the locale prefix varies, so the gate is the /lp/ | /r/ segment with
+      // a WHOLE base58 tail (both shapes are real token pages, O-12).
+      const m = path.match(/\/(lp|r)\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      if (!m) return null;
+      return { family: 'photon', kind: 'token', url: 'https://photon-sol.tinyastro.io' + path + url.search };
+    }
+
+    if (DEXSCREENER_HOST_RE.test(host)) {
+      // dexscreener.com/solana/<pair> — the /solana/ prefix is the gate.
+      // EVM chain routes can embed base58-passing hex runs (O-11), and
+      // watchlist/gainers/portfolio routes must never warm-route (O-10).
+      const m = path.match(/^\/solana\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      if (!m) return null;
+      return { family: 'dexscreener', kind: 'token', url: 'https://dexscreener.com' + path + url.search };
+    }
+
+    if (BIRDEYE_HOST_RE.test(host)) {
+      // birdeye.so/token/<mint>?chain=solana — an explicit non-Solana chain
+      // is not ours, and profile routes carry wallets, never tokens (O-10).
+      const chain = url.searchParams.get('chain');
+      if (chain && chain.toLowerCase() !== 'solana') return null;
+      const m = path.match(/\/token\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      if (!m) return null;
+      return { family: 'birdeye', kind: 'token', url: 'https://birdeye.so' + path + url.search };
+    }
+
+    if (JUP_HOST_RE.test(host)) {
+      // jup.ag/swap/SOL-<mint>, /tokens/<mint>, and the query forms the app
+      // rewrites itself into (?inputMint/?outputMint, later ?buy/?sell). A
+      // candidate counts only as a WHOLE base58 value that is not a quote
+      // mint; /portfolio/<wallet> and every other route refuses (O-10).
+      const whole = (v) => (v && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v) ? v : null);
+      const tokensRoute = path.match(/^\/tokens\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+      const swapRoute = path.match(/^\/swap\/([^/?#]+)$/);
+      const queryRoute = /^\/(?:swap|limit|dca)?\/?$/.test(path);
+      const candidates = [];
+      if (tokensRoute) candidates.push(tokensRoute[1]);
+      if (swapRoute) candidates.push(...swapRoute[1].split('-').map(whole).filter(Boolean));
+      if (queryRoute) {
+        for (const key of ['outputMint', 'inputMint', 'buy', 'sell']) {
+          const v = whole(url.searchParams.get(key));
+          if (v) candidates.push(v);
+        }
+      }
+      if (!candidates.some((mint) => !QUOTE_MINTS.has(mint))) return null;
+      return { family: 'jupiter', kind: 'token', url: 'https://jup.ag' + path + url.search };
+    }
+
     if (SOLSCAN_HOSTS.has(host)) {
       const m = path.match(/^\/(token|account|address|tx)\/([^/?#]+)/);
       if (!m) return null;
@@ -136,6 +217,11 @@
     if (PADRE_HOST_RE.test(h)) return 'padre';
     if (GMGN_HOST_RE.test(h)) return 'gmgn';
     if (FOMO_HOST_RE.test(h)) return 'fomo';
+    if (BULLX_HOST_RE.test(h)) return 'bullx';
+    if (PHOTON_HOST_RE.test(h)) return 'photon';
+    if (DEXSCREENER_HOST_RE.test(h)) return 'dexscreener';
+    if (BIRDEYE_HOST_RE.test(h)) return 'birdeye';
+    if (JUP_HOST_RE.test(h)) return 'jupiter';
     return null;
   }
 

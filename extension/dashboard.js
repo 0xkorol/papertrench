@@ -3745,9 +3745,12 @@ function renderSettings(el) {
         <div class="field field-check"><label><input type="checkbox" id="set-focus-mode" ${settings.panelFocusMode === true ? 'checked' : ''}> Focus mode — minimal trade panel</label><small>Strips the banner, sparkline, thesis and last-close card from the trade tab — only token, price, balance and buy/sell controls remain. For distraction-free execution.</small></div>
       </div>
       <div class="card">
-        <h3>Instant X links</h3>
+        <h3>Instant links</h3>
         <div class="field field-check"><label><input type="checkbox" id="set-warm-x" ${settings.warmXLinksEnabled === true ? 'checked' : ''}> Instant X links</label><small>X posts, profiles, communities, and CA searches clicked on a trading site open in a kept-warm viewer tab (~0.5s instead of ~3.5s), with hover prefetch. Keeps one muted background x.com tab while on. Ctrl/Cmd/middle-click always opens normal tabs.</small></div>
-        <div class="field field-check"><label><input type="checkbox" id="set-warm-everywhere" ${settings.warmEverywhereEnabled === true ? 'checked' : ''}> Instant terminal links</label><small>The same warm-viewer treatment for pump.fun, Solscan and cross-terminal links. Close a warm tab and it stays closed until you actually click that destination again.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-warm-everywhere" ${settings.warmEverywhereEnabled === true ? 'checked' : ''}> Instant terminal links</label><small>The same warm-viewer treatment for pump.fun, Solscan and cross-terminal token links — now the whole matrix: Axiom, Padre, GMGN, Fomo, BullX, Photon, Dexscreener, Birdeye and Jupiter. Close a warm tab and it stays closed until you actually click that destination again.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-instant-discord" ${settings.instantDiscordEnabled === true ? 'checked' : ''}> Instant links on Discord</label><small>Registers the link interceptor on discord.com, so token and X links pasted in channels route through the same warm viewers. Uses the two toggles above for what actually routes; only classified links are ever touched — every other click stays native.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-instant-telegram" ${settings.instantTelegramEnabled === true ? 'checked' : ''}> Instant links on Telegram Web</label><small>Same treatment on web.telegram.org.</small></div>
+        <div class="field field-check"><label><input type="checkbox" id="set-instant-everywhere" ${settings.instantAllSitesEnabled === true ? 'checked' : ''}> Instant links on every site</label><small>The maximal version: the interceptor registers on all https sites (terminals and x.com keep their built-ins). The cost is one small script per page while this is on; the contract is unchanged — a link that is not a token/X link is never touched, and nothing is ever injected with this off.</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-warm-cards" ${settings.warmHoverCardsEnabled === true ? 'checked' : ''}> Tweet preview card on hover</label><small>Hover an X link and a large readable preview of the post renders right on the page — the card itself is the click target, so no aiming at a 14px icon. Deleted posts say so before you click. Uses X's public oEmbed endpoint (no login, no tracking — see docs/PERMISSIONS.md).</small></div>
         <div class="field field-check"><label><input type="checkbox" id="set-warm-row" ${settings.warmHoverRowEnabled === true ? 'checked' : ''}> Preview from anywhere on the row</label><small>Rest the cursor about a third of a second anywhere on a token row and its X preview appears — no need to find the icon at all. Needs Instant X links on.</small></div>
       </div>
@@ -4011,6 +4014,9 @@ function gatherSettingsFromForm(notes = [], base = settings) {
     gamingModeEnabled: document.getElementById('set-gaming-mode').checked,
     warmXLinksEnabled: document.getElementById('set-warm-x').checked,
     warmEverywhereEnabled: document.getElementById('set-warm-everywhere').checked,
+    instantDiscordEnabled: document.getElementById('set-instant-discord').checked,
+    instantTelegramEnabled: document.getElementById('set-instant-telegram').checked,
+    instantAllSitesEnabled: document.getElementById('set-instant-everywhere').checked,
     warmHoverCardsEnabled: document.getElementById('set-warm-cards').checked,
     warmHoverRowEnabled: document.getElementById('set-warm-row').checked,
     xrayEnabled: document.getElementById('set-xray').checked,

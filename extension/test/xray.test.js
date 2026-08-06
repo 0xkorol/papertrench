@@ -509,8 +509,11 @@ test('the X-Ray scripts are wired into the right worlds, in the right order', ()
 });
 
 test('X-Ray adds no permissions and no web-accessible resources', () => {
+  // The pinned list gained `scripting` in Turbo II (the opt-in Instant Links
+  // spread — see warmlinks.test.js for the why). X-Ray's own claim stands:
+  // none of these permissions exist FOR X-Ray.
   assert.deepEqual([...manifest.permissions].sort(),
-    ['activeTab', 'offscreen', 'storage', 'tabs', 'unlimitedStorage'].sort());
+    ['activeTab', 'offscreen', 'scripting', 'storage', 'tabs', 'unlimitedStorage'].sort());
   for (const war of manifest.web_accessible_resources || []) {
     assert.ok(!(war.resources || []).some((r) => r.startsWith('xray-')),
       'no X-Ray file is exposed to page scripts');

@@ -89,12 +89,38 @@ test('the warm-links scripts are wired into the right worlds in the right order'
   assert.equal((xRelay.world || 'ISOLATED'), 'ISOLATED', 'the relay needs chrome.runtime, so ISOLATED');
 });
 
-test('the feature adds ZERO new permissions', () => {
-  // The whole design bends around this: static content scripts instead of
-  // `scripting`, lazy validation instead of `alarms`. Least privilege is a
-  // release property (load.test.js pins the exact list; this states the why).
+test('the permission list is pinned — scripting is the one deliberate addition', () => {
+  // v2.4.0 added ZERO permissions by design: static content scripts instead
+  // of `scripting`, lazy validation instead of `alarms`. Turbo II DID add
+  // `scripting`, deliberately and after exactly the debate this pin exists
+  // to force: the opt-in Discord/Telegram/everywhere spread registers its
+  // bundle at runtime, which keeps the O-09 property (nothing injected
+  // anywhere until the user turns a toggle on) that a static <all_urls>
+  // entry would have destroyed. Least privilege is a release property
+  // (load.test.js pins the list too; this states the why).
   assert.deepEqual([...manifest.permissions].sort(),
-    ['activeTab', 'offscreen', 'storage', 'tabs', 'unlimitedStorage'].sort());
+    ['activeTab', 'offscreen', 'scripting', 'storage', 'tabs', 'unlimitedStorage'].sort());
+});
+
+test('press-time and trajectory prefetch are hints only — a press never claims the click', () => {
+  const warmLinks = fs.readFileSync(path.join(ROOT, 'warm-links.js'), 'utf8');
+  const pressAt = warmLinks.indexOf("addEventListener('pointerdown'");
+  assert.ok(pressAt !== -1, 'the press-time prefetch listener must exist');
+  const trajAt = warmLinks.indexOf("addEventListener('mousemove'");
+  assert.ok(trajAt !== -1, 'the trajectory sampler must exist');
+  const scrollAt = warmLinks.indexOf("addEventListener('scroll'");
+  assert.ok(pressAt < trajAt && trajAt < scrollAt, 'both prefetch listeners live before the scroll dismissal');
+  const block = warmLinks.slice(pressAt, scrollAt);
+  assert.doesNotMatch(block, /preventDefault|stopPropagation/,
+    'prefetch signals must never eat the event — claiming belongs to the click path');
+  assert.doesNotMatch(block, /pt_warm_open|pt_warmdest_open/,
+    'prefetch signals may only ever HINT — opens belong to real clicks');
+  assert.match(block, /event\.ctrlKey \|\| event\.metaKey \|\| event\.shiftKey \|\| event\.altKey/,
+    'modified presses bypass prefetch exactly like modified clicks bypass routing');
+  // All three signals (dwell, press, trajectory) share one dedup budget, so
+  // stacking signals can never stack traffic.
+  assert.match(warmLinks, /function sendXHint/, 'the shared X hint sender must exist');
+  assert.match(warmLinks, /function sendDestHint/, 'the shared destination hint sender must exist');
 });
 
 /* ---------------- message contract (string level, wiring.test.js style) ---- */

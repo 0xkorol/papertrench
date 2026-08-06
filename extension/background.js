@@ -1321,6 +1321,40 @@ const WARM_DEST_FAMILIES = {
     hostRe: /(^|\.)fomo\.family$/,
     label: 'Fomo',
   },
+  // Turbo II: the rest of the supported-terminal matrix. Terminal rules,
+  // verbatim — click-created only, never pre-warmed. Dexscreener and Birdeye
+  // are lighter pages than the trade terminals, but "prewarm reads as an
+  // infestation" is about tab count, not page weight, so they follow suit.
+  bullx: {
+    storageKey: 'pt_warm_tab_bullx',
+    idleUrl: null,
+    hostRe: /(^|\.)bullx\.io$/,
+    label: 'BullX',
+  },
+  photon: {
+    storageKey: 'pt_warm_tab_photon',
+    idleUrl: null,
+    hostRe: /(^|\.)tinyastro\.io$/,
+    label: 'Photon',
+  },
+  dexscreener: {
+    storageKey: 'pt_warm_tab_dexscreener',
+    idleUrl: null,
+    hostRe: /(^|\.)dexscreener\.com$/,
+    label: 'Dexscreener',
+  },
+  birdeye: {
+    storageKey: 'pt_warm_tab_birdeye',
+    idleUrl: null,
+    hostRe: /(^|\.)birdeye\.so$/,
+    label: 'Birdeye',
+  },
+  jupiter: {
+    storageKey: 'pt_warm_tab_jupiter',
+    idleUrl: null,
+    hostRe: /(^|\.)jup\.ag$/,
+    label: 'Jupiter',
+  },
 };
 
 function readWarmDestTab(family) {
@@ -1541,6 +1575,99 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     }
   });
 });
+
+/* ------------- Instant Links beyond the terminals (opt-in spread) ---------
+ *
+ * Turbo II: token and X links do not only appear on trading sites — they get
+ * pasted into Discord channels and Telegram chats all day. With a per-site
+ * opt-in, the SAME interceptor bundle (classifiers + warm-links, ISOLATED
+ * world only, no MAIN-world hook) registers on those sites at runtime via
+ * chrome.scripting.
+ *
+ * The O-09 line survives intact: the MANIFEST's content scripts stay narrow,
+ * nothing injects anywhere by default, and every registration below exists
+ * only while its own toggle is on. "Every site" is the maximal opt-in — it
+ * still excludes the terminals and x.com (their built-ins own those), and the
+ * interceptor's own contract holds everywhere it lands: only a classified
+ * token/X link is ever touched, every other click stays native, and a dead
+ * classifier means a native click, never a swallowed one.
+ */
+
+const INSTANT_SITE_JS = ['xlinks.js', 'warmdest.js', 'trajectory.js', 'warm-links.js'];
+const INSTANT_SITE_SPECS = [
+  {
+    id: 'pt-instant-discord',
+    settingsKey: 'instantDiscordEnabled',
+    matches: ['https://discord.com/*', 'https://*.discord.com/*'],
+  },
+  {
+    id: 'pt-instant-telegram',
+    settingsKey: 'instantTelegramEnabled',
+    matches: ['https://web.telegram.org/*'],
+  },
+  {
+    id: 'pt-instant-everywhere',
+    settingsKey: 'instantAllSitesEnabled',
+    matches: ['https://*/*'],
+    // The terminals and X keep their static built-ins (double injection is
+    // guarded in warm-links.js, but clean registration beats a guard), and
+    // the dashboard's own site never needs an interceptor.
+    excludeMatches: [
+      ...WARM_PLATFORM_URLS,
+      'https://x.com/*', 'https://*.x.com/*',
+      'https://twitter.com/*', 'https://*.twitter.com/*',
+      'https://papertrench.com/*', 'https://www.papertrench.com/*',
+    ],
+  },
+];
+
+let instantChain = Promise.resolve();
+function instantSerial(fn) {
+  const next = instantChain.catch(() => {}).then(fn);
+  instantChain = next.catch(() => {});
+  return next;
+}
+
+/** Make reality match the toggles: register what is wanted, unregister what
+ * is not. Idempotent — safe to run at every worker start and settings save. */
+function instantSitesReconcile() {
+  return instantSerial(async () => {
+    if (!chrome.scripting || !chrome.scripting.getRegisteredContentScripts) return;
+    const settings = await getSettings();
+    const wantedIds = new Set(INSTANT_SITE_SPECS
+      .filter((spec) => settings[spec.settingsKey] === true)
+      .map((spec) => spec.id));
+    let existing = [];
+    try {
+      existing = await chrome.scripting.getRegisteredContentScripts({
+        ids: INSTANT_SITE_SPECS.map((spec) => spec.id),
+      });
+    } catch (_) { existing = []; }
+    const existingIds = new Set(existing.map((script) => script.id));
+    const drop = [...existingIds].filter((id) => !wantedIds.has(id));
+    if (drop.length) {
+      try { await chrome.scripting.unregisterContentScripts({ ids: drop }); } catch (_) {}
+    }
+    const add = INSTANT_SITE_SPECS.filter((spec) => wantedIds.has(spec.id) && !existingIds.has(spec.id));
+    if (add.length) {
+      try {
+        await chrome.scripting.registerContentScripts(add.map((spec) => ({
+          id: spec.id,
+          matches: spec.matches,
+          excludeMatches: spec.excludeMatches,
+          js: INSTANT_SITE_JS,
+          runAt: 'document_idle',
+          persistAcrossSessions: true,
+        })));
+      } catch (_) {}
+    }
+  });
+}
+
+// Registrations persist across sessions; the worker-start reconcile exists
+// for the update path (this build introducing the feature) and for settings
+// that changed while no worker was alive to hear pt_settings_changed.
+instantSitesReconcile().catch(() => {});
 
 /* -------------------- X-Ray (account intel ledger) --------------------
  *
@@ -2104,6 +2231,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await refreshFrameInterval();
         await warmSettingsChanged(settings);
         await warmDestSettingsChanged(settings);
+        await instantSitesReconcile();
         sendResponse({ ok: true });
         break;
 

@@ -1,6 +1,6 @@
 /* PaperTrench — warm X links, trading-site side (ISOLATED world).
  *
- * Three jobs:
+ * Five jobs:
  *  1. Keep the MAIN-world hook told whether the user's opt-in is on (the hook
  *     itself cannot read extension storage).
  *  2. Intercept plain-anchor clicks on X post/profile links at the capture
@@ -11,6 +11,15 @@
  *     only place a target="_blank" anchor can be caught at all — those never
  *     call window.open.
  *  3. Relay the MAIN-world hook's programmatic opens to the background.
+ *  4. Prefetch AHEAD of the click (Turbo II): on pointerdown — the press is
+ *     the commitment, the release is pure latency — and on a cursor
+ *     trajectory aimed straight at a link (trajectory.js), the same hover
+ *     hint fires early. Hints only; a guess never reveals anything.
+ *  5. Run anywhere the user opted in: the terminals load this bundle
+ *     statically, and the background registers the same files on Discord /
+ *     Telegram / every site (each behind its own toggle). The classifiers
+ *     make the extra surface inert except on the exact links this file
+ *     exists for — an unclassified click is a native click, everywhere.
  *
  * Modified clicks (ctrl / cmd / shift / alt / non-primary button) are passed
  * through untouched — "open in a real background tab and keep reading" is a
@@ -184,6 +193,29 @@
   let hintUrl = '';
   let lastHint = { url: '', t: 0 };
 
+  /** Send the X-viewer hint for a classified target. Deduped: one hint per
+   * URL per HINT_REPEAT_MS no matter which signal asked — hover dwell,
+   * pointer press, and trajectory share one budget on purpose, so stacking
+   * the signals can never stack the traffic. */
+  function sendXHint(target) {
+    const now = Date.now();
+    if (lastHint.url === target.url && now - lastHint.t < HINT_REPEAT_MS) return;
+    lastHint = { url: target.url, t: now };
+    if (contextAlive()) {
+      try { chrome.runtime.sendMessage({ type: 'pt_warm_hint', url: target.url }).catch(() => {}); } catch (_) {}
+    }
+  }
+
+  /** Same contract for warm destinations (pump.fun / Solscan / terminals). */
+  function sendDestHint(dest) {
+    const now = Date.now();
+    if (lastHint.url === dest.url && now - lastHint.t < HINT_REPEAT_MS) return;
+    lastHint = { url: dest.url, t: now };
+    if (contextAlive()) {
+      try { chrome.runtime.sendMessage({ type: 'pt_warmdest_hint', url: dest.url }).catch(() => {}); } catch (_) {}
+    }
+  }
+
   /* ---- preview card (opt-in) --------------------------------------------
    * The terminals' own tweet previews are small and demand pixel-precise
    * hovering on a 14px icon. This card is big, styled for reading, and is
@@ -335,13 +367,7 @@
   }
 
   function fireHover(anchor, target, viaRow) {
-    const now = Date.now();
-    if (!(lastHint.url === target.url && now - lastHint.t < HINT_REPEAT_MS)) {
-      lastHint = { url: target.url, t: now };
-      if (contextAlive()) {
-        try { chrome.runtime.sendMessage({ type: 'pt_warm_hint', url: target.url }).catch(() => {}); } catch (_) {}
-      }
-    }
+    sendXHint(target);
     if (cardsEnabled || viaRow) requestCard(anchor, target);
   }
 
@@ -380,14 +406,7 @@
       if (dest.url === hintUrl) return; // dwell already running/sent for this
       clearTimeout(hintTimer);
       hintUrl = dest.url;
-      hintTimer = setTimeout(() => {
-        const now = Date.now();
-        if (lastHint.url === dest.url && now - lastHint.t < HINT_REPEAT_MS) return;
-        lastHint = { url: dest.url, t: now };
-        if (contextAlive()) {
-          try { chrome.runtime.sendMessage({ type: 'pt_warmdest_hint', url: dest.url }).catch(() => {}); } catch (_) {}
-        }
-      }, DEST_HINT_DWELL_MS);
+      hintTimer = setTimeout(() => sendDestHint(dest), DEST_HINT_DWELL_MS);
       return;
     }
 
@@ -404,6 +423,64 @@
       fireHover(hit.anchor, hit.target, true);
     }, ROW_DWELL_MS);
   }, true);
+
+  /* Press-time prefetch (Turbo II). By pointerdown the user has committed;
+   * the click event is still a button-release away (~60-120ms). Fire the
+   * HINT now — the hidden viewer starts navigating while the button travels
+   * back up, and the click that follows finds a warmer page. Strictly a
+   * hint: nothing reveals, so a press that becomes a drag or a cancelled
+   * click costs nothing visible (the viewer parks on the pressed target, an
+   * equally warm place to wait). The click path is untouched — a press never
+   * claims the click, which is why no preventDefault lives here. */
+  window.addEventListener('pointerdown', (event) => {
+    if ((!enabled && !everywhereEnabled) || event.defaultPrevented) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const anchor = anchorFromEvent(event);
+    if (!anchor) return;
+    const href = anchor.getAttribute('href');
+    const X = window.PTXLinks;
+    const target = enabled && X ? X.classify(href, window.location.href) : null;
+    if (target) { sendXHint(target); return; }
+    const dest = destTargetFor(href);
+    if (dest) sendDestHint(dest);
+  }, true);
+
+  /* Trajectory prefetch (Turbo II). A cursor moving decisively AT a link
+   * telegraphs the hover before it lands: feed samples to the pure predictor
+   * (trajectory.js), project ~200ms ahead, and hint whatever classified link
+   * sits at the projected point. Only ever the same hint the dwell would
+   * send, on the same dedup budget — a wrong guess costs one hidden hop and
+   * nothing visible. Hit tests are throttled to one per TRAJ_CHECK_MS and
+   * only run while the predictor calls the motion fast and straight enough
+   * to mean something; idle and wandering cursors never reach
+   * elementFromPoint. */
+  const TRAJ_HORIZON_MS = 200;
+  const TRAJ_CHECK_MS = 90;
+  let trajTracker = null;
+  let trajLastCheck = 0;
+  window.addEventListener('mousemove', (event) => {
+    if (!enabled && !everywhereEnabled) return;
+    const T = window.PTTrajectory;
+    if (!T) return;
+    if (!trajTracker) trajTracker = T.createTracker();
+    const now = Date.now();
+    trajTracker.sample(event.clientX, event.clientY, now);
+    if (now - trajLastCheck < TRAJ_CHECK_MS) return;
+    trajLastCheck = now;
+    const p = trajTracker.predict(TRAJ_HORIZON_MS);
+    if (!p) return;
+    const x = Math.max(0, Math.min(p.x, window.innerWidth - 1));
+    const y = Math.max(0, Math.min(p.y, window.innerHeight - 1));
+    const el = document.elementFromPoint(x, y);
+    const anchor = el && el.closest ? el.closest('a[href]') : null;
+    if (!anchor) return;
+    const href = anchor.getAttribute('href');
+    const X = window.PTXLinks;
+    const target = enabled && X ? X.classify(href, window.location.href) : null;
+    if (target) { sendXHint(target); return; }
+    const dest = destTargetFor(href);
+    if (dest) sendDestHint(dest);
+  }, { capture: true, passive: true });
 
   // A scrolling list slides the row out from under the card; a stale card
   // floating over the wrong row misleads, so any scroll dismisses it.

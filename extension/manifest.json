@@ -8,7 +8,8 @@
     "unlimitedStorage",
     "offscreen",
     "tabs",
-    "activeTab"
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -70,6 +71,7 @@
       "js": [
         "xlinks.js",
         "warmdest.js",
+        "trajectory.js",
         "engine.js",
         "mastery.js",
         "gamify.js",

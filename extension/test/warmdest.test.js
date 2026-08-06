@@ -79,8 +79,11 @@ test('familyOfHost powers the same-site guard', () => {
   assert.equal(WD.familyOfHost('pump.fun'), 'pumpfun');
   assert.equal(WD.familyOfHost('www.pump.fun'), 'pumpfun');
   assert.equal(WD.familyOfHost('solscan.io'), 'solscan');
-  assert.equal(WD.familyOfHost('dexscreener.com'), null,
-    'non-family terminals never trip the same-site guard');
+  // Turbo II: dexscreener joined the family matrix, so its links ON
+  // dexscreener now stay native via this guard instead of by absence.
+  assert.equal(WD.familyOfHost('dexscreener.com'), 'dexscreener');
+  assert.equal(WD.familyOfHost('example.com'), null,
+    'non-family hosts never trip the same-site guard');
   // warm-links.js must apply it: a pump.fun link ON pump.fun stays native.
   const warmLinks = fs.readFileSync(path.join(ROOT, 'warm-links.js'), 'utf8');
   assert.match(warmLinks, /familyOfHost\(window\.location\.hostname\) === target\.family/,
@@ -546,6 +549,76 @@ test('terminal viewers are never pre-created — first click pays, then it is wa
     type: 'pt_warmdest_open',
     url: `https://axiom.trade/t/${MINT}`,
   });
+  assert.equal(second.route, 'warm_nav', 'every hop after that is a warm navigate-and-reveal');
+});
+
+/* ------------- Turbo II: the remaining terminal families ------------- */
+
+test('the new terminal families classify their token routes and refuse the rest', () => {
+  const WD = loadWarmDest();
+  const WSOL = 'So11111111111111111111111111111111111111112';
+
+  const bullx = WD.classify(`https://neo.bullx.io/terminal?chainId=1399811149&address=${MINT}`);
+  assert.equal(bullx && bullx.family, 'bullx');
+  assert.equal(bullx.url, `https://neo.bullx.io/terminal?chainId=1399811149&address=${MINT}`,
+    'query passes byte-for-byte');
+  assert.equal(WD.classify(`https://bullx.io/terminal?address=${MINT}`).family, 'bullx',
+    'a missing chainId defaults to Solana; the whole-base58 address gate still holds');
+
+  const photonLp = WD.classify(`https://photon-sol.tinyastro.io/en/lp/${MINT}`);
+  assert.equal(photonLp && photonLp.family, 'photon');
+  assert.equal(photonLp.url, `https://photon-sol.tinyastro.io/en/lp/${MINT}`);
+  assert.equal(WD.classify(`https://photon-sol.tinyastro.io/zh/r/${MINT}`).family, 'photon',
+    'the locale prefix varies; /r/<mint> is Photon\'s own mint route (O-12)');
+
+  assert.equal(WD.classify(`https://dexscreener.com/solana/${MINT}`).family, 'dexscreener');
+
+  const birdeye = WD.classify(`https://birdeye.so/token/${MINT}?chain=solana`);
+  assert.equal(birdeye && birdeye.family, 'birdeye');
+  assert.equal(birdeye.url, `https://birdeye.so/token/${MINT}?chain=solana`);
+
+  assert.equal(WD.classify(`https://jup.ag/tokens/${MINT}`).family, 'jupiter');
+  assert.equal(WD.classify(`https://jup.ag/swap/SOL-${MINT}`).family, 'jupiter');
+  assert.equal(WD.classify(`https://jup.ag/swap?inputMint=${WSOL}&outputMint=${MINT}`).family,
+    'jupiter', 'the query form the app rewrites itself into');
+
+  // O-10/O-11 carries over: wallet routes, EVM shapes, non-Solana chains,
+  // and quote-only swaps must never warm-route.
+  for (const href of [
+    'https://neo.bullx.io/terminal?chainId=1&address=0x1234567890abcdef1234567890abcdef12345678',
+    'https://neo.bullx.io/terminal?chainId=1399811149&address=0x1234567890abcdef1234567890abcdef12345678',
+    'https://neo.bullx.io/portfolio',
+    'https://photon-sol.tinyastro.io/en/discover',
+    'https://dexscreener.com/ethereum/0x1234567890abcdef1234567890abcdef12345678',
+    'https://dexscreener.com/watchlist',
+    `https://birdeye.so/token/${MINT}?chain=ethereum`,
+    `https://birdeye.so/profile/${MINT}`,
+    `https://jup.ag/portfolio/${MINT}`,
+    'https://jup.ag/swap/SOL-USDC',
+    `https://jup.ag/swap?inputMint=${WSOL}&outputMint=${WSOL}`,
+  ]) {
+    assert.equal(WD.classify(href), null, `${JSON.stringify(href)} must not classify`);
+  }
+
+  assert.equal(WD.familyOfHost('neo.bullx.io'), 'bullx');
+  assert.equal(WD.familyOfHost('photon-sol.tinyastro.io'), 'photon');
+  assert.equal(WD.familyOfHost('birdeye.so'), 'birdeye');
+  assert.equal(WD.familyOfHost('jup.ag'), 'jupiter');
+});
+
+test('the new families ride the click-created viewer flow, never prewarm', async () => {
+  const worker = destWorker({ platformTabs: [{ id: 7 }] });
+  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await worker.settle();
+  assert.equal(worker.calls.created.length, 2,
+    'prewarm still creates ONLY the light pumpfun/solscan viewers — none of the new families');
+
+  const DEX_URL = `https://dexscreener.com/solana/${MINT}`;
+  const first = await send(worker.listener, { type: 'pt_warmdest_open', url: DEX_URL });
+  assert.equal(first.route, 'cold_tab', 'the first hop pays cold');
+  assert.ok(worker.session.pt_warm_tab_dexscreener, 'and the tab becomes the family viewer');
+
+  const second = await send(worker.listener, { type: 'pt_warmdest_open', url: `${DEX_URL}?t=1` });
   assert.equal(second.route, 'warm_nav', 'every hop after that is a warm navigate-and-reveal');
 });
 

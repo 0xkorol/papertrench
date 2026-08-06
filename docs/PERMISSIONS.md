@@ -11,6 +11,7 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
 | `offscreen` | Optional screen recording uses an offscreen document for `getDisplayMedia` — MV3 service workers cannot record directly. Only created when you start a recording. |
 | `tabs` | Two uses: capturing a snapshot frame of the trading tab (only the tab that traded, only when frames are enabled), and broadcasting settings/recording status to open trading tabs. |
 | `activeTab` | Popup interactions with the current tab (overlay toggle). |
+| `scripting` | One use: the opt-in "Instant links on Discord / Telegram / every site" toggles (all off by default) register the small link-interceptor bundle on those sites at runtime. Nothing is ever registered while the toggles are off, and turning one off unregisters it. Runtime registration is why the manifest's own content scripts can STAY narrow (the O-09 property) while the user can still opt sites in. |
 
 ## Host permissions vs. content scripts
 
@@ -20,6 +21,16 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
   (Earlier alphas
   injected everywhere; fixed as DEFECTS.md O-09 and enforced by
   `scripts/preflight.sh` and a manifest test.)
+- **Opt-in Instant Links spread (Turbo II).** Three off-by-default toggles
+  (Discord, Telegram Web, every site) register ONE bundle at runtime via
+  `chrome.scripting`: the two URL classifiers, the trajectory predictor, and
+  the click/hover interceptor — ISOLATED world, no MAIN-world hook, no
+  overlay, no trading engine. The bundle acts only on links its classifiers
+  recognize (X posts/profiles/communities, and token pages on the supported
+  destinations); every other click is untouched and native. The "every site"
+  registration excludes the terminals and x.com (their static built-ins own
+  those). Toggling off unregisters immediately; with the toggles off this
+  feature has zero footprint, which is how the O-09 property survives.
 - **x.com / twitter.com (v2.4.0, warm links).** Two small bridge scripts load
   on X for the opt-in "Instant X links" feature. They are passive: they do
   nothing until the background routes a click from a trading site into the

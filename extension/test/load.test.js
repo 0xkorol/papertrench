@@ -271,7 +271,7 @@ test('the manifest requests only the permissions the extension actually uses', (
   // Least privilege matters for a public release: every extra permission is a
   // reason for someone to distrust the extension.
   assert.deepEqual([...manifest.permissions].sort(),
-    ['activeTab', 'offscreen', 'storage', 'tabs', 'unlimitedStorage'].sort());
+    ['activeTab', 'offscreen', 'scripting', 'storage', 'tabs', 'unlimitedStorage'].sort());
   assert.ok(!manifest.permissions.includes('alarms'),
     'the alarm was only used for external polling, which this build does not do');
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));

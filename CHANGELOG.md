@@ -5,6 +5,40 @@ details live in the commit messages.
 
 ## Unreleased
 
+Turbo II — the speed pass, everywhere at once. Ask the Turbo receipts card
+whether any of this is real; that is what it is for.
+
+- **Every terminal is a warm destination now.** BullX, Photon, Dexscreener,
+  Birdeye and Jupiter join Axiom, Padre, GMGN, Fomo, pump.fun and Solscan —
+  the matrix is closed: a token link between ANY two supported sites routes
+  through that family's kept-warm viewer instead of a cold tab. Same rules
+  as before: token routes only (wallet/portfolio/EVM shapes never route),
+  terminal viewers are click-created (no new pre-warmed tabs), and a closed
+  viewer stays closed until you click that destination again.
+- **Press-time prefetch.** By the time your button is down you have already
+  decided; the release is pure latency (~60–120ms). The hidden viewer now
+  starts navigating at pointerdown, so the click that follows finds a page
+  that has been loading since the press. Hints only — a press that turns
+  into a drag or a text-selection costs nothing and claims nothing.
+- **Trajectory prefetch.** A cursor moving fast and straight AT a link is a
+  hover announced early. PaperTrench projects the pointer ~200ms ahead and
+  fires the same hover hint at the link it is going to land on — the dwell
+  timer that used to start when you arrived has often already fired before
+  you get there. Wandering, drifting, and flicking cursors never trigger it
+  (the predictor is pure math with tests to that effect), a wrong guess
+  costs one hidden hop, and all three signals — dwell, press, trajectory —
+  share one hint budget, so stacking them never stacks traffic.
+- **Instant links on Discord, Telegram Web — or every site (each opt-in,
+  off by default).** Token and X links do not only live on trading sites;
+  they get pasted into chats all day. Three new toggles register the link
+  interceptor (classifiers + warm routing, nothing else — no overlay, no
+  engine) on discord.com, web.telegram.org, or every https site. Only
+  classified token/X links are ever touched; every other click stays native.
+  This added the `scripting` permission — the runtime-registration API is
+  what lets the manifest's own content scripts STAY narrow, and with the
+  toggles off, nothing is injected anywhere (docs/PERMISSIONS.md has the
+  full audit).
+
 The leaderboard goes live — the social half of PaperTrench, operated
 entirely through the website so the extension stays lightweight and
 disconnected.
