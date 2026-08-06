@@ -122,7 +122,10 @@ for cs in m.get('content_scripts', []):
         h = pat.split('://')[-1].split('/')[0].replace('*.', '')
         if h != '*':
             hosts.add(h)
-print(len(hosts - {'x.com', 'twitter.com'}))
+# x is the warm-viewer surface and papertrench.com is the site relay —
+# neither is a trading site a user can trade on, and counting our own
+# domain as one would inflate the hero stat.
+print(len(hosts - {'x.com', 'twitter.com', 'papertrench.com', 'www.papertrench.com'}))
 PY
 )
 SITES_SHOWN=$(grep -oP 'data-check="sites">\K[0-9]+' site/index.html)

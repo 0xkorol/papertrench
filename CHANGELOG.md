@@ -3,7 +3,11 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
-## Unreleased
+## v3.1.0 — 2026-08-06
+
+Every item in this release traces to a named field report from the last two
+days — this is the users-found-it, we-fixed-it-same-week batch, and two of
+the fixes guard the honesty of the numbers themselves.
 
 - **A fill can no longer execute at a resurrected dead price.** Field
   report with screenshots: a coin crashed ~30K → ~8K, the DCA buy filled
@@ -316,17 +320,6 @@ verifier API — unlike the extension work above, which is committed but not
 yet released. The two were sharing one "Unreleased" heading, which made a
 shipped feature and an untagged one look like the same state.
 
-> **One exception, honestly flagged.** A GitHub Pages incident has held the
-> *site* deploy since 06:36 UTC today (`arena.js` in production still carries
-> that timestamp; Pages has been in major outage with three failed runs and one
-> hung). Everything else below is live, including the clan roster's *not
-> counted* label — that one shipped before the outage. The single bullet
-> describing *page* behaviour that is in `main` and not yet on papertrench.com
-> is the cross-domain sign-in message ("the page now tells you that is what
-> happened"); it goes live with the next successful Pages run. A heading that
-> promises "you can use this today" has to mean it, so the exception is named
-> here rather than left to read as shipped.
-
 The Arena — PaperTrench gets a social half, operated entirely through the
 website so the extension stays lightweight, open-source and disconnected.
 
@@ -453,14 +446,14 @@ website so the extension stays lightweight, open-source and disconnected.
 - **One ranked record per X account is expensive to sybil, not impossible.**
   Ranking is bound to a real, public X account, so running ten identities
   costs ten accounts with ten histories. That is a price, not a wall.
-- **Sign-in needs a Chromium browser for now.** The Arena's API lives on a
-  different domain than the site, and Safari and Firefox refuse or partition
-  cross-domain session cookies by default — a reasonable privacy stance our
-  current setup trips over. On those browsers you can complete the X sign-in
-  and still land signed out. The page now tells you that is what happened
-  instead of pretending you never signed in; Chrome, Edge and Brave hold the
-  session meanwhile. Moving the API onto papertrench.com fixes it properly
-  and is a DNS change we have not made yet.
+- **Sign-in now sticks in every browser** (deployed later the same day).
+  The Arena's API lives on a different domain than the site, and the
+  session used to ride a cross-domain cookie that Safari blocks, Firefox
+  partitions, and Brave/private-mode Chrome drops — you could complete the
+  X sign-in and still land signed out. The sign-in now hands the session
+  token to the page directly, so no cookie policy can eat it. The
+  cookie-based path remains for a future same-site deploy, and the page
+  still names the failure honestly if a session ever fails to stick.
 
 ## v2.11.0 — 2026-08-05
 
