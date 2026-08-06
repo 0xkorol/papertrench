@@ -138,6 +138,50 @@ test('an entry blocked on the venue API is actually retried, not abandoned', () 
     'and after a fair chance, say so rather than stay blank');
 });
 
+test('an unmounted page keeps looking — a first failed detect is never permanent', () => {
+  // These are SPAs. At document_idle the route may not have resolved, and on
+  // Hyperliquid the title that NAMES the market is often not written yet. The
+  // href never changes afterwards, so a detect that failed once used to stay
+  // failed forever and the ticket only appeared if the user navigated — the
+  // "had to refresh and click around before it popped up" report.
+  const poll = contentSrc.slice(
+    contentSrc.indexOf('function pollLocation()'),
+    contentSrc.indexOf('chrome.storage.onChanged.addListener'),
+  );
+  assert.match(poll, /if \(!adapter && !venueParamsPending\) \{/,
+    'while nothing is mounted the poll must keep trying');
+  assert.match(poll, /if \(S\.detect\(location\.hostname, location\.pathname, document\.title\)\)/,
+    'and it must re-run detection against the CURRENT title, not a cached one');
+  // The cheap check gates the expensive one: detect is string matching, but
+  // enterPage does storage and network work.
+  assert.ok(poll.indexOf('S.detect(') < poll.indexOf('enterPage();\n      }'),
+    'detection must gate entry, not the other way round');
+});
+
+test('a missing venue number is chased every second, not every thirty', () => {
+  // A freshly loaded Jupiter page prints its borrow rate only once its app
+  // renders. Reading it on the slow cadence left the ticket CLOSED for up to
+  // 30s with "borrow rate unavailable", which reads as broken.
+  assert.match(contentSrc, /const VENUE_PARAM_POLL_MS = 1000;/);
+  assert.match(contentSrc, /managedInterval\(pollVenueParams, VENUE_PARAM_POLL_MS\)/);
+  const fn = contentSrc.slice(
+    contentSrc.indexOf('function pollVenueParams()'),
+    contentSrc.indexOf('/* --------------------------- storage ---'),
+  );
+  assert.ok(fn, 'pollVenueParams must exist');
+  assert.match(fn, /jupiter' && !Number\.isFinite\(jupBorrowFrac\)/,
+    'chase the borrow rate only while it is missing');
+  assert.match(fn, /hyperliquid' && !\(hlAssets && hlAssets\[adapter\.market\]\)/,
+    'and the leverage tiers likewise');
+});
+
+test('a known borrow rate survives an unlucky read', () => {
+  // The venue re-renders its header; a single blank read must not close a
+  // ticket that was open a moment ago.
+  assert.match(contentSrc, /if \(Number\.isFinite\(seen\)\) jupBorrowFrac = seen;/,
+    'only a real reading may replace a real reading');
+});
+
 test('a venue that never answers produces a visible reason, not an empty page', () => {
   assert.match(contentSrc, /venueUnreachable = true/,
     'the unreachable state must be recorded');

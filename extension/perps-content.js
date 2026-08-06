@@ -39,6 +39,7 @@
   const LOCATION_POLL_MS = 1000;
   const CARRY_TICK_MS = 60000;
   const ENTRY_RETRY_MS = 5000;
+  const VENUE_PARAM_POLL_MS = 1000; // while a required venue number is missing
   const ENTRY_ATTEMPTS_BEFORE_NOTICE = 6; // ~30s of the venue not answering
   const ACCEPT_RATIO = 20; // same magnitude gate doctrine as quote.js
   const BARS_REFRESH_MS = 60000;
@@ -152,9 +153,26 @@
         if (parsed) hlAssets = parsed;
       } catch (e) { /* stale params stay; the carry gate keeps opens honest */ }
     } else if (adapter.venue === 'jupiter') {
-      jupBorrowFrac = S.parseJupBorrowRate(document.body ? document.body.innerText : '');
+      const seen = S.parseJupBorrowRate(document.body ? document.body.innerText : '');
+      // Keep the last known rate rather than dropping to "unavailable" on a
+      // single unlucky read: the venue prints it in its own header, and a
+      // re-render can briefly blank it. A stale-but-real rate still refuses
+      // nothing; an absent one closes the ticket.
+      if (Number.isFinite(seen)) jupBorrowFrac = seen;
     }
     scheduleRender();
+  }
+
+  /* The venue's own numbers arrive after its app renders, well past
+   * document_idle. Polling them on the SLOW cadence meant a freshly loaded
+   * Jupiter page sat with "borrow rate unavailable" — and therefore a closed
+   * ticket — for up to 30 seconds, which reads as broken. While a required
+   * number is still missing, look for it every second; once it is known, the
+   * slow refresh takes over. */
+  function pollVenueParams() {
+    if (!adapter) return;
+    if (adapter.venue === 'jupiter' && !Number.isFinite(jupBorrowFrac)) refreshParams();
+    else if (adapter.venue === 'hyperliquid' && !(hlAssets && hlAssets[adapter.market])) refreshParams();
   }
 
   /* --------------------------- storage --------------------------- */
@@ -911,6 +929,22 @@
       enterPage();
       return;
     }
+
+    // NOT MOUNTED YET: keep looking. These are SPAs — at document_idle the
+    // route may not have resolved and, on Hyperliquid, the title that NAMES
+    // the market often has not been written yet. The href never changes
+    // afterwards, so without this the first failed detect was permanent and
+    // the ticket only appeared if the user happened to navigate. That is
+    // exactly the "had to refresh and click around" report. detect() is
+    // pure string matching, so retrying it every tick is free; the
+    // expensive entry work still runs only once, when it can succeed.
+    if (!adapter && !venueParamsPending) {
+      if (S.detect(location.hostname, location.pathname, document.title)) {
+        lastEntryAt = now;
+        enterPage();
+      }
+      return;
+    }
     if (venueParamsPending && now - lastEntryAt >= ENTRY_RETRY_MS) {
       lastEntryAt = now;
       entryAttempts += 1;
@@ -944,6 +978,7 @@
 
   loadUiSettings();
   managedInterval(pollLocation, LOCATION_POLL_MS);
+  managedInterval(pollVenueParams, VENUE_PARAM_POLL_MS);
   managedInterval(refreshParams, PARAMS_REFRESH_MS);
   managedInterval(refreshBars, BARS_REFRESH_MS);
   managedInterval(carryTick, CARRY_TICK_MS);
