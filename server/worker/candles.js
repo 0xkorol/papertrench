@@ -63,27 +63,63 @@ async function poolFor(env, mint) {
   return pool;
 }
 
-/** {low, high} in USD for the minute containing minuteTs, or null. */
-async function ohlcvMinute(env, pool, minuteTs) {
-  const beforeSec = Math.floor(minuteTs / 1000) + 120;
+/**
+ * A WINDOW of minute candles, not one minute.
+ *
+ * The endpoint returns up to 1000 candles for the same single request, and the
+ * original code asked for five and used one. That made API cost scale with
+ * FILLS, which the free quota cannot survive: a 40-fill record burned ~80
+ * calls, and one series — SOL/USD — was re-fetched for every distinct minute
+ * anyone had ever traded in.
+ *
+ * Asking for the maximum instead costs the same one request and covers ~16
+ * hours of that pool. Since historical minutes never change and the D1 cache
+ * is permanent, cost now scales with UNIQUE MINTS rather than fills — and a
+ * memecoin's whole tradeable life usually fits inside a single window. The
+ * SOL/USD series is shared by every record on the platform, so it collapses
+ * to roughly one call per 16 hours forever.
+ */
+const OHLCV_WINDOW = 1000;
+
+async function ohlcvWindow(env, pool, minuteTs) {
+  // before_timestamp returns candles strictly BEFORE it, newest first, so
+  // anchoring a full window ahead of the target makes the target the OLDEST
+  // candle in the range — which covers a record moving forward in time.
+  const beforeSec = Math.floor(minuteTs / 1000) + OHLCV_WINDOW * 60;
   const data = await gtJson(env,
     `${GT}/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/minute` +
-    `?aggregate=1&before_timestamp=${beforeSec}&limit=5&currency=usd`);
+    `?aggregate=1&before_timestamp=${beforeSec}&limit=${OHLCV_WINDOW}&currency=usd`);
   const rows = data && data.data && data.data.attributes && data.data.attributes.ohlcv_list;
   if (!Array.isArray(rows)) return null;
-  const wantSec = Math.floor(minuteTs / 1000);
+  const out = new Map();
   for (const row of rows) {
     // [ts, open, high, low, close, volume]
-    if (Number(row[0]) === wantSec) {
-      const high = Number(row[2]);
-      const low = Number(row[3]);
-      return high > 0 && low > 0 ? { low, high } : null;
-    }
+    const high = Number(row[2]);
+    const low = Number(row[3]);
+    if (high > 0 && low > 0) out.set(Number(row[0]) * 1000, { low, high });
   }
-  return null;
+  return out;
 }
 
-async function cachedCandle(env, key, minuteTs, fetcher) {
+/** One cache row. */
+function upsertCandle(env, key, minuteTs, value, now) {
+  return env.DB.prepare(`
+    INSERT INTO candle_cache (mint, minute_ts, candles_json, fetched_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(mint, minute_ts) DO UPDATE SET
+      candles_json = excluded.candles_json, fetched_at = excluded.fetched_at`)
+    .bind(key, minuteTs, value ? JSON.stringify(value) : null, now);
+}
+
+/**
+ * Read one minute from cache, and on a miss fetch a whole window and store all
+ * of it. `fetchWindow` returns a Map of minuteTs -> {low,high} (or null).
+ *
+ * The requested minute is written even when the window did not contain it:
+ * inside a covered range, an absent minute means the pool genuinely did not
+ * trade then, and recording that stops the same empty minute being re-fetched
+ * on every cron tick forever.
+ */
+async function cachedCandle(env, key, minuteTs, fetchWindow) {
   const now = Date.now();
   const hit = await env.DB.prepare(
     'SELECT candles_json, fetched_at FROM candle_cache WHERE mint = ? AND minute_ts = ?')
@@ -92,12 +128,21 @@ async function cachedCandle(env, key, minuteTs, fetcher) {
     const value = hit.candles_json ? JSON.parse(hit.candles_json) : null;
     if (value || now - hit.fetched_at < NO_DATA_RETRY_MS) return { value, fromCache: true };
   }
-  const value = await fetcher();
-  await env.DB.prepare(`
-    INSERT INTO candle_cache (mint, minute_ts, candles_json, fetched_at) VALUES (?, ?, ?, ?)
-    ON CONFLICT(mint, minute_ts) DO UPDATE SET
-      candles_json = excluded.candles_json, fetched_at = excluded.fetched_at`)
-    .bind(key, minuteTs, value ? JSON.stringify(value) : null, now).run();
+
+  const window = await fetchWindow();
+  const value = (window && window.get(minuteTs)) || null;
+
+  const writes = [upsertCandle(env, key, minuteTs, value, now)];
+  if (window) {
+    for (const [ts, candle] of window) {
+      if (ts !== minuteTs) writes.push(upsertCandle(env, key, ts, candle, now));
+    }
+  }
+  // D1 batches are bounded; a full 1000-candle window is chunked rather than
+  // sent as one enormous statement list.
+  for (let i = 0; i < writes.length; i += 100) {
+    await env.DB.batch(writes.slice(i, i + 100));
+  }
   return { value, fromCache: false };
 }
 
@@ -116,13 +161,13 @@ function makeGetCandles(env, budget) {
     };
 
     const sol = await cachedCandle(env, SOL_KEY, minuteTs, () =>
-      spend(() => ohlcvMinute(env, SOL_USD_POOL, minuteTs)));
+      spend(() => ohlcvWindow(env, SOL_USD_POOL, minuteTs)));
     if (!sol.fromCache) budget.used++;
 
     const token = await cachedCandle(env, mint, minuteTs, async () => {
       const pool = await spend(() => poolFor(env, mint));
       if (!pool) return null;
-      return spend(() => ohlcvMinute(env, pool, minuteTs));
+      return spend(() => ohlcvWindow(env, pool, minuteTs));
     });
     if (!token.fromCache) budget.used++;
 
