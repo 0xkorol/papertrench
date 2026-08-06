@@ -1170,7 +1170,7 @@ function renderGame(el) {
   }).join('');
 
   el.innerHTML = `
-    <div class="paper-tape"><span>“PAPER TRENCH”</span><span class="sub">Simulated funds · real discipline</span></div>
+    <div class="game-tape-bg" aria-hidden="true"><span>${'“PAPER TRENCH” · SIMULATED FUNDS · '.repeat(5)}</span></div>
     ${sessionPanel}
     <div class="card"${session ? ' style="margin-top:16px"' : ''}>
       <h3>Trench profile

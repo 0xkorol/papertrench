@@ -308,27 +308,26 @@
     .tag.badge.earned { opacity: 1; border-color: var(--amber); color: var(--text); }
     .cal-grade { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; }
 
-    /* Game tab — the "off-white" pass (maintainer): PAPER as the off-white
-       element, industrial tape + quoted labels, used as accent, not wallpaper. */
-    .paper-tape {
-      display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
-      margin: 0 0 14px; padding: 10px 40px;
-      background: #F4F1EA; color: #0A0D13;
-      font-weight: 900; letter-spacing: 2.5px; font-size: 12.5px; text-transform: uppercase;
-      border-radius: 3px; transform: rotate(-0.6deg);
-      box-shadow: 0 3px 16px rgba(0,0,0,0.45);
-      position: relative; overflow: hidden;
+    /* Game tab — caution tape as a WATERMARK, not a banner (maintainer:
+       "keep the color scheme, yellow in the background, the opacity and
+       background watermark aesthetic"). One translucent amber tape band
+       floats diagonally BEHIND the cards; the scheme stays dark/amber. */
+    #game { position: relative; overflow: hidden; }
+    #game > :not(.game-tape-bg) { position: relative; z-index: 1; }
+    .game-tape-bg {
+      position: absolute; left: -6%; right: -6%; top: 34%;
+      transform: rotate(-4deg); pointer-events: none; z-index: 0;
+      opacity: 0.07; overflow: hidden;
     }
-    .paper-tape::before, .paper-tape::after {
-      content: ''; position: absolute; top: 0; bottom: 0; width: 26px;
-      background: repeating-linear-gradient(45deg, #0A0D13 0 7px, transparent 7px 14px);
-      opacity: 0.85;
+    .game-tape-bg span {
+      display: block; white-space: nowrap;
+      font-weight: 900; font-size: 34px; letter-spacing: 7px; text-transform: uppercase;
+      color: var(--amber); padding: 8px 0;
+      border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+      border-image: repeating-linear-gradient(45deg, var(--amber) 0 10px, transparent 10px 20px) 1;
     }
-    .paper-tape::before { left: 0; }
-    .paper-tape::after { right: 0; }
-    .paper-tape .sub { font-size: 9px; letter-spacing: 1.8px; font-weight: 800; color: #55504a; }
-    .game-lab::before { content: '“'; margin-right: 2px; color: #F4F1EA; }
-    .game-lab::after { content: '”'; margin-left: 2px; color: #F4F1EA; }
+    .game-lab::before { content: '“'; margin-right: 2px; color: var(--amber-2); }
+    .game-lab::after { content: '”'; margin-left: 2px; color: var(--amber-2); }
 
     /* Game tab */
     .game-ladder { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
@@ -360,7 +359,7 @@
     .game-card .stat { font-size: 12px; padding: 6px 0; }
     .game-card .stat:last-of-type { margin-bottom: 12px; }
     .game-card > button { margin-top: auto; }
-    .game-session { border-color: #F4F1EA; }
+    .game-session { border-color: var(--amber); }
     .game-grade { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
     .game-grade .rank-bar { flex: 1; }
 
