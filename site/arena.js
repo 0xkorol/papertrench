@@ -101,6 +101,43 @@
     return `<span class="${cls}" style="background:${bg};color:${fg}">${esc(initials(entry && entry.handle))}</span>`;
   }
 
+  /* --------------------------------------------------------------- clans */
+
+  /**
+   * The [TAG] chip that rides beside a handle on every board.
+   *
+   * Returns an empty string when the trader is in no clan — deliberately not a
+   * placeholder chip. An em dash where a clan would be reads as "unaffiliated"
+   * to a designer and as a clan called "—" to everyone else.
+   */
+  function clanTag(tag, options) {
+    if (!tag) return '';
+    const opts = options || {};
+    const [bg, fg] = tone('clan:' + tag);
+    const style = `background:${bg};color:${fg};border-color:transparent`;
+    const label = '[' + esc(tag) + ']';
+    const title = esc(opts.title || ('Clan ' + tag));
+    if (opts.plain) return `<span class="ar-clan-tag" style="${style}" title="${title}">${label}</span>`;
+    return `<a class="ar-clan-tag" style="${style}" title="${title}"
+      href="clan.html?tag=${encodeURIComponent(tag)}">${label}</a>`;
+  }
+
+  /** The tag at crest size, tinted from the same hash as the chip so a clan
+   * looks like itself on every surface. */
+  function crest(tag, className) {
+    const [bg, fg] = tone('clan:' + tag);
+    return `<span class="ar-crest ${className || ''}" style="background:${bg};color:${fg}"
+      aria-hidden="true">${esc(String(tag || '?').slice(0, 5))}</span>`;
+  }
+
+  /** "3 of 5" as countable pips, for a clan that has not fielded five yet. */
+  function pips(filled, total) {
+    const n = Math.max(0, Math.min(Number(total) || 0, Number(filled) || 0));
+    return '<span class="ar-pips" aria-hidden="true">' +
+      Array.from({ length: Number(total) || 0 }, (_, i) =>
+        `<i class="${i < n ? 'on' : ''}"></i>`).join('') + '</span>';
+  }
+
   /* -------------------------------------------------------- verification */
 
   const CHIP = {
@@ -344,6 +381,7 @@
   window.PTArena = {
     API, API_LIVE, EXTENSION_IDS,
     esc, fmt, signed, dirClass, ago, initials, tone, face,
+    clanTag, crest, pips,
     CHIP, chipFor,
     api, getOrThrow, me, signIn, logout, submit,
     bridgePing, bridgeGetRecord,

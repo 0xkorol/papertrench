@@ -73,6 +73,26 @@ website so the extension stays lightweight, open-source and disconnected.
   window are shown and labeled provisional; they decide nothing. And
   because the window is just a slice of the same chain, there is no duel
   book to inflate.
+- **Clans.** Found one, or join with an invite code, and trade under a
+  `[TAG]` that follows your handle across every board. A clan keeps no book
+  of its own: its number is the **mean of its five best members**, and a
+  member's rounds only count **from the day they joined** — so a lifetime
+  record cannot be recruited in and donated, and a round belongs to exactly
+  one clan, the one you were in when you closed it. Two consequences worth
+  knowing before you build a roster. Extra members are free, so taking in
+  beginners never costs a clan anything (a board that charged clans for
+  teaching would work against the entire point of this product). And
+  **cutting a struggling member can never raise your score** — the top five
+  is the top five whether or not the people below it are on the roster; all
+  expelling someone can do is drop you under the five-member minimum. Under
+  five qualified members a clan reads *forming*, with how many it still
+  needs, rather than being shown with a zero. Clan pages attribute the
+  number to the five names that make it. And clans inherit the verification
+  bar the boards use: **only a fully verified record takes a position** —
+  score, rounds and P&amp;L alike. A member still waiting on re-pricing appears
+  on the roster, labeled, reading *not counted*, with no figures borrowed
+  into the clan's totals. Without that a clan would have been the way to
+  launder exactly the records the boards stopped ranking.
 - **Achievements, on the house doctrine.** Badges derived from your
   committed fills — and, exactly as in the extension, **none for profit,
   win streaks, or volume.** Losses taken without chasing the mint that took

@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Clan</title>
+<meta name="description" content="A PaperTrench clan: its roster, what each member has contributed since joining, and the five verified records its score is the mean of.">
+<meta property="og:title" content="PaperTrench — Clan">
+<meta property="og:description" content="Five verified members to rank. The mean of the best five. Nothing anyone did before joining counts.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="arena.css">
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="sprint.html">Sprint</a>
+      <a href="duels.html">Duels</a>
+      <a href="clans.html">Clans</a>
+      <a href="news.html">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<main class="ar-page">
+  <div class="wrap">
+    <div id="head"></div>
+
+    <div class="ar-shell" style="margin-top:22px">
+      <div class="ar-stack">
+        <section class="ar-pane" aria-labelledby="roster-h">
+          <div class="ar-pane-head">
+            <span class="glyph">▤</span><span id="roster-h">The roster</span>
+            <span class="spacer"></span>
+            <div class="ar-tabs">
+              <button class="ar-tab on" id="tab-season" type="button">All-time</button>
+              <button class="ar-tab" id="tab-week" type="button">This week</button>
+            </div>
+          </div>
+          <p class="ar-note" id="roster-note" style="padding:12px 20px 0"></p>
+          <div id="roster"></div>
+        </section>
+      </div>
+
+      <div class="ar-stack">
+        <section class="ar-pane" aria-labelledby="score-h">
+          <div class="ar-pane-head"><span class="glyph" style="color:var(--orange2)">ƒ</span>
+            <span id="score-h">The number</span></div>
+          <div class="pad"><div id="score-box"></div></div>
+        </section>
+
+        <section class="ar-pane" id="manage-pane" style="display:none" aria-labelledby="manage-h">
+          <div class="ar-pane-head"><span class="glyph" style="color:var(--violet)">⚙</span>
+            <span id="manage-h">Founder controls</span></div>
+          <div class="pad"><div id="manage"></div></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="clans.html">All clans</a>
+        <a href="leaderboard.html">Leaderboard</a>
+        <a href="sprint.html">Weekly Sprint</a>
+        <a href="duels.html">Duels</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="arena.js"></script>
+<script>
+(() => {
+  'use strict';
+  const L = window.PTArena;
+  const { esc, fmt, signed, dirClass, face, crest, pips, chipFor } = L;
+
+  const headEl = document.getElementById('head');
+  const rosterEl = document.getElementById('roster');
+  const noteEl = document.getElementById('roster-note');
+  const scoreEl = document.getElementById('score-box');
+  const managePaneEl = document.getElementById('manage-pane');
+  const manageEl = document.getElementById('manage');
+  const tabSeason = document.getElementById('tab-season');
+  const tabWeek = document.getElementById('tab-week');
+
+  const tag = new URLSearchParams(window.location.search).get('tag') || '';
+  let clan = null;
+  let mine = null;
+  let signedIn = false;
+  let mode = 'season';
+
+  const day = (ts) => new Date(Number(ts) || 0).toLocaleDateString();
+
+  /* ---------------- header ---------------- */
+
+  function renderHead() {
+    document.title = 'PaperTrench — [' + clan.tag + '] ' + clan.name;
+    const standing = mode === 'season' ? clan.season : clan.week;
+    headEl.innerHTML = `
+      <section class="ar-pane">
+        <div class="pad" style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
+          ${crest(clan.tag, 'lg')}
+          <div style="flex:1;min-width:220px">
+            <h1 class="ar-title" style="font-size:34px;margin:0">${esc(clan.name)}</h1>
+            <p class="ar-note" style="margin-top:8px">
+              <span class="ar-clan-tag" style="margin-right:6px">[${esc(clan.tag)}]</span>
+              ${clan.open ? 'Open to anyone signed in' : 'Invite only'} ·
+              founded ${esc(day(clan.createdAt))} by
+              <a href="profile.html?handle=${encodeURIComponent(clan.founder)}">@${esc(clan.founder)}</a>
+            </p>
+            ${clan.motto ? `<p style="margin-top:10px;font-size:14.5px;color:var(--muted)">“${esc(clan.motto)}”</p>` : ''}
+          </div>
+          <div id="join-box" style="min-width:200px"></div>
+        </div>
+        <div class="pad" style="border-top:var(--edge)">
+          <div class="ar-stats">
+            <div class="ar-stat">
+              <div class="num">${esc(String(standing.roster))}<span style="color:var(--dim);font-size:14px">/${esc(String(clan.maxMembers))}</span></div>
+              <div class="lbl">Members</div></div>
+            <div class="ar-stat">
+              <div class="num">${esc(String(standing.qualified))}</div>
+              <div class="lbl">Qualified</div></div>
+            <!-- These two count VERIFIED members only, same as the score. The
+                 labels say so rather than reading as a clan-wide total that
+                 quietly omits people the roster below plainly shows. -->
+            <div class="ar-stat">
+              <div class="num">${esc(fmt(standing.rounds, 0))}</div>
+              <div class="lbl">Verified rounds ${mode === 'week' ? 'this week' : 'as a clan'}</div></div>
+            <div class="ar-stat">
+              <div class="num ${dirClass(standing.pnlSol)}">${esc(signed(standing.pnlSol, 2))} ◎</div>
+              <div class="lbl">Verified P&amp;L</div></div>
+          </div>
+        </div>
+      </section>`;
+    renderJoinBox();
+  }
+
+  function renderJoinBox() {
+    const box = document.getElementById('join-box');
+    if (!box) return;
+    if (mine && mine.inClan && mine.tag === clan.tag) {
+      box.innerHTML = `<p class="ar-note" style="text-align:right">You are in this clan since
+        <strong>${esc(day(mine.joinedAt))}</strong>.<br>
+        <a href="clans.html">Manage membership →</a></p>`;
+      return;
+    }
+    if (mine && mine.inClan) {
+      box.innerHTML = `<p class="ar-note" style="text-align:right">You are in
+        <a href="clan.html?tag=${encodeURIComponent(mine.tag)}">[${esc(mine.tag)}]</a>.
+        One clan at a time — leave that one first.</p>`;
+      return;
+    }
+    if (!signedIn) {
+      box.innerHTML = `<p class="ar-note" style="text-align:right">
+        <a href="clans.html">Sign in to join a clan →</a></p>`;
+      return;
+    }
+    if (!mine) {
+      // Signed in, but the membership read did not come back. Offering a Join
+      // button here could put someone in a second clan; saying so is better.
+      box.innerHTML = `<p class="ar-note" style="text-align:right">Could not read your membership
+        just now, so no join button is shown. Reload in a moment.</p>`;
+      return;
+    }
+    if (!clan.open) {
+      box.innerHTML = `<p class="ar-note" style="text-align:right">Invite only. Ask a member for the
+        code, then join from <a href="clans.html">the clan board</a>.</p>`;
+      return;
+    }
+    box.innerHTML = `<button class="ar-btn primary" id="join-btn" style="width:100%">Join [${esc(clan.tag)}]</button>
+      <p class="ar-note" style="margin-top:8px">Your contribution starts the moment you join. Nothing
+        you have traded so far counts toward this clan.</p>
+      <div id="join-status"></div>`;
+    document.getElementById('join-btn').addEventListener('click', async () => {
+      const { body } = await L.api('/api/clan/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: clan.tag }),
+      });
+      if (body && body.ok) { window.location.reload(); return; }
+      document.getElementById('join-status').innerHTML =
+        `<p class="ar-note">Could not join: ${esc((body && body.reason) || 'server-error')}</p>`;
+    });
+  }
+
+  /* ---------------- the number ---------------- */
+
+  function renderScore() {
+    const standing = mode === 'season' ? clan.season : clan.week;
+    if (!standing.ranked) {
+      scoreEl.innerHTML = `
+        <div style="text-align:center;padding:6px 0 14px">
+          <div style="font-size:13px;font-weight:800;letter-spacing:1.4px;color:var(--dim);text-transform:uppercase">Forming</div>
+          <div style="margin:12px 0">${pips(standing.qualified, clan.countingMembers)}</div>
+          <div style="font-family:var(--mono);font-size:13px;color:var(--muted)">
+            ${esc(String(standing.qualified))} of ${esc(String(clan.countingMembers))} qualified members</div>
+        </div>
+        <p class="ar-note">This clan has no score yet, and is not shown with one. It needs
+          ${esc(String(standing.needed))} more member${standing.needed === 1 ? '' : 's'} with a
+          <strong>fully verified</strong> record and
+          ${mode === 'week' ? 'a closed round this week' : esc(String(clan.minSeasonRounds)) + ' closed rounds since joining'}.</p>`;
+      return;
+    }
+    scoreEl.innerHTML = `
+      <div style="text-align:center;padding:4px 0 16px">
+        <div style="font-family:var(--mono);font-size:44px;font-weight:800;color:var(--orange2);line-height:1"
+          >${esc(fmt(standing.score, 1))}</div>
+        <div class="ar-note" style="margin-top:8px">mean of the five below</div>
+      </div>
+      <div style="display:grid;gap:8px">
+        ${standing.counting.map((m, i) => `
+          <a href="profile.html?handle=${encodeURIComponent(m.handle)}"
+             style="display:flex;align-items:center;gap:9px;padding:8px 10px;border:var(--edge);border-radius:10px;background:var(--pane-lo)">
+            <span style="font-family:var(--mono);font-size:11px;font-weight:800;color:var(--dim);width:14px">${i + 1}</span>
+            ${face({ handle: m.handle }, 'ar-face')}
+            <span class="ar-handle" style="flex:1">@${esc(m.handle)}</span>
+            <span style="font-family:var(--mono);font-size:12.5px;font-weight:800;color:var(--orange2)">${esc(fmt(m.score, 1))}</span>
+          </a>`).join('')}
+      </div>
+      <p class="ar-note" style="margin-top:14px">Every one of these is a replayed window slice, counted
+        from that member's join date. Members outside the five are not in this number — which is why
+        recruiting more of them costs a clan nothing, and cutting them gains it nothing.</p>`;
+  }
+
+  /* ---------------- roster ---------------- */
+
+  const RTHEAD = `<div class="ar-member-thead">
+      <span></span>
+      <span>Trader</span>
+      <span class="c-status">Record</span>
+      <span class="c-joined">Joined</span>
+      <span class="r c-rounds">Rounds</span>
+      <span class="r">Return</span>
+      <span class="r">Score</span>
+    </div>`;
+
+  /** Only a fully verified record takes a position, here as on every board. */
+  const eligible = (member) => member.status === 'verified';
+
+  function memberRow(member, counting, index) {
+    const entry = member.entry;
+    const counts = counting.has(member.handle.toLowerCase());
+    const none = '<span class="val dim">—</span>';
+
+    // A member below 'verified' contributes nothing, so this row must not print
+    // contribution figures for them. Their numbers are not merely uncounted —
+    // they are the one class of record the server could NOT check (attest.js is
+    // public, and a chain of unlisted mints re-prices to all no-data). Showing
+    // them in a column that means "what this member contributed" would state as
+    // fact the exact thing verification failed to establish.
+    //
+    // A dash is not available for this: a dash already means "closed no round in
+    // this window", which is a different fact and a true one. So this gets its
+    // own state, and their real record stays one click away on their profile.
+    if (!eligible(member)) {
+      const why = 'Not counted — only fully verified records take a position. ' +
+        'This one has not cleared re-pricing, so nothing of it is added to the clan.';
+      return `<div class="ar-member uncounted" style="animation-delay:${Math.min(index * 22, 260)}ms">
+        <span class="mark"></span>
+        <span class="ar-who">
+          ${face(member)}
+          <a class="ar-handle" href="profile.html?handle=${encodeURIComponent(member.handle)}">@${esc(member.handle)}</a>
+          ${member.role === 'founder' ? '<span class="ar-role">founder</span>' : ''}
+        </span>
+        <span class="c-status">${chipFor(member.status)}</span>
+        <span class="val dim c-joined">${esc(day(member.joinedAt))}</span>
+        <span class="val dim c-rounds" title="${esc(why)}">·</span>
+        <span class="val dim" title="${esc(why)}">·</span>
+        <span class="val nc" title="${esc(why)}">not counted</span>
+      </div>`;
+    }
+
+    return `<div class="ar-member ${counts ? 'counts' : ''}" style="animation-delay:${Math.min(index * 22, 260)}ms">
+      <span class="mark" title="${counts ? 'One of the five this clan\'s score is the mean of' : ''}">${counts ? '★' : ''}</span>
+      <span class="ar-who">
+        ${face(member)}
+        <a class="ar-handle" href="profile.html?handle=${encodeURIComponent(member.handle)}">@${esc(member.handle)}</a>
+        ${member.role === 'founder' ? '<span class="ar-role">founder</span>' : ''}
+      </span>
+      <span class="c-status">${chipFor(member.status)}</span>
+      <span class="val dim c-joined">${esc(day(member.joinedAt))}</span>
+      ${entry ? `<span class="val dim c-rounds">${esc(fmt(entry.rounds, 0))}</span>` : `<span class="c-rounds">${none}</span>`}
+      ${entry ? `<span class="val ${dirClass(entry.roiPct)}">${esc(signed(entry.roiPct, 1, '%'))}</span>` : none}
+      ${entry ? `<span class="val" style="color:var(--orange2);font-weight:800">${esc(fmt(entry.score, 1))}</span>` : none}
+    </div>`;
+  }
+
+  function renderRoster() {
+    const standing = mode === 'season' ? clan.season : clan.week;
+    // Only mark the five when there IS a number for them to make. `counting`
+    // is still populated for a forming clan — it is the qualified pool so far —
+    // but starring it would claim those members are carrying a score that does
+    // not exist, which is the same lie as printing the score as zero.
+    const counting = new Set(standing.ranked
+      ? standing.counting.map((m) => m.handle.toLowerCase()) : []);
+    // Each member carries BOTH slices, so switching views swaps the numbers
+    // rather than blanking everyone outside the five. A dash here always means
+    // "no round closed in this window" and never "not in the top five".
+    const sliceOf = (member) => (mode === 'season' ? member.season : member.week);
+
+    const members = clan.members.slice().sort((a, b) => {
+      const sa = counting.has(a.handle.toLowerCase()) ? 1 : 0;
+      const sb = counting.has(b.handle.toLowerCase()) ? 1 : 0;
+      if (sa !== sb) return sb - sa;
+      // Members who take no position sort last, so the contributing roster
+      // reads top-down without uncounted rows breaking the ordering.
+      if (eligible(a) !== eligible(b)) return eligible(a) ? -1 : 1;
+      const ea = sliceOf(a);
+      const eb = sliceOf(b);
+      if (Boolean(eb) !== Boolean(ea)) return eb ? 1 : -1;
+      if (ea && eb && eb.score !== ea.score) return eb.score - ea.score;
+      return (a.joinedAt || 0) - (b.joinedAt || 0);
+    });
+
+    rosterEl.innerHTML = RTHEAD + members.map((member, index) =>
+      memberRow(Object.assign({}, member, { entry: sliceOf(member) }), counting, index)).join('');
+
+    const uncounted = clan.members.filter((m) => !eligible(m)).length;
+    const star = standing.ranked
+      ? ' ★ marks the five the clan\'s score is the mean of.'
+      : ` This clan is still forming — ${esc(String(standing.qualified))} of
+         ${esc(String(clan.countingMembers))} qualified — so no member is marked as carrying a score yet.`;
+    const unverified = uncounted
+      ? ` <strong>${esc(String(uncounted))}</strong> member${uncounted === 1 ? '' : 's'} here
+         ${uncounted === 1 ? 'reads' : 'read'} <em>not counted</em>: only a fully verified record takes a
+         position, on this page and on every board. A record that has not cleared re-pricing is the one
+         class we could not check, so none of it is added to the clan — not the score, not the rounds,
+         not the P&amp;L. It is not a penalty and it lifts when verification does.`
+      : '';
+    noteEl.innerHTML = (mode === 'season'
+      ? `Every figure below is that member's record <strong>since the day they joined this clan</strong>
+         — not their all-time record, which lives on their profile.`
+      : `This week only (${esc(clan.weekId)}), and only rounds that opened and closed inside it after
+         each member joined. <strong>0</strong> means they were here and closed nothing — a real result.
+         A <strong>dash</strong> means they were not in the clan for any of this window, which is a
+         different fact and not a zero.`)
+      + star + unverified;
+  }
+
+  /* ---------------- founder controls ---------------- */
+
+  function renderManage() {
+    if (!mine || !mine.inClan || mine.tag !== clan.tag || !mine.isFounder) return;
+    managePaneEl.style.display = '';
+    manageEl.innerHTML = `
+      <label class="ar-field"><span class="lbl">Motto</span>
+        <input class="ar-input" id="m-motto" maxlength="120" value="${esc(clan.motto)}">
+        <span class="hint">Plain text, up to 120 characters.</span>
+      </label>
+      <label class="ar-check"><input type="checkbox" id="m-open" ${clan.open ? 'checked' : ''}>
+        <span>Open clan — anyone signed in can join from this page without the code.</span></label>
+      <button class="ar-btn primary" id="m-save" style="width:100%">Save</button>
+      <div id="m-status" style="margin-top:10px"></div>
+      <p class="ar-note" style="margin-top:14px">The tag and name are permanent. A clan that could
+        rename itself after collecting a roster could rename itself into an impersonation of another
+        one, so it cannot.</p>
+      <div style="margin-top:18px;border-top:var(--edge);padding-top:16px">
+        <div style="font-size:11px;font-weight:800;letter-spacing:0.8px;text-transform:uppercase;color:var(--dim);margin-bottom:10px">Remove a member</div>
+        <div style="display:grid;gap:7px">
+          ${clan.members.filter((m) => m.role !== 'founder').map((m) => `
+            <div style="display:flex;align-items:center;gap:9px">
+              ${face(m)}
+              <span class="ar-handle" style="flex:1">@${esc(m.handle)}</span>
+              <button class="ar-btn" data-kick="${esc(m.handle)}" style="padding:6px 12px;font-size:11.5px">Remove</button>
+            </div>`).join('') || '<p class="ar-note">No other members yet.</p>'}
+        </div>
+        <p class="ar-note" style="margin-top:12px">Worth knowing before you do: removing someone can
+          never raise this clan's score. Only the best five count, so a struggling member costs the
+          clan nothing — and dropping below five qualified members unranks it.</p>
+      </div>`;
+
+    document.getElementById('m-save').addEventListener('click', async () => {
+      const { body } = await L.api('/api/clan/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          motto: document.getElementById('m-motto').value,
+          open: document.getElementById('m-open').checked,
+        }),
+      });
+      document.getElementById('m-status').innerHTML = body && body.ok
+        ? '<p class="ar-note" style="color:var(--green)">Saved.</p>'
+        : `<p class="ar-note">Could not save: ${esc((body && body.reason) || 'server-error')}</p>`;
+      if (body && body.ok) window.setTimeout(() => window.location.reload(), 600);
+    });
+
+    manageEl.querySelectorAll('[data-kick]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const handle = button.dataset.kick;
+        if (!window.confirm('Remove @' + handle + ' from ' + clan.name + '? What they contributed while a member leaves with them.')) return;
+        const { body } = await L.api('/api/clan/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handle }),
+        });
+        if (body && body.ok) { window.location.reload(); return; }
+        document.getElementById('m-status').innerHTML =
+          `<p class="ar-note">Could not remove: ${esc((body && body.reason) || 'server-error')}</p>`;
+      });
+    });
+  }
+
+  /* ---------------- boot ---------------- */
+
+  function renderAll() {
+    renderHead();
+    renderScore();
+    renderRoster();
+  }
+
+  function setMode(next) {
+    mode = next;
+    tabSeason.classList.toggle('on', next === 'season');
+    tabWeek.classList.toggle('on', next === 'week');
+    renderAll();
+  }
+  tabSeason.addEventListener('click', () => setMode('season'));
+  tabWeek.addEventListener('click', () => setMode('week'));
+
+  (async () => {
+    if (!tag) {
+      headEl.innerHTML = '<section class="ar-pane"><div class="pad">' +
+        L.empty('⚔', 'No clan named.', 'Pick one from <a href="clans.html">the clan board</a>.') +
+        '</div></section>';
+      return;
+    }
+    headEl.innerHTML = '<section class="ar-pane"><div class="pad">' + L.skeleton(2) + '</div></section>';
+    rosterEl.innerHTML = L.skeleton(5);
+
+    let body;
+    try {
+      body = await L.getOrThrow('/api/clan?tag=' + encodeURIComponent(tag));
+    } catch (err) {
+      headEl.innerHTML = '<section class="ar-pane"><div class="pad">' + (
+        String(err && err.message) === 'api 404'
+          ? L.empty('⚔', 'No clan with that tag.',
+              'It may have disbanded — a clan whose last member leaves is removed rather than left as an empty shell. <a href="clans.html">See the clans that exist</a>.')
+          : L.errorState('The verifier is unreachable right now, so this clan is not shown. Nothing here is cached or guessed.')
+      ) + '</div></section>';
+      rosterEl.innerHTML = '';
+      noteEl.textContent = '';
+      return;
+    }
+    clan = body;
+
+    // Membership is a private read and never edge-cached, so it lands after the
+    // public payload. The page is complete without it; it only adds controls.
+    const session = await L.me();
+    signedIn = !!session.signedIn;
+    if (signedIn) {
+      const res = await L.api('/api/clan/mine');
+      mine = res.status === 200 ? res.body : null;
+    }
+    renderAll();
+    renderManage();
+  })();
+})();
+</script>
+</body>
+</html>

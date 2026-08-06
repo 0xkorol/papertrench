@@ -130,20 +130,41 @@ nav {
    Install are destinations people go to on purpose. */
 @media (max-width: 1010px) {
   .nav-links a[href$="#bubbles"], .nav-links a[href$="#replay"], .nav-links a[href$="#journal"] { display: none; }
+  /* Clans made it eight items on the Arena pages. Tightening the gap buys back
+     roughly what the new destination costs. */
+  .nav-links { gap: 16px; }
 }
-@media (max-width: 760px) {
+/* The links are flex items, so when the row runs out of room the two PILLS are
+   what give way — they shrink and break mid-word, which rendered the CTA as
+   "GitHub" over a lone arrow. Measured on the Arena nav: broken from ~830px
+   down, clean at ~860. Two fixes, because either alone leaves a bad state:
+   pills that refuse to shrink, and a collapse breakpoint above the width where
+   the row stops fitting. (The break was already there before Clans was added —
+   a seven-item nav wrapped at 780 too — it just had less headroom to lose.) */
+.nav-cta, .nav-live { flex: none; white-space: nowrap; }
+@media (max-width: 860px) {
   .nav-links a:not(.nav-cta):not(.nav-live) { display: none; }
 }
-@media (max-width: 420px) {
+@media (max-width: 470px) {
   /* Tiny screens: keep both pills tappable side by side. Measured at 375px
      the logo plus both pills still ran ~30px past the viewport, so the
-     gutters and the gap shrink too rather than letting the bar clip. */
+     gutters and the gap shrink too rather than letting the bar clip.
+     Raised from 420px: with the pills no longer allowed to shrink, 421-470
+     was carrying a 1px overflow. */
   .nav-inner { padding: 0 14px; }
   .nav-links { gap: 10px; }
   .nav-live { padding: 8px 10px; font-size: 11.5px; }
   .nav-cta { padding: 9px 11px; font-size: 12px; }
   .nav-logo { font-size: 15px; gap: 8px; }
   .nav-logo img { width: 22px; height: 22px; }
+}
+@media (max-width: 360px) {
+  /* Below the narrowest phone anyone tests on, the wordmark plus two
+     non-shrinking pills stopped fitting (measured: 39px over at 320). Shrink
+     the type rather than clip a tappable control off the edge. */
+  .nav-logo { font-size: 13px; }
+  .nav-live, .nav-cta { font-size: 11px; padding: 7px 9px; }
+  .nav-live { gap: 5px; }
 }
 
 /* ---------- hero ---------- */

@@ -30,7 +30,7 @@ fi
 # navigate to, and both times it was caught by a person rather than a check.
 # Same failure mode as the version-pinned download link above: a rule that
 # lives only in someone's memory.
-NAV_DESTS="leaderboard.html sprint.html duels.html"
+NAV_DESTS="leaderboard.html sprint.html duels.html clans.html"
 NAV_MISSING=""
 for page in site/*.html; do
   # Article pages and the Arena family all carry the same nav block.
@@ -49,7 +49,7 @@ for page in site/*.html; do
   done
 done
 [ -z "$NAV_MISSING" ] || fail "nav is missing destinations —$NAV_MISSING"
-echo "nav OK ($(grep -lc 'class="nav-links"' site/*.html | wc -l) pages reach leaderboard, sprint and duels)"
+echo "nav OK ($(grep -lc 'class="nav-links"' site/*.html | wc -l) pages reach $NAV_DESTS)"
 
 # The manifest must never regress to <all_urls> content scripts (DEFECT O-09).
 if grep -q '"<all_urls>"' extension/manifest.json; then

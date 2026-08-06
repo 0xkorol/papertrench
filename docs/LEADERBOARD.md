@@ -138,6 +138,55 @@ Refusing to submit forfeits rather than freezing a flattering snapshot.
 Live standings during the window are shown, labeled provisional, and decide
 nothing.
 
+## Clans
+
+A clan is a roster, not a record. It stores exactly one new fact — when each
+member joined — and every figure it displays is a member's `windowEntry`
+sliced by that date. There is no clan-side ledger, which is the same reason
+the modes above are uncheatable as a set.
+
+Two rules carry the whole design.
+
+**You bring your future, not your past.** A member's contribution window opens
+at their join time, so rounds closed before they joined count for nothing.
+Without this the dominant strategy is to recruit a strong record for a day and
+import its entire history, repeated before every weekly close. With it, a round
+counts for exactly one clan — the one you were in when you closed it — and
+joining the night before the bell contributes nothing.
+
+**The score is the mean of the top five, and five members are needed to rank.**
+Summing member scores makes it a recruiting contest. Averaging the whole roster
+is worse: it charges a clan for every beginner it takes in, and a product that
+exists to give newcomers somewhere to practise must not make teaching them
+expensive. The mean of the top five does neither — extra members are free, and
+one hero cannot carry a clan.
+
+That third property is the reason to prefer it over anything cleverer:
+**cutting a struggling member can never raise a clan's score.** The top five is
+the top five whether or not the people below it are on the roster; expelling
+them can only cost the clan its five-member minimum. There is no version of
+this board where dropping the worst trader is the winning move.
+
+The honest cost, stated rather than hidden: depth is a mild advantage, because
+thirty qualified members give more chances at five strong ones than exactly
+five do. That has to be earned five verified records at a time.
+
+Other rules that follow from the doctrine above:
+
+- **Under five qualified members, a clan has no score** — it reads *forming*
+  with the shortfall, never a zero. Not having fielded five is an absence.
+- **A rejected record ranks nowhere,** including inside a roster.
+- **One clan per trader,** enforced by the membership table's primary key
+  rather than by a code path that could be wrong.
+- **Tags and names are immutable** after creation, validated to a narrow ASCII
+  charset with a normalised uniqueness key (so `Trench Rats` and `trenchrats`
+  collide). A clan that could rename itself after collecting a roster could
+  rename itself into an impersonation of another one.
+- **Clan standings are the current season and current week only.** No frozen
+  historical clan tables are claimed, because membership changes and a past
+  week's clan standing computed from today's roster would be a different
+  number than the one that was true then.
+
 ## Achievements
 
 Badges are derived from committed fills alone, under the extension's own

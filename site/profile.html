@@ -278,6 +278,7 @@
       <a href="leaderboard.html" aria-current="true">Leaderboard</a>
       <a href="sprint.html">Sprint</a>
       <a href="duels.html">Duels</a>
+      <a href="clans.html">Clans</a>
       <a href="news.html">News</a>
       <a href="index.html#install">Install</a>
       <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
@@ -371,6 +372,7 @@
       <div class="foot-links">
         <a href="sprint.html">Weekly Sprint</a>
         <a href="duels.html">Duels</a>
+        <a href="clans.html">Clans</a>
         <a href="news.html">News &amp; patch notes</a>
         <a href="privacy.html">Privacy</a>
         <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
@@ -453,6 +455,38 @@
     return best >= 0 ? TIER_ORDER[best] : null;
   }
 
+  /**
+   * Clan membership, and what this trader has actually contributed to it.
+   *
+   * Deliberately NOT their record over again: a clan counts only rounds closed
+   * since the member joined, so quoting their all-time figures here would
+   * credit the clan with work it had nothing to do with. When they have joined
+   * but not yet closed a round for it, that is what it says.
+   */
+  function clanLine(clan, record) {
+    if (!clan) return '';
+    const since = 'in ' + L.clanTag(clan.tag, { title: clan.name }) +
+      ' since ' + esc(dateOf(clan.joinedAt));
+
+    // Only a fully verified record takes a position in a clan aggregate, so a
+    // profile below that tier must not quote contribution figures as though it
+    // were carrying the clan. The rounds are real; the CONTRIBUTION is not
+    // established, and that is the claim this line would otherwise make.
+    if (!record || record.status !== 'verified') {
+      return `<p class="ar-note" style="margin-top:10px">${since} — <strong>not counted toward the
+        clan yet</strong>. Only a fully verified record takes a position, so nothing here is added to
+        ${esc(clan.tag)}'s score or totals until re-pricing clears. It is not a penalty, and it lifts
+        on its own.</p>`;
+    }
+
+    const contribution = clan.contribution && Number(clan.contribution.rounds) > 0
+      ? `${esc(fmt(clan.contribution.rounds, 0))} rounds since joining ·
+         <span class="${dirClass(clan.contribution.roiPct)}">${esc(signed(clan.contribution.roiPct, 1, '%'))}</span>`
+      : 'no rounds closed for the clan yet';
+    return `<p class="ar-note" style="margin-top:10px">${since} — ${contribution}.
+      Their record above is all-time and is a different figure by design.</p>`;
+  }
+
   function renderHero(profile, record) {
     const tier = record ? topTier(record.badges) : null;
     const nameLine = profile.displayName && profile.displayName !== profile.handle
@@ -498,9 +532,11 @@
             ${nameLine}
             <div class="ar-prof-chips">
               ${record ? chipFor(record.status) : '<span class="ar-provisional">No record submitted</span>'}
+              ${profile.clan ? L.clanTag(profile.clan.tag, { title: profile.clan.name }) : ''}
               ${record && !record.stats.rankable ? '<span class="ar-provisional">Unranked · 5 rounds minimum</span>' : ''}
               ${tier ? `<div class="ar-badge t-${esc(tier)}" title="Highest badge tier in this trader's case. The card's edge follows it."><div class="mark" aria-hidden="true">★</div><div><div class="nm">${esc(tier[0].toUpperCase() + tier.slice(1))} case</div><div class="ev">${esc(String((record.badges || []).length))} badge${(record.badges || []).length === 1 ? '' : 's'} earned</div></div></div>` : ''}
             </div>
+            ${clanLine(profile.clan)}
           </div>
         </div>
         ${spec}

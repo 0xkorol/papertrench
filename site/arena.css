@@ -1212,6 +1212,276 @@
 }
 .ar-settle { animation: ar-settle 460ms var(--e-out) both; }
 
+/* ============================================================== clans ==== */
+/*
+ * A clan is a roster, not a result, and the styling has to keep saying so.
+ *
+ * Two rules specific to this surface:
+ *   1. A clan crest never uses gold. Gold is rank 1 of the individual board
+ *      and nothing else, forever (rule 1 at the top of this file) — a clan
+ *      that looked like a champion would be borrowing meaning it did not earn.
+ *   2. An unranked clan is never dressed as a zero. It gets the pip strip
+ *      below, which shows how far off the five-member minimum it is, because
+ *      "not yet" and "badly" are different facts.
+ */
+
+/* The [TAG] chip that rides next to a handle on every board. Deliberately
+ * quiet: it identifies, it does not compete with the numbers. */
+.ar-clan-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: var(--edge);
+  color: var(--muted);
+  background: var(--pane-lo);
+  flex: none;
+  white-space: nowrap;
+}
+.ar-clan-tag:hover { border-color: var(--line2); color: var(--text); }
+
+/* The crest: the tag at poster size, tinted per clan so a roster is
+ * recognisable at a glance without inventing heraldry we cannot verify. */
+.ar-crest {
+  display: grid;
+  place-items: center;
+  width: 44px; height: 44px;
+  border-radius: 12px;
+  border: var(--edge-hi);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  flex: none;
+}
+.ar-crest.lg { width: 68px; height: 68px; border-radius: 16px; font-size: 19px; }
+
+.ar-clan-thead,
+.ar-clan-row {
+  display: grid;
+  grid-template-columns: 44px minmax(150px, 1.5fr) 74px 64px minmax(140px, 1fr) 76px;
+  gap: 12px;
+  align-items: center;
+  padding: 0 20px;
+}
+.ar-clan-thead {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: var(--edge);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+.ar-clan-thead .r { text-align: right; }
+.ar-clan-row {
+  min-height: 68px;
+  border-bottom: var(--rail);
+  color: inherit;
+  transition: background var(--t-fast) linear;
+  animation: ar-row-in 340ms var(--e-out) both;
+}
+.ar-clan-row:hover { background: rgba(255, 255, 255, 0.028); }
+.ar-clan-row:focus-visible { outline: 2px solid var(--orange); outline-offset: -2px; border-radius: 8px; }
+.ar-clan-row.is-yours { background: rgba(255, 157, 69, 0.06); }
+.ar-clan-row.is-yours::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--grad-heat);
+}
+.ar-clan-row { position: relative; }
+
+/* Both min-width:0 declarations are load-bearing: the grid item's own (a flex
+ * container defaults to min-width:auto and refuses to shrink below its
+ * content) and the text column's inside it. Without the outer one the founder
+ * line ran under the Members column on a phone instead of ellipsising. */
+.ar-clan-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.ar-clan-id > span { min-width: 0; }
+/* display:block is not cosmetic here. text-overflow only applies to a block
+ * box, and these two are spans nested inside a span — unlike .ar-handle, which
+ * is a direct child of a flex container and therefore blockified for free.
+ * Left inline, the founder line silently ran under the Members column on a
+ * phone instead of ellipsising. */
+.ar-clan-id .nm {
+  display: block;
+  font-weight: 750;
+  font-size: 14.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ar-clan-id .sub {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ar-clan-row .val { font-family: var(--mono); font-weight: 700; font-size: 13px; text-align: right; }
+.ar-clan-row .val.dim { color: var(--muted); font-weight: 600; }
+.ar-clan-row .val.score { color: var(--orange2); font-weight: 800; font-size: 14.5px; }
+.ar-clan-row .val.forming { color: var(--dim); font-weight: 700; font-size: 11px; }
+
+/* The five faces that make the number — the attribution IS the honesty here,
+ * so it sits in the row rather than one level down. */
+.ar-five { display: flex; align-items: center; gap: -4px; }
+.ar-five .ar-face { width: 24px; height: 24px; font-size: 9px; margin-right: -6px; }
+.ar-five .ar-face:last-of-type { margin-right: 0; }
+.ar-five .rest { font-family: var(--mono); font-size: 10.5px; color: var(--dim); margin-left: 12px; }
+
+/* How far a forming clan is from fielding five. Pips, not a percentage:
+ * "three of five people" is a countable thing and should look countable. */
+.ar-pips { display: inline-flex; gap: 4px; align-items: center; }
+.ar-pips i {
+  width: 7px; height: 7px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--line);
+}
+.ar-pips i.on { background: var(--grad-heat); border-color: transparent; }
+
+/* One member on a clan page: what they have contributed SINCE JOINING, which
+ * is a different number from their record and is labeled as one. */
+.ar-member-thead,
+.ar-member {
+  display: grid;
+  grid-template-columns: 30px minmax(130px, 1.4fr) 104px 78px 58px 58px 66px;
+  gap: 10px;
+  align-items: center;
+  padding: 0 20px;
+}
+.ar-member-thead {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: var(--edge);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+.ar-member-thead .r { text-align: right; }
+.ar-member {
+  min-height: 52px;
+  border-bottom: var(--rail);
+  color: inherit;
+  animation: ar-row-in 300ms var(--e-out) both;
+}
+.ar-member:hover { background: rgba(255, 255, 255, 0.028); }
+.ar-member .val { font-family: var(--mono); font-weight: 700; font-size: 12.5px; text-align: right; }
+.ar-member .val.dim { color: var(--muted); font-weight: 600; }
+.ar-member .val.up { color: var(--up); }
+.ar-member .val.down { color: var(--down); }
+/* The counting five are marked in the roster, so the score is always
+ * attributable to five names a reader can go and check. */
+.ar-member .mark {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--dim);
+  text-align: center;
+}
+.ar-member.counts .mark { color: var(--orange2); }
+.ar-member.counts { background: rgba(255, 157, 69, 0.045); }
+/* A member whose record has not cleared re-pricing takes no position, so their
+ * row carries no contribution figures at all — see the note in clan.html. It is
+ * dimmed rather than struck through or reddened: this is "not established yet",
+ * not "rejected", and the two must not read alike. */
+.ar-member.uncounted { opacity: 0.62; }
+.ar-member .val.nc {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.ar-role {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 2px 5px;
+  border-radius: 5px;
+  color: var(--violet);
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.28);
+}
+
+/* ------------------------------------------------------------- controls -- */
+/*
+ * The first user-authored text in the product. The field styling makes the
+ * constraints visible before submit rather than after: fixed widths that match
+ * the real limits, a monospace tag box that shows it wants 2-5 characters.
+ */
+.ar-field { display: block; margin-bottom: 13px; }
+.ar-field > .lbl {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+.ar-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.28);
+  border: var(--edge);
+  border-radius: 10px;
+  padding: 10px 12px;
+  transition: border-color var(--t-fast) linear;
+}
+.ar-input:focus { outline: none; border-color: var(--orange); }
+.ar-input::placeholder { color: var(--dim); }
+.ar-input.mono { font-family: var(--mono); letter-spacing: 1px; text-transform: uppercase; }
+.ar-field .hint { display: block; margin-top: 5px; font-size: 11px; color: var(--dim); }
+.ar-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: 13px;
+}
+.ar-check input { margin-top: 2px; accent-color: var(--orange2); flex: none; }
+
+/* An invite code is meant to be read aloud and retyped, so it is set like a
+ * code and not like body copy. */
+.ar-code {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--orange2);
+  background: rgba(0, 0, 0, 0.3);
+  border: var(--edge);
+  border-radius: 10px;
+  padding: 11px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  word-break: break-all;
+}
+
 /* ========================================================== responsive === */
 
 @media (max-width: 1180px) {
@@ -1221,6 +1491,8 @@
   .ar-row { grid-template-columns: 40px 30px minmax(110px, 1.3fr) 100px 62px 60px 44px 82px 62px; }
   .ar-thead .c-win,
   .ar-row .c-win { display: none; }
+  .ar-member-thead,
+  .ar-member { grid-template-columns: 26px minmax(0, 1fr) 100px 70px 54px 54px 60px; }
 }
 
 @media (max-width: 900px) {
@@ -1253,6 +1525,26 @@
   .ar-spec div:nth-child(-n + 2) { border-bottom: var(--rail); }
   .ar-clock .seg { min-width: 0; flex: 1; padding: 8px 6px; }
   .ar-clock .seg b { font-size: 21px; }
+  /* The five faces are the first thing to go: the score stays attributable on
+   * the clan page, which is one tap away, and the row keeps its numbers. */
+  .ar-clan-thead,
+  .ar-clan-row {
+    grid-template-columns: 30px minmax(0, 1fr) 58px 60px;
+    gap: 8px;
+    padding: 0 14px;
+  }
+  .ar-clan-thead .c-five, .ar-clan-row .c-five,
+  .ar-clan-thead .c-rounds, .ar-clan-row .c-rounds { display: none; }
+  .ar-member-thead,
+  .ar-member {
+    grid-template-columns: 22px minmax(0, 1fr) 56px 58px;
+    gap: 8px;
+    padding: 0 14px;
+  }
+  .ar-member-thead .c-status, .ar-member .c-status,
+  .ar-member-thead .c-joined, .ar-member .c-joined,
+  .ar-member-thead .c-rounds, .ar-member .c-rounds { display: none; }
+  .ar-crest { width: 38px; height: 38px; font-size: 11.5px; }
 }
 
 @media (max-width: 400px) {
@@ -1274,6 +1566,8 @@
 @media (prefers-reduced-motion: reduce) {
   .ar-pod,
   .ar-row,
+  .ar-clan-row,
+  .ar-member,
   .ar-stream li,
   .ar-pod .crown,
   .ar-disc .fill,

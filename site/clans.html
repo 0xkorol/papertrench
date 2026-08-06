@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Clans</title>
+<meta name="description" content="Team standings built from the same verified trade chains as the individual board. A clan scores the mean of its five best members, counted only from the day each of them joined.">
+<meta property="og:title" content="PaperTrench — Clans">
+<meta property="og:description" content="Five verified members to rank. The mean of your best five. Nothing you did before you joined counts — so nobody can buy a clan a rank.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="arena.css">
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="sprint.html">Sprint</a>
+      <a href="duels.html">Duels</a>
+      <a href="clans.html" aria-current="page">Clans</a>
+      <a href="news.html">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="ar-hero">
+  <div class="wrap">
+    <div class="ar-hero-grid">
+      <div>
+        <span class="ar-eyebrow"><span class="dot"></span>Team standings · same chains, same replay</span>
+        <h1 class="ar-title"><span class="line">Nobody carries</span><span class="line accent">a clan.</span></h1>
+        <p class="ar-lede">A clan keeps no book of its own. Its number is the <strong>mean of its five
+          best members</strong>, and a member's work only counts <strong>from the day they joined</strong>
+          — so a lifetime record cannot be walked in the door and donated. Five verified traders to
+          rank. One hero is four short.</p>
+
+        <div class="ar-spec" role="list" aria-label="Clan board parameters">
+          <div role="listitem"><div class="k">Score</div><div class="v">Mean of top 5</div></div>
+          <div role="listitem"><div class="k">To rank</div><div class="v ok">5 qualified</div></div>
+          <div role="listitem"><div class="k">Counts from</div><div class="v">Your join date</div></div>
+          <div role="listitem"><div class="k">Clan-side ledger</div><div class="v zero">None</div></div>
+        </div>
+      </div>
+
+      <!-- The properties that make this board safe to play, stated where a
+           newcomer reads them before they join anything.
+
+           Deliberately NOT dressed as the verifier's stdout stream, which this
+           panel sits in the same slot as on the leaderboard. That stream shows
+           events that actually happened; this is a fixed list of rules. Giving
+           standing copy a live-log costume — blinking dot, "LIVE", the same
+           accepted/rejected vocabulary real events use — would be the same
+           class of decoration as the fabricated traders this site removed. -->
+      <aside class="ar-verifier" aria-label="Rules this board enforces">
+        <div class="bar">
+          <span class="bulbs"><i></i><i></i><i></i></span>
+          <span class="name">clan rules · enforced server-side</span>
+          <span class="ar-note" style="font-size:9.5px;letter-spacing:1px">NOT A LIVE FEED</span>
+        </div>
+        <ul class="ar-stream">
+          <li><span class="tag" style="color:var(--green)">counts</span><span class="what">a round counts for the clan you were in <b>when you closed it</b></span></li>
+          <li><span class="tag" style="color:var(--down)">refused</span><span class="what">recruiting a big record to import its history</span></li>
+          <li><span class="tag" style="color:var(--down)">refused</span><span class="what">stacking a roster — extra members never move the number</span></li>
+          <li><span class="tag" style="color:var(--down)">refused</span><span class="what">cutting your weakest to raise the score. It cannot.</span></li>
+          <li><span class="tag" style="color:var(--green)">counts</span><span class="what">every clan figure is somebody's replayed window slice</span></li>
+        </ul>
+      </aside>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" style="padding-bottom:96px">
+  <div class="ar-shell">
+
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="clans-h">
+        <div class="ar-pane-head">
+          <span class="glyph">⚔</span><span id="clans-h">The clan board</span>
+          <span class="spacer"></span>
+          <div class="ar-tabs">
+            <button class="ar-tab on" id="tab-season" type="button">All-time</button>
+            <button class="ar-tab" id="tab-week" type="button">This week</button>
+          </div>
+        </div>
+        <p class="ar-note" id="board-note" style="padding:12px 20px 0"></p>
+        <div id="clan-board"></div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="how-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--violet)">ƒ</span>
+          <span id="how-h">How a clan's number is made</span></div>
+        <div class="pad">
+          <ol style="list-style:none;display:grid;gap:14px">
+            <li>
+              <b style="font-size:13px">Take every member's window slice.</b>
+              <p class="ar-note">Not their record — the slice of it that opened <em>and</em> closed
+                while they were in your clan. Same slicing the weekly Sprint and duels run on, from
+                the same hash-committed fills, replayed by the same server.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Keep the ones that clear the floor.</b>
+              <p class="ar-note">Five closed rounds for the all-time board, one for the week —
+                the same floors the individual boards use. And the same verification bar:
+                <strong>only a fully verified record takes a position</strong>. A chain that has not
+                cleared re-pricing is the one class the server could not check, so it counts nowhere —
+                including inside a roster. Otherwise a clan would be the way to launder exactly the
+                records the boards stopped ranking.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Average the best five.</b>
+              <p class="ar-note">Fewer than five qualified members and the clan does not rank at all
+                — it reads <em>forming</em>, with how many it still needs. That is an absence, not a
+                zero, and it is not printed as one.</p>
+            </li>
+          </ol>
+          <p class="ar-note" style="margin-top:16px">The honest cost, since we would rather say it
+            than have it noticed: <strong>depth helps a little.</strong> Thirty qualified members give
+            a clan more chances at five strong ones than exactly five do. That advantage has to be
+            earned five verified records at a time, which is the point of it.</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="ar-stack">
+      <section class="ar-pane" aria-labelledby="mine-h">
+        <div class="ar-pane-head"><span class="glyph" style="color:var(--orange2)">◆</span>
+          <span id="mine-h">Your clan</span></div>
+        <div class="pad">
+          <div id="mine"><div class="ar-note">Checking sign-in…</div></div>
+        </div>
+      </section>
+
+      <section class="ar-pane" aria-labelledby="rules-h">
+        <div class="ar-pane-head"><span class="glyph">§</span>
+          <span id="rules-h">The rules</span></div>
+        <div class="pad">
+          <ol style="list-style:none;display:grid;gap:14px">
+            <li>
+              <b style="font-size:13px">One clan at a time.</b>
+              <p class="ar-note">Membership is a single row keyed by your account, so you cannot be
+                counted in two places. Leaving is instant and self-serve.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">You bring your future, not your past.</b>
+              <p class="ar-note">Your clan window starts the moment you join. Switch clans and it
+                starts again — the rounds you closed for the old one do not follow you.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Recruiting beginners is free.</b>
+              <p class="ar-note">Only your best five count, so nobody costs a clan anything by
+                learning in it. That is deliberate: this product exists to give newcomers somewhere
+                to practise, and a board that charged clans for teaching would work against it.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Cutting a member can never help.</b>
+              <p class="ar-note">The top five is the top five whether or not the people below it are
+                on the roster. Expelling someone can only cost you the five-member minimum.</p>
+            </li>
+            <li>
+              <b style="font-size:13px">Names are checked, not moderated.</b>
+              <p class="ar-note">Tags and names are validated for shape and uniqueness, and cannot be
+                changed after creation — a clan that could rename itself later could rename itself
+                into an impersonation. Report anything abusive on
+                <a href="https://github.com/OnlyTerp/papertrench/issues" target="_blank" rel="noopener">GitHub</a>.</p>
+            </li>
+          </ol>
+          <p class="ar-note" style="margin-top:16px">Full protocol:
+            <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">docs/LEADERBOARD.md</a></p>
+        </div>
+      </section>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="leaderboard.html">Leaderboard</a>
+        <a href="sprint.html">Weekly Sprint</a>
+        <a href="duels.html">Duels</a>
+        <a href="clans.html">Clans</a>
+        <a href="news.html">News &amp; patch notes</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="arena.js"></script>
+<script>
+(() => {
+  'use strict';
+  const L = window.PTArena;
+  const { esc, fmt, signed, face, clanTag, crest, pips } = L;
+
+  const boardEl = document.getElementById('clan-board');
+  const noteEl = document.getElementById('board-note');
+  const mineEl = document.getElementById('mine');
+  const tabSeason = document.getElementById('tab-season');
+  const tabWeek = document.getElementById('tab-week');
+
+  let payload = null;
+  let mode = 'season';
+  let myTag = null;
+
+  /* ---------------- the board ---------------- */
+
+  boardEl.innerHTML = L.skeleton(6);
+
+  const THEAD = `<div class="ar-clan-thead">
+      <span>Pos</span>
+      <span>Clan</span>
+      <span class="r">Members</span>
+      <span class="r c-rounds">Rounds</span>
+      <span class="c-five" title="The five member scores this clan's number is the mean of">Counting five</span>
+      <span class="r">Score</span>
+    </div>`;
+
+  function fiveCell(standing) {
+    if (standing.ranked) {
+      const faces = standing.counting
+        .map((m) => face({ handle: m.handle }, 'ar-face')).join('');
+      return `<span class="ar-five" title="${esc(standing.counting.map((m) => '@' + m.handle).join(', '))}"
+        >${faces}</span>`;
+    }
+    // Forming: show the distance to five as countable pips, never as a fraction
+    // of a score that does not exist yet.
+    return `<span class="ar-five">${pips(standing.qualified, payload.countingMembers)}
+      <span class="rest">${esc(String(standing.qualified))} of ${esc(String(payload.countingMembers))} qualified</span></span>`;
+  }
+
+  function clanRow(entry, standing, position, index) {
+    const isYours = myTag && entry.tag === myTag;
+    return `<a class="ar-clan-row ${isYours ? 'is-yours' : ''}"
+       style="animation-delay:${Math.min(index * 26, 320)}ms"
+       href="clan.html?tag=${encodeURIComponent(entry.tag)}">
+      <span class="pos" style="font-family:var(--mono);font-weight:800;color:var(--muted)"
+        >${position ? '#' + position : '—'}</span>
+      <span class="ar-clan-id">
+        ${crest(entry.tag)}
+        <span style="min-width:0">
+          <span class="nm">${esc(entry.name)}</span>
+          <span class="sub">[${esc(entry.tag)}] · ${entry.open ? 'open' : 'invite only'} · founded by @${esc(entry.founder)}</span>
+        </span>
+      </span>
+      <span class="val dim">${esc(String(standing.roster))}<span style="color:var(--dim)">/${esc(String(payload.maxMembers))}</span></span>
+      <span class="val dim c-rounds">${esc(fmt(standing.rounds, 0))}</span>
+      <span class="c-five">${fiveCell(standing)}</span>
+      ${standing.ranked
+        ? `<span class="val score">${esc(fmt(standing.score, 1))}</span>`
+        : '<span class="val forming">forming</span>'}
+    </a>`;
+  }
+
+  function render() {
+    if (!payload) return;
+    const pick = (entry) => (mode === 'season' ? entry.season : entry.week);
+    const entries = payload.entries.slice();
+
+    // Ranked clans first, best score down. Everything still forming sorts
+    // below every ranked clan — a clan with no score has not out-scored one
+    // that has, and ordering them together would imply otherwise.
+    entries.sort((a, b) => {
+      const sa = pick(a);
+      const sb = pick(b);
+      if (sa.ranked !== sb.ranked) return sa.ranked ? -1 : 1;
+      if (sa.ranked) return sb.score - sa.score;
+      return sb.qualified - sa.qualified || sb.roster - sa.roster;
+    });
+
+    let position = 0;
+    boardEl.innerHTML = THEAD + entries.map((entry, index) => {
+      const standing = pick(entry);
+      if (standing.ranked) position += 1;
+      return clanRow(entry, standing, standing.ranked ? position : 0, index);
+    }).join('');
+
+    const ranked = entries.filter((e) => pick(e).ranked).length;
+    noteEl.innerHTML = mode === 'season'
+      ? `${esc(String(entries.length))} clans · ${esc(String(ranked))} ranked. All-time, counted from each
+         member's join date. A clan needs ${esc(String(payload.countingMembers))} members with
+         ${esc(String(payload.minSeasonRounds))} closed rounds apiece before it ranks.`
+      : `${esc(String(entries.length))} clans · ${esc(String(ranked))} ranked this week
+         (${esc(payload.weekId)}). Rounds must have opened and closed inside the window, after you
+         joined. One closed round qualifies a member for the week.`;
+  }
+
+  function setMode(next) {
+    mode = next;
+    tabSeason.classList.toggle('on', next === 'season');
+    tabWeek.classList.toggle('on', next === 'week');
+    render();
+  }
+  tabSeason.addEventListener('click', () => setMode('season'));
+  tabWeek.addEventListener('click', () => setMode('week'));
+
+  (async () => {
+    let body;
+    try {
+      body = await L.getOrThrow('/api/clans');
+    } catch {
+      boardEl.innerHTML = L.errorState(
+        'The verifier is unreachable right now, so no clan standings are shown. Nothing here is cached or guessed.');
+      noteEl.textContent = '';
+      return;
+    }
+    payload = body;
+    if (!payload.entries || !payload.entries.length) {
+      boardEl.innerHTML = L.empty('⚔', 'No clans yet. Someone has to found the first one.',
+        'Create one from the panel on the right. It ranks once five of its members each have five closed, verified rounds since joining — nothing is shown here before that is real.');
+      noteEl.textContent = '';
+      return;
+    }
+    render();
+  })();
+
+  /* ---------------- your clan ---------------- */
+
+  const say = (html) => { mineEl.innerHTML = html; };
+
+  function problemText(reason) {
+    return {
+      'already-in-a-clan': 'You are already in a clan. Leave it first — one clan at a time is what keeps a member from being counted twice.',
+      'tag-shape': 'A tag is 2 to 5 letters or digits. Nothing else.',
+      'tag-reserved': 'That tag is reserved, so no clan can imply it speaks for PaperTrench.',
+      'tag-taken': 'That tag is taken.',
+      'name-taken': 'A clan with that name already exists — names are compared with spacing and punctuation stripped, so lookalikes collide on purpose.',
+      'name-too-short': 'Names are 3 to 24 characters.',
+      'name-too-long': 'Names are 3 to 24 characters.',
+      'name-charset': 'Names use plain letters, digits, spaces and . _ \' & ! - only. Non-ASCII characters are refused because they can impersonate another clan.',
+      'name-reserved': 'That name is reserved.',
+      'motto-too-long': 'The motto is a little long.',
+      'motto-charset': 'The motto uses plain text only.',
+      'bad-code': 'That invite code does not match a clan. Codes are case-blind but otherwise exact.',
+      'clan-full': 'That clan is full.',
+      'not-found': 'No clan with that code or tag.',
+      'not-founder': 'Only the founder can do that.',
+      'not-in-a-clan': 'You are not in a clan.',
+      'rate-limited': 'Too many clan actions this hour. Try again shortly.',
+      'not-signed-in': 'Sign in with X first.',
+    }[reason] || reason;
+  }
+
+  async function post(path, body) {
+    const { status, body: out } = await L.api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    return { status, out };
+  }
+
+  function renderNoClan() {
+    say(`
+      <div class="ar-tabs" style="margin-bottom:14px">
+        <button class="ar-tab on" id="mt-join" type="button">Join</button>
+        <button class="ar-tab" id="mt-create" type="button">Found one</button>
+      </div>
+      <div id="mine-form"></div>
+      <div id="mine-status" style="margin-top:12px"></div>`);
+
+    const formEl = document.getElementById('mine-form');
+    const statusEl = document.getElementById('mine-status');
+    const tell = (html) => { statusEl.innerHTML = html; };
+
+    function joinForm() {
+      formEl.innerHTML = `
+        <label class="ar-field"><span class="lbl">Invite code</span>
+          <input class="ar-input mono" id="join-code" placeholder="CLAN-XXXXXX" maxlength="16"
+            autocomplete="off" spellcheck="false">
+          <span class="hint">Ask a member for it. Open clans can also be joined from their page.</span>
+        </label>
+        <button class="ar-btn primary" id="join-btn" style="width:100%">Join clan</button>`;
+      document.getElementById('join-btn').addEventListener('click', async () => {
+        tell('<div class="ar-console"><div class="ln">looking up the code…</div></div>');
+        const { out } = await post('/api/clan/join', {
+          code: document.getElementById('join-code').value,
+        });
+        if (out && out.ok) { window.location.href = 'clan.html?tag=' + encodeURIComponent(out.tag); return; }
+        tell(`<p class="ar-note">${esc(problemText((out && out.reason) || 'server-error'))}</p>`);
+      });
+    }
+
+    function createForm() {
+      formEl.innerHTML = `
+        <label class="ar-field"><span class="lbl">Tag</span>
+          <input class="ar-input mono" id="new-tag" placeholder="RATS" maxlength="5"
+            autocomplete="off" spellcheck="false">
+          <span class="hint">2–5 letters or digits. This is what shows beside your handle on every board, and it cannot be changed later.</span>
+        </label>
+        <label class="ar-field"><span class="lbl">Name</span>
+          <input class="ar-input" id="new-name" placeholder="Trench Rats" maxlength="24"
+            autocomplete="off">
+          <span class="hint">3–24 characters, plain ASCII. Also permanent.</span>
+        </label>
+        <label class="ar-field"><span class="lbl">Motto <span style="text-transform:none;font-weight:600">(optional)</span></span>
+          <input class="ar-input" id="new-motto" placeholder="We take the loss and move on." maxlength="120">
+        </label>
+        <label class="ar-check"><input type="checkbox" id="new-open">
+          <span>Open clan — anyone signed in can join from the clan page. Leave it off and joining needs the invite code.</span></label>
+        <button class="ar-btn primary" id="create-btn" style="width:100%">Found the clan</button>
+        <p class="ar-note" style="margin-top:10px">You become the founder and its first member. Your
+          own contribution starts now, not from your record so far.</p>`;
+      document.getElementById('create-btn').addEventListener('click', async () => {
+        tell('<div class="ar-console"><div class="ln">checking the tag and name…</div></div>');
+        const { out } = await post('/api/clan/create', {
+          tag: document.getElementById('new-tag').value,
+          name: document.getElementById('new-name').value,
+          motto: document.getElementById('new-motto').value,
+          open: document.getElementById('new-open').checked,
+        });
+        if (out && out.ok) { window.location.href = 'clan.html?tag=' + encodeURIComponent(out.tag); return; }
+        tell(`<p class="ar-note">${esc(problemText((out && out.reason) || 'server-error'))}</p>`);
+      });
+    }
+
+    document.getElementById('mt-join').addEventListener('click', (e) => {
+      e.target.classList.add('on');
+      document.getElementById('mt-create').classList.remove('on');
+      joinForm();
+    });
+    document.getElementById('mt-create').addEventListener('click', (e) => {
+      e.target.classList.add('on');
+      document.getElementById('mt-join').classList.remove('on');
+      createForm();
+    });
+    joinForm();
+  }
+
+  function renderClan(mine) {
+    myTag = mine.tag;
+    say(`
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+        ${crest(mine.tag)}
+        <div style="min-width:0">
+          <div style="font-weight:800;font-size:15px">${esc(mine.name)}</div>
+          <div class="ar-note">${clanTag(mine.tag)} · ${esc(String(mine.roster))}/${esc(String(mine.maxMembers))} members
+            ${mine.isFounder ? '<span class="ar-role">founder</span>' : ''}</div>
+        </div>
+      </div>
+      <p class="ar-note" style="margin-bottom:14px">Contributing since
+        <strong>${esc(new Date(mine.joinedAt).toLocaleDateString())}</strong>. Rounds you closed before
+        that date count toward your own record, and toward no clan.</p>
+      <div class="ar-code" style="margin-bottom:14px">
+        <span>${esc(mine.joinCode)}</span>
+        <button class="ar-btn" id="copy-code" style="padding:6px 12px;font-size:11.5px">Copy</button>
+      </div>
+      <p class="ar-note" style="margin-bottom:14px">Anyone with this code can join. Members only —
+        it is not on the public clan page.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <a class="ar-btn primary" href="clan.html?tag=${encodeURIComponent(mine.tag)}">Open clan page</a>
+        <button class="ar-btn" id="leave-btn">Leave</button>
+      </div>
+      <div id="mine-status" style="margin-top:12px"></div>`);
+
+    document.getElementById('copy-code').addEventListener('click', async (event) => {
+      try {
+        await navigator.clipboard.writeText(mine.joinCode);
+        event.target.textContent = 'Copied';
+      } catch {
+        event.target.textContent = 'Select it manually';
+      }
+    });
+
+    document.getElementById('leave-btn').addEventListener('click', async () => {
+      const warning = mine.isFounder
+        ? 'Leave ' + mine.name + '? The clan passes to its longest-standing member, or is disbanded if you are the last one out. What you contributed while a member leaves with you.'
+        : 'Leave ' + mine.name + '? What you contributed while a member leaves with you, and rejoining starts your window over.';
+      if (!window.confirm(warning)) return;
+      const { out } = await post('/api/clan/leave', {});
+      if (out && out.ok) { window.location.reload(); return; }
+      document.getElementById('mine-status').innerHTML =
+        `<p class="ar-note">${esc(problemText((out && out.reason) || 'server-error'))}</p>`;
+    });
+  }
+
+  (async () => {
+    const session = await L.me();
+    if (session.unreachable) {
+      say('<p class="ar-note">Verifier unreachable — sign-in and clan actions are down right now. ' +
+        'The board is showing nothing rather than something stale.</p>');
+      return;
+    }
+    if (!session.signedIn) {
+      say(`<p class="ar-note" style="margin-bottom:12px">Sign in with X to found or join a clan. One
+        account, one clan — that is what stops a roster from being filled with copies of one person.</p>
+        <button class="ar-btn primary" id="signin-btn">𝕏 &nbsp;Sign in with X</button>`);
+      document.getElementById('signin-btn').addEventListener('click', L.signIn);
+      return;
+    }
+    const { status, body } = await L.api('/api/clan/mine');
+    if (status !== 200 || !body) {
+      say('<p class="ar-note">Could not read your membership just now. Reload in a moment.</p>');
+      return;
+    }
+    if (body.inClan) { renderClan(body); render(); } else { renderNoClan(); }
+  })();
+})();
+</script>
+</body>
+</html>

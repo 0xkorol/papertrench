@@ -148,6 +148,7 @@
       <a href="leaderboard.html">Leaderboard</a>
       <a href="sprint.html" aria-current="page">Sprint</a>
       <a href="duels.html">Duels</a>
+      <a href="clans.html">Clans</a>
       <a href="news.html">News</a>
       <a href="index.html#install">Install</a>
       <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
@@ -321,6 +322,7 @@
       <div class="foot-links">
         <a href="sprint.html">Weekly Sprint</a>
         <a href="duels.html">Duels</a>
+        <a href="clans.html">Clans</a>
         <a href="news.html">News &amp; patch notes</a>
         <a href="privacy.html">Privacy</a>
         <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
@@ -467,6 +469,7 @@
       <span class="ar-who">
         ${face(item)}
         <span class="ar-handle">@${esc(item.handle)}</span>
+        ${L.clanTag(item.clanTag, { plain: true })}
         ${isYou ? '<span class="ar-you-tag">YOU</span>' : ''}
       </span>
       <span>${chipFor(item.status)}</span>
