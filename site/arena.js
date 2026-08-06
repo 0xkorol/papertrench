@@ -234,6 +234,9 @@
       // sign-in that worked. `unreachable` stays separate — a dead API is a
       // different fact.
       if (!session.signedIn && returnedFromAuth) session.cookieBlocked = true;
+      // Every page calls me() on load, so this is the one place the
+      // extension's linked-account chip learns about a live session.
+      announceIdentity(session);
       return session;
     }
     catch { return { signedIn: false, unreachable: true }; }
@@ -266,7 +269,44 @@
 
   /* ------------------------------------------------------ extension bridge */
 
-  function bridgeSend(message) {
+  /**
+   * The relay transport: the extension's papertrench.com content script
+   * (site-bridge.js) answers the same two bridge requests over postMessage.
+   * It exists because the direct path below needs the extension's id, which
+   * unpacked installs cannot have — the relay reaches EVERY install, store
+   * or zip. Same-window, same-origin, nonce-matched; a missing extension is
+   * a clean null after the timeout.
+   */
+  function relaySend(message) {
+    return new Promise((resolve) => {
+      let nonce = '';
+      try {
+        const bytes = new Uint8Array(12);
+        crypto.getRandomValues(bytes);
+        nonce = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      } catch { nonce = String(Date.now()) + Math.random().toString(36).slice(2); }
+      const done = (value) => {
+        clearTimeout(timer);
+        window.removeEventListener('message', onReply);
+        resolve(value);
+      };
+      const onReply = (event) => {
+        if (event.source !== window || event.origin !== window.location.origin) return;
+        const data = event.data;
+        if (!data || data.type !== 'pt_site_bridge_reply' || data.nonce !== nonce) return;
+        done(data.reply || null);
+      };
+      const timer = setTimeout(() => done(null), 1500);
+      window.addEventListener('message', onReply);
+      window.postMessage({ type: 'pt_site_bridge', nonce, request: message }, window.location.origin);
+    });
+  }
+
+  async function bridgeSend(message) {
+    // Relay first: it works for every install. The id path stays as the
+    // fallback for the store build once EXTENSION_IDS carries the CWS id.
+    const viaRelay = await relaySend(message);
+    if (viaRelay) return viaRelay;
     return new Promise((resolve) => {
       if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage)) {
         resolve(null); // not a Chromium browser, or no extension API exposed
@@ -290,6 +330,21 @@
 
   const bridgePing = () => bridgeSend({ type: 'pt_bridge_ping' });
   const bridgeGetRecord = () => bridgeSend({ type: 'pt_bridge_get_record' });
+
+  /**
+   * Tell the extension (when present) who this browser is signed in as, so
+   * the dashboard's "Linked account" chip goes green on its own instead of
+   * waiting for a hand-typed handle that can never verify locally (field
+   * report: sign-in "only takes me to the website"). Fire-and-forget and
+   * display-only — the extension stores the handle, never calls the server,
+   * and the board still goes by the site's word alone.
+   */
+  function announceIdentity(session) {
+    if (!session || !session.signedIn || !session.handle) return;
+    try {
+      window.postMessage({ type: 'pt_site_identity', handle: String(session.handle) }, window.location.origin);
+    } catch {}
+  }
 
   /* --------------------------------------------------------- rank deltas */
   /*

@@ -29,6 +29,19 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
   only host the extension has added since v2.4.0, and it is listed here
   because a permissions document that omits a host we inject into is simply
   wrong, whatever the injected code does.
+- **papertrench.com / www.papertrench.com (site relay).** One small content
+  script (`site-bridge.js`) loads on our own website, and nowhere else, to
+  close the account-linking loop: after you sign in with X on
+  papertrench.com, the page hands your handle to the extension so the
+  dashboard's "Linked account" chip can go green — the direction that keeps
+  the extension from ever calling a server itself. The same script relays
+  the leaderboard's two existing Sync requests (install ping and, only when
+  the off-by-default "Site sync" toggle is on, the signed record export),
+  because unpacked installs have machine-specific ids the site cannot
+  message directly. The relayed request set is closed and enforced by test:
+  nothing else crosses, in either direction, and the background re-checks
+  the sender's origin so no other site the extension runs on can use these
+  message types.
 - **Forge (v3.0.0).** The banner generator runs inside the dex upload boxes
   on sites already listed above and adds NO new host or API permission: it
   reads the page's own size hints and sets a file on the page's existing

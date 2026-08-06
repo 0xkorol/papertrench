@@ -520,3 +520,79 @@ test('unknown bridge requests are refused by name', async () => {
   assert.equal(res.reason, 'unknown-request');
 });
 
+/* ---------------- site relay: internal bridge cases (site-bridge.js) -------
+ *
+ * Unpacked installs have machine-specific ids the site can never message, so
+ * a content script on papertrench.com relays the same two bridge requests
+ * INTERNALLY — plus the sign-in identity echo that turns the dashboard's
+ * gray chip green (field report: site sign-in "only takes me to the
+ * website"; the loop never closed). Every content script this extension
+ * runs shares chrome.runtime.sendMessage, so the background must re-gate
+ * these types on the SENDER's origin: a compromised trading-site page must
+ * not write the linked identity or read the record through relay types.
+ */
+
+function sendFrom(listener, message, sender) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('relay response timed out')), 2000);
+    listener(message, sender, (response) => { clearTimeout(timeout); resolve(response); });
+  });
+}
+
+const RELAY_SENDER = { tab: { id: 7, url: 'https://papertrench.com/leaderboard.html' } };
+const FOREIGN_SENDER = { tab: { id: 8, url: 'https://axiom.trade/meme/whatever' } };
+
+test('pt_site_identity from papertrench.com stores a verified linked identity', async () => {
+  const worker = serviceWorker();
+  const reply = await sendFrom(worker.listener, { type: 'pt_site_identity', handle: 'amogus0471' }, RELAY_SENDER);
+  assert.equal(reply.ok, true);
+  const stored = worker.values.pt_settings.leaderboardIdentity;
+  assert.ok(stored, 'the identity must be persisted');
+  assert.equal(stored.handle, 'amogus0471');
+  assert.equal(stored.verified, true, 'the site holds the X session — its word is the verified truth');
+  assert.equal(stored.source, 'site');
+});
+
+test('the site link overwrites a hand-typed claim, but an identical link never re-writes', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_settings.leaderboardIdentity = { handle: 'oldclaim', verified: false, linkedAt: 1 };
+  await sendFrom(worker.listener, { type: 'pt_site_identity', handle: 'realhandle' }, RELAY_SENDER);
+  const first = worker.values.pt_settings.leaderboardIdentity;
+  assert.equal(first.handle, 'realhandle', 'the verified site identity replaces the local claim');
+  await sendFrom(worker.listener, { type: 'pt_site_identity', handle: 'realhandle' }, RELAY_SENDER);
+  // Reference equality: the fake stores objects by reference, so a re-write
+  // would swap the object. A signed-in tab polls /api/me repeatedly and each
+  // poll echoes the identity — identical echoes must not churn storage.
+  assert.equal(worker.values.pt_settings.leaderboardIdentity, first,
+    'an identical link must be a no-op write');
+});
+
+test('pt_site_identity refuses foreign senders and malformed handles', async () => {
+  const worker = serviceWorker();
+  const foreign = await sendFrom(worker.listener, { type: 'pt_site_identity', handle: 'legit' }, FOREIGN_SENDER);
+  assert.equal(foreign.ok, false);
+  assert.equal(foreign.reason, 'origin-not-allowed');
+  const malformed = await sendFrom(worker.listener,
+    { type: 'pt_site_identity', handle: 'not a handle <b>' }, RELAY_SENDER);
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.reason, 'bad-handle');
+  assert.equal(worker.values.pt_settings.leaderboardIdentity, undefined,
+    'nothing may be stored on a refused link');
+});
+
+test('relayed bridge requests honor the origin gate and the Site-sync toggle', async () => {
+  const worker = serviceWorker();
+  const foreignPing = await sendFrom(worker.listener, { type: 'pt_bridge_ping' }, FOREIGN_SENDER);
+  assert.equal(foreignPing.reason, 'origin-not-allowed');
+  const ping = await sendFrom(worker.listener, { type: 'pt_bridge_ping' }, RELAY_SENDER);
+  assert.equal(ping.ok, true);
+  assert.equal(ping.bridgeEnabled, false, 'off is the default on purpose');
+  const rec = await sendFrom(worker.listener, { type: 'pt_bridge_get_record' }, RELAY_SENDER);
+  assert.equal(rec.ok, false);
+  assert.equal(rec.reason, 'bridge-disabled', 'the toggle gates the relay exactly like the external path');
+  worker.values.pt_settings.leaderboardBridge = true;
+  const empty = await sendFrom(worker.listener, { type: 'pt_bridge_get_record' }, RELAY_SENDER);
+  assert.equal(empty.ok, false);
+  assert.equal(empty.reason, 'chain-empty', 'toggle on: the relay reaches the same record path');
+});
+

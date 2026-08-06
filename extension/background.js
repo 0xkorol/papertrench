@@ -2534,6 +2534,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
 
+      // ------------------------- site relay (site-bridge.js) --------------
+      // The papertrench.com content script carries the same two requests the
+      // externally_connectable path serves, plus the sign-in identity echo.
+      // The sender URL is re-checked here: every content script this
+      // extension runs shares chrome.runtime.sendMessage, and a compromised
+      // trading-site page must not be able to write the linked identity or
+      // read the record through the relay's message types.
+      case 'pt_site_identity': {
+        if (!senderOnBridgeOrigin(sender)) { sendResponse({ ok: false, reason: 'origin-not-allowed' }); break; }
+        const handle = typeof message.handle === 'string' ? message.handle : '';
+        if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) { sendResponse({ ok: false, reason: 'bad-handle' }); break; }
+        const existing = settings.leaderboardIdentity || null;
+        // The site's word is the verified truth (it holds the X session), so
+        // it may overwrite a manually-typed claim — but an identical linked
+        // state is not re-written, so a signed-in tab left open cannot churn
+        // storage on every /api/me poll.
+        if (!existing || existing.handle !== handle || existing.verified !== true) {
+          // Minimal read-modify-write on the RAW stored object: writing the
+          // defaults-merged copy back would pin today's defaults into
+          // storage for users who never customized them.
+          await new Promise((resolve) =>
+            chrome.storage.local.get(['pt_settings'], (value) => {
+              const raw = (value && value.pt_settings) || {};
+              raw.leaderboardIdentity = {
+                handle, verified: true, linkedAt: Date.now(), source: 'site',
+              };
+              chrome.storage.local.set({ pt_settings: raw }, () => resolve());
+            }));
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+
+      case 'pt_bridge_ping': {
+        if (!senderOnBridgeOrigin(sender)) { sendResponse({ ok: false, reason: 'origin-not-allowed' }); break; }
+        sendResponse({ ok: true, bridgeEnabled: settings.leaderboardBridge === true });
+        break;
+      }
+
+      case 'pt_bridge_get_record':
+        if (!senderOnBridgeOrigin(sender)) { sendResponse({ ok: false, reason: 'origin-not-allowed' }); break; }
+        sendResponse(await bridgeRecord());
+        break;
+
       case 'pt_warmdest_open':
         sendResponse(await warmDestOpen(message.url, sender, settings));
         break;
@@ -2892,6 +2936,16 @@ refreshFrameInterval().catch(() => {});
  * are byte-equivalent evidence. */
 
 const BRIDGE_ORIGINS = new Set(['https://papertrench.com', 'https://www.papertrench.com']);
+
+/** True when an INTERNAL message really came from our content script on a
+ * bridge origin. Every injected page shares chrome.runtime.sendMessage, so
+ * the relay's message types must be origin-gated here exactly like the
+ * external path — presence of a sender.tab URL on the allowlist is the
+ * proof. */
+function senderOnBridgeOrigin(sender) {
+  const url = sender && ((sender.tab && sender.tab.url) || sender.url) || '';
+  try { return BRIDGE_ORIGINS.has(new URL(url).origin); } catch (_) { return false; }
+}
 
 async function bridgeRecord() {
   const settings = await getSettings();

@@ -23,6 +23,19 @@ details live in the commit messages.
   still showed you signed out. The sign-in now hands the session token to
   the page directly. Worker and site both deployed 2026-08-06.
 
+- **Signing in on the site now links the extension by itself.** The
+  dashboard's "Sign in on papertrench.com" button was a one-way door: you
+  signed in and the extension never heard about it, so its Linked-account
+  chip stayed gray forever (field report). A small relay script on
+  papertrench.com — our site only, enforced by test — now closes the loop:
+  the signed-in page hands your handle to the extension and the chip goes
+  green on its own, still without the extension ever calling a server. The
+  same relay makes the leaderboard's one-click **Sync work for unpacked
+  installs** (it used to need a store id no unpacked install can have),
+  gated by the same off-by-default Site-sync toggle, and the
+  chain-conflict rejections on the site now carry a "delete my server
+  record and start over" button instead of a sentence pointing at a link.
+
 ## v3.0.0 — 2026-08-06
 
 A major version because the product gained a second asset class. Perps can

@@ -3357,9 +3357,10 @@ function renderLeaderboard(el) {
           ${identity.verified ? '' : `
           <p class="dim" style="font-size:12px;line-height:1.55;margin:12px 0 0">
             Verification happens on papertrench.com, not here: sign in with X there and
-            your submissions rank as verified. This chip stays gray on purpose — the
-            extension never phones the server to ask, so it only vouches for what
-            happened locally. The board goes by the site's word, not this chip.
+            this chip goes green on its own — the signed-in page hands your handle to
+            the extension, which is the one direction that keeps the extension from
+            ever phoning a server. The board still goes by the site's word, not this
+            chip.
           </p>
           <a class="btn" href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener"
              style="margin-top:10px;display:inline-block">Sign in on papertrench.com →</a>
@@ -3371,8 +3372,11 @@ function renderLeaderboard(el) {
           <button class="btn-sec" id="lb-unlink" style="margin-top:12px">Unlink</button>
         ` : `
           <p class="dim" style="font-size:12.5px;line-height:1.6;margin-top:0">
-            Link your X account to appear on the leaderboard. The handle is stored locally and
-            submitted with your signed chain; a server verifies ownership before ranking you.
+            Link your X account to appear on the leaderboard. The easy way: sign in with X
+            on <a href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener"
+            style="color:var(--orange2)">papertrench.com</a> and this links itself. Or type
+            the handle below — stored locally, submitted with your signed chain; a server
+            verifies ownership before ranking you either way.
           </p>
           <div class="field">
             <label for="lb-handle">X handle</label>

@@ -478,8 +478,25 @@
             : reason === 'chain-shrunk'
               ? ' The submitted chain is shorter than the one already committed.'
               : '';
+      // The three self-inflicted-history rejections (a reset chain, a
+      // shrunk chain, a re-declared bankroll) all share one recovery:
+      // delete the server record and submit fresh. Field report: users hit
+      // the wall, read the reason, and never found the way out — so the way
+      // out is a button on the wall, not a sentence pointing at a link
+      // somewhere above it.
+      const resettable = reason === 'chain-replaced' || reason === 'chain-shrunk'
+        || reason === 'bankroll-changed';
       say(`<div class="ar-console"><div class="ln bad">rejected: ${esc(reason)}</div></div>
-        <p class="ar-note" style="margin-top:8px">${esc(extra)}</p>`);
+        <p class="ar-note" style="margin-top:8px">${esc(extra)}</p>`
+        + (resettable
+          ? '<button class="ar-btn" id="reset-record-btn" style="margin-top:10px;width:100%">Delete my server record and start over</button>'
+          : ''));
+      const resetBtn = document.getElementById('reset-record-btn');
+      if (resetBtn) resetBtn.addEventListener('click', async () => {
+        if (!window.confirm('Delete your account, record, duels and sprint history from the leaderboard server? Your local extension data is untouched. This cannot be undone.')) return;
+        await L.api('/api/me/delete', { method: 'POST' });
+        window.location.reload();
+      });
     }
   }
 
@@ -487,9 +504,9 @@
     say('<div class="ar-console"><div class="ln">asking the extension…</div></div>');
     const ping = await L.bridgePing();
     if (!ping) {
-      say('<p class="ar-note">Extension not detected. If you installed from a release zip (unpacked), ' +
-        'Chrome gives it a machine-specific id this site cannot reach — use <strong>Export record ' +
-        '(JSON)</strong> in the dashboard\'s Leaderboard tab and upload the file here instead.</p>');
+      say('<p class="ar-note">Extension not detected — it isn\'t installed in this browser, or it ' +
+        'predates the site relay (update to the latest release). The <strong>Export record ' +
+        '(JSON)</strong> button in the dashboard\'s Leaderboard tab always works as the fallback.</p>');
       return;
     }
     if (!ping.bridgeEnabled) {
