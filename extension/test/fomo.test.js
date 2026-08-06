@@ -643,6 +643,112 @@ test('F-32-for-bubbles: the chip level FREEZES — quiet ledgers, moving closes 
   assert.equal(chip.style.visibility, 'visible');
 });
 
+test('F-41: a quiet token keeps its average line — a STALE ledger must not veto the export close', async () => {
+  // Maintainer: bubbles showed, the average line never did. The bubbles were
+  // frozen while evidence was fresh; the line recomputed every 2 s repost and
+  // hit vettedMcapClose's `if (barCloseLedger.size) return null` — which
+  // refused the perfectly good export-poll close merely because the ledger
+  // held an entry, even an entirely STALE one. The level then fell back to
+  // the resolver's own cap, which on a chart whose visible band is a few
+  // percent wide is off-screen.
+  const env = runFomoBridge({ liveShape: true });
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env, 8_000_000); // one live cap bar -> ledger entry
+
+  // The token goes quiet: every ledger entry ages past BAR_CLOSE_FRESH_MS,
+  // while the chart's own last close (8.0M) is still known.
+  env.advance(60_000);
+
+  env.send('paper-lines', {
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: CURRENT_PRICE_NATIVE,
+    currentPriceUsd: CURRENT_PRICE_USD,
+    currentMcap: 8_000_000,
+    avgBuyNative: CURRENT_PRICE_NATIVE,
+    avgBuyUsd: CURRENT_PRICE_USD,
+    // A resolver cap that DISAGREES with the chart's by 40% — off-screen if
+    // it is ever used as the level.
+    avgBuyMcap: 4_800_000,
+  });
+  await microtasks();
+
+  const line = env.lineShapes.find((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.ok(line, 'a quiet token must still draw its average line');
+  const level = line.points[0].price;
+  assert.ok(Math.abs(level - 8_000_000) < 1000,
+    `the line must ride the chart's own close (8.0M), not the resolver cap (4.8M) — got ${level}`);
+});
+
+test('F-41: the line HOLDS its level across price reposts, and still follows a DCA', async () => {
+  // Freeze parity with bubbles: a repost that changes only the live price
+  // must not recompute (and possibly relocate) a correct line.
+  const env = runFomoBridge({ liveShape: true });
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env, 8_000_000);
+
+  const post = (over) => env.send('paper-lines', Object.assign({
+    enabled: true,
+    axisBasis: 'mcap',
+    currentPriceNative: CURRENT_PRICE_NATIVE,
+    currentPriceUsd: CURRENT_PRICE_USD,
+    currentMcap: 8_000_000,
+    avgBuyNative: CURRENT_PRICE_NATIVE,
+    avgBuyUsd: CURRENT_PRICE_USD,
+  }, over));
+
+  post({});
+  await microtasks();
+  const first = env.lineShapes.find((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.ok(first, 'the line draws');
+  const placed = first.points[0].price;
+
+  // The market moves and the spec re-posts (C-01) — same average, new prices.
+  env.advance(30_000); // and the ledger goes stale underneath it
+  post({ currentPriceNative: CURRENT_PRICE_NATIVE * 1.2, currentPriceUsd: CURRENT_PRICE_USD * 1.2, currentMcap: 9_600_000 });
+  await microtasks();
+  const held = env.lineShapes.filter((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.equal(held.length, 1, 'still exactly one average line');
+  assert.equal(held[0].points[0].price, placed,
+    'a moving market must not move the average line — the average did not change');
+
+  // A DCA DOES change the average, and the line must follow it.
+  post({ avgBuyNative: CURRENT_PRICE_NATIVE * 1.1, avgBuyUsd: CURRENT_PRICE_USD * 1.1 });
+  await microtasks();
+  const moved = env.lineShapes.filter((s) => !s.removed && s.props.text === 'PAPER Avg. Fill');
+  assert.equal(moved.length, 1);
+  assert.notEqual(moved[0].points[0].price, placed,
+    'a changed average MUST move the line');
+});
+
+test('F-41: one fill posted twice is ONE bubble — the bridge keys marks by fill id', async () => {
+  const env = runFomoBridge({ liveShape: true });
+  const t0 = Date.now();
+  env.setNow(t0);
+  bootWithLiveBar(env);
+  sendMcapLines(env);
+  await microtasks();
+
+  const fill = {
+    side: 'buy', fillId: 'trade-abc-1', priceNative: 0.0000065, priceUsd: 0.0013,
+    mcap: 1300000, solAmount: 0.5, ts: t0, symbol: 'Doom',
+  };
+  env.send('paper-marker', fill);
+  // The same fill again (a journal replay, or a storage echo upstream).
+  env.send('paper-marker', Object.assign({}, fill, { ts: t0 + 1500 }));
+  env.runTimeouts();
+  await microtasks();
+
+  const host = env.doc.body.children.find((el) => 'data-pt-bubbles' in el.attrs);
+  const chips = host.children.filter((el) => el.attrs['data-pt-bubble']);
+  assert.equal(chips.length, 1, 'one fill id, one bubble, however many times it is posted');
+  const statuses = env.statuses('paper-marker-status');
+  assert.equal(statuses[statuses.length - 1].duplicate, true,
+    'the bridge must SAY it recognized a duplicate rather than silently dropping it');
+});
+
 test('F-39 entry replay: fills posted BEFORE the chart exists draw once it appears — the off-chart snipe scenario', async () => {
   // Maintainer: quick-buy from a row snipe off the chart, then open the
   // chart — bubble and average line must be there on load-in. The content

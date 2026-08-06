@@ -221,6 +221,10 @@
       // SVG rail to the native chart and replay the journal natively.
       svgFallbackActive = false;
       if (CM) CM.destroyChartMarkers();
+      // The rail's replay claimed these fills; the NATIVE chart has not
+      // drawn them yet, so the ledger must forget before replaying — the
+      // symmetric case to the probe-expiry handoff above.
+      drawnFillIds.clear();
       restoreMarkersFromJournal();
       syncAveragePriceLines();
     }
@@ -1219,6 +1223,9 @@
     if (usesNativeChart()) {
       sendPadreMarker('paper-marker', {
         ts: markerTs,
+        // F-41: the trade's own id, so the bridge can recognize this exact
+        // fill and never draw it twice.
+        fillId: fill.fillId || null,
         priceNative: fill.priceNative,
         // The bridge picks whichever of these magnitudes matches the site
         // chart's Y axis (token USD price vs market cap) when it has to draw
@@ -1534,6 +1541,11 @@
     state.seq = (Number(state.seq) || 0) + 1;
     state.updatedAt = Date.now();
     lastWrittenState = state;
+    // F-41: chrome.storage.onChanged delivers a STRUCTURED CLONE, so the
+    // identity check below can never recognize our own write — every local
+    // fill was being re-adopted (and, since F-40, replayed) as if another
+    // tab had made it. The write STAMP survives cloning and does.
+    lastWrittenStamp = `${state.seq}:${state.updatedAt}`;
     return store.set({ [E.STORAGE_KEYS.state]: state });
   }
 
@@ -1580,6 +1592,8 @@
       const next = stateChange.newValue;
       if (!next || next === state) return;
       if (lastWrittenState && next === lastWrittenState) return; // our own write
+      // …and the same write after Chrome cloned it (F-41).
+      if (lastWrittenStamp && `${next.seq}:${next.updatedAt}` === lastWrittenStamp) return;
 
       adoptState(next);
     };
@@ -1604,6 +1618,7 @@
       if (f.id) drawnFillIds.add(f.id);
       drawFillOnChart({
         ts: f.ts,
+        fillId: f.id,
         side: f.side,
         priceNative: f.priceNative,
         priceUsd: f.priceUsd,
@@ -1688,6 +1703,10 @@
         axisBasis: chartAxisBasis,
         currentPriceNative: token.priceNative,
         currentPriceUsd: token.priceUsd,
+        // F-35's close discriminator needs the resolver's live cap to prefer
+        // a cap-unit close over a price-unit one (the gmgn spec always sent
+        // this; the paper spec never did, leaving that branch dead).
+        currentMcap: Number(token.mcap) > 0 ? Number(token.mcap) : null,
         avgBuyUsd,
         avgSellUsd,
         avgBuyMcap: nativeSupply && avgBuyUsd ? avgBuyUsd * nativeSupply : null,
@@ -1756,6 +1775,9 @@
 
   let persistTimer = null;
   let lastWrittenState = null;
+  // "seq:updatedAt" of this tab's newest write — the clone-proof identity of
+  // our own state, since the storage event never hands back our object.
+  let lastWrittenStamp = null;
   function persistSoon() {
     if (persistTimer) return;
     persistTimer = setTimeout(async () => {
@@ -1865,16 +1887,22 @@
           // panel — recorded so receipts echo the order as it was placed.
           quotedUsd: quotedUsd || undefined,
         });
+        // F-41: claim the fill in the replay ledger BEFORE anything can
+        // observe it. E.buy has already put the trade in state.journal, and
+        // persistStateNow below fires the storage listener synchronously —
+        // so an unclaimed fill gets replayed by adoptState and then drawn
+        // AGAIN here, as two markers with different mcap inputs (the
+        // maintainer's "a bubble above and below").
+        drawnFillIds.add(trade.id);
         // Commit the fill to the evidence chain before persisting the wallet,
         // so the committed record never lags the balance a crash would leave.
         await commitFill(trade);
         await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'buy' });
-        // Adoption replay must know this fill is already on the chart.
-        drawnFillIds.add(trade.id);
         drawFillOnChart({
           ts: markerTs,
+          fillId: trade.id,
           side: 'buy',
           priceNative: trade.priceNative,
           priceUsd: trade.priceUsd,
@@ -2038,14 +2066,15 @@
           ts: Date.now(), mint: token.mint, site: site.id,
           qtyFraction: fraction, priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
         });
+        // F-41: claimed before the journal can be observed (see doBuy).
+        drawnFillIds.add(trade.id);
         await commitFill(trade);
         await persistStateNow();
         const markerTs = Date.now();
         marks.push({ t: markerTs, p: trade.priceNative, side: 'sell' });
-        // Adoption replay must know this fill is already on the chart.
-        drawnFillIds.add(trade.id);
         drawFillOnChart({
           ts: markerTs,
+          fillId: trade.id,
           side: 'sell',
           priceNative: trade.priceNative,
           priceUsd: trade.priceUsd,

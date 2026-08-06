@@ -989,7 +989,14 @@
     const solAmount = numberValue(payload.solAmount) || 0;
     const tsMs = numberValue(payload.ts) || Date.now();
     const symbol = typeof payload.symbol === 'string' ? payload.symbol : '';
-    const id = `papertrench-${side}-${Math.floor(tsMs)}-${Math.random().toString(36).slice(2, 8)}`;
+    // F-41: a fill's identity is the TRADE's id, not a fresh random string.
+    // A random id made the bridge structurally incapable of recognizing the
+    // same fill twice, so any double-post upstream became two independent
+    // marks — two bubbles for one buy. With the trade id the invariant
+    // "one fill, one mark" holds here no matter how often it is posted.
+    const id = typeof payload.fillId === 'string' && payload.fillId
+      ? `papertrench-${payload.fillId}`
+      : `papertrench-${side}-${Math.floor(tsMs)}-${Math.random().toString(36).slice(2, 8)}`;
 
     if (isAxiomHost) {
       const priceUsd = numberValue(payload.priceUsd);
@@ -1508,8 +1515,12 @@
     const now = Date.now();
     let preferred = null;
     let survivor = null;
+    let sawFresh = false;
     for (const entry of barCloseLedger.values()) {
       if (!(entry.close > 0) || now - entry.atMs > BAR_CLOSE_FRESH_MS) continue;
+      // A fresh entry EXISTS; whether it survives unit vetting decides
+      // whether falling back to the global close would be dishonest.
+      sawFresh = true;
       if (closeWithinBand(entry.close, spec.currentPriceUsd)) continue;
       if (closeWithinBand(entry.close, spec.currentPriceNative)) continue;
       if (!survivor || entry.atMs > survivor.atMs) survivor = entry;
@@ -1518,9 +1529,18 @@
     }
     const pick = preferred || survivor;
     if (pick) return pick.close;
-    // No subscription-tracked bars at all (export-only charts): the single
-    // global close is all there is — still refuse it when it is price-like.
-    if (barCloseLedger.size) return null;
+    // F-41: gate on FRESHNESS, not on ledger SIZE. The old `if
+    // (barCloseLedger.size) return null` refused the export-poll close
+    // whenever the ledger held any entry at all — including an entirely
+    // STALE one. On a quiet token (no trade for 15 s) that silently
+    // switched the level from the axis-exact ratio to the resolver's own
+    // cap, which on a chart whose visible band is a few percent wide is
+    // simply off-screen: the maintainer's "the average line still isn't
+    // showing", while the already-frozen bubbles stayed put.
+    // A fresh entry that FAILED unit vetting is different evidence: it says
+    // the tracked series is price-mode, so the global close is not to be
+    // trusted for an mcap level either.
+    if (sawFresh) return null;
     if (!(lastBarClose > 0)) return null;
     if (closeWithinBand(lastBarClose, spec.currentPriceUsd)) return null;
     if (closeWithinBand(lastBarClose, spec.currentPriceNative)) return null;
@@ -1607,6 +1627,38 @@
     return pickAxisLevel(usd, mcap, native, nativeMcap);
   }
 
+  /**
+   * F-41: is a wanted level outside what the chart can currently show?
+   * Uses the same internal price scale the site's own overlay reads, so the
+   * answer is the chart's, not an estimate. Returns a named reason or null;
+   * a chart that cannot be measured never accuses anything.
+   */
+  function offVisibleRange(chart, levels) {
+    if (!chart) return null;
+    const internals = bubbleInternals(chart);
+    if (!internals) return null;
+    let height = 0;
+    try { height = internals.paneDiv.getBoundingClientRect().height; } catch (_) { return null; }
+    if (!(height > 0)) return null;
+    for (const level of levels) {
+      if (!(Number(level) > 0)) continue;
+      let y = null;
+      try { y = internals.priceScale.priceToCoordinate(Number(level), internals.firstValue); } catch (_) { return null; }
+      if (y == null || !Number.isFinite(y)) return null;
+      if (y < 0 || y > height) return 'off-range';
+    }
+    return null;
+  }
+
+  /** Do two specs draw the SAME averages? (F-41 freeze parity.) The current
+   *  prices move constantly and are only inputs to the conversion; what a
+   *  line DRAWS is the average, so only a changed average may move it. */
+  function sameAverages(a, b) {
+    const keys = ['avgBuyUsd', 'avgSellUsd', 'avgBuyMcap', 'avgSellMcap',
+      'avgBuyNative', 'avgSellNative', 'avgBuyMcapNative', 'avgSellMcapNative'];
+    return keys.every((k) => (Number(a[k]) || 0) === (Number(b[k]) || 0));
+  }
+
   const averageFillSlot = makeLineSlot();
   const averageExitSlot = makeLineSlot();
 
@@ -1666,6 +1718,13 @@
       lastLineSyncReason = 'no-level:' + (spec.axisBasis || 'no-basis')
         + (lastBarClose > 0 ? '' : ':no-close');
     }
+    // F-41: a level the chart cannot SHOW is not a success. fomo's visible
+    // band was measured at a few percent wide (108.9M-119.5M in a 187px
+    // pane, live 2026-08-06) — a level off by more than that is drawn
+    // perfectly and seen by nobody, which is exactly how "the line isn't
+    // showing" reported ok:true for a whole day. Name it instead.
+    const offRange = offVisibleRange(charts[0], [buyLevel, sellLevel]);
+    if (offRange && !lastLineSyncReason) lastLineSyncReason = offRange;
     if (missingBuy && missingSell) return false;
     // The best-ranked chart can still refuse (Axiom's preload chart throws
     // "Value is null" until a series loads); fall through the ranking — but
@@ -2437,9 +2496,14 @@
       if (prevBasis !== nextBasis) {
         for (const levels of paperMarkLevels.values()) levels.frozenLevel = null;
       }
+      const prevSpec = paperLineSpec;
       paperLineSpec = {
         enabled: Boolean(payload && payload.enabled),
         axisBasis: nextBasis,
+        // F-35's discriminator needs the resolver's current cap to prefer a
+        // cap-unit close; the paper spec never carried it, so the branch was
+        // dead and unit vetting rested entirely on the exclusion bands.
+        currentMcap: numberValue(payload && payload.currentMcap),
         currentPriceNative: numberValue(payload && payload.currentPriceNative),
         currentPriceUsd: numberValue(payload && payload.currentPriceUsd),
         avgBuyUsd: numberValue(payload && payload.avgBuyUsd),
@@ -2451,6 +2515,17 @@
         avgBuyMcapNative: numberValue(payload && payload.avgBuyMcapNative),
         avgSellMcapNative: numberValue(payload && payload.avgSellMcapNative),
       };
+      // F-41: freeze PARITY with bubbles. A fill's bubble freezes its level
+      // for life; the line recomputed on every 2 s repost, so the moment the
+      // evidence changed underneath it (a ledger going stale, a basis not
+      // yet learned) a correct line could silently move to a fallback level
+      // and off the visible band. The frozen levels therefore survive a
+      // repost that did not change what is being drawn — the averages
+      // themselves. A DCA changes them, and recomputes, exactly as before.
+      if (prevSpec && prevSpec.axisBasis === nextBasis && sameAverages(prevSpec, paperLineSpec)) {
+        paperLineSpec.frozenBuyLevel = prevSpec.frozenBuyLevel;
+        paperLineSpec.frozenSellLevel = prevSpec.frozenSellLevel;
+      }
       patchPadreWidget();
       const synced = syncPaperAverageLines();
       emit('paper-lines-status', {
@@ -2477,6 +2552,16 @@
       const mark = normalizePaperMark(payload);
       if (!mark) {
         emit('paper-marker-status', { action: 'add', ok: false, reason: 'invalid-marker' });
+        return;
+      }
+      // F-41: one fill, one mark. A re-post of a fill already on the chart
+      // (journal replay after a render handoff, a storage echo) refreshes
+      // nothing and must never mint a second bubble.
+      if (paperMarkLevels.has(mark.id)) {
+        emit('paper-marker-status', {
+          action: 'add', ok: true, id: mark.id, count: paperMarks.length,
+          duplicate: true, bubblesDrawn: bubbleLayer.nodes.size,
+        });
         return;
       }
       paperMarks.push(mark);

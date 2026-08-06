@@ -375,6 +375,46 @@ end-to-end feed prewatch test (bare curve address → watched mint → primed
 quote → reserve account remembered), bootstrap acceptance/ambiguity tests,
 and the existing armed-buy suite.
 
+**F-41 · S1 · One buy drew TWO bubbles, and the average line never appeared — a dead self-write guard duplicated every fill, and a stale-ledger veto quietly relocated the line off-screen**
+`content.js` watchStorage/doBuy/doSellInner · `price-bridge.js`
+vettedMcapClose/paper-lines · fomo.family, maintainer field test ·
+**fixed (unreleased)** — two independent defects behind one screenshot,
+both found by live probing rather than reading.
+
+*Two bubbles.* `chrome.storage.onChanged` delivers a STRUCTURED CLONE, so
+`watchStorage`'s self-write guard (`next === lastWrittenState`) can never be
+true in a real browser: every tab re-adopted its OWN fills. Harmless until
+F-40 taught `adoptState` to replay the journal — after which the storage
+echo of `persistStateNow()` drew the fill BEFORE `drawnFillIds.add(trade.id)`
+ran two lines later, and the live path then drew it again. The two marks got
+different random ids, so the bridge could not recognize them as one fill, and
+`layoutBubbles` lifted the same-bar twin by one chip step — "a bubble above
+and below". Fixed at three levels: the ledger claims the fill immediately
+after `E.buy`/`E.sell` (before any await), the guard gained a clone-proof
+`seq:updatedAt` stamp, and the bridge now keys marks by the TRADE id so "one
+fill, one mark" holds no matter how often it is posted. Reproduced first in
+a new fomo overlay harness (one buy → two `paper-marker` posts) whose
+storage fake clones like Chrome does; the old harness handed back the
+caller's own object, which is exactly why every existing test passed.
+
+*No average line.* Live-measured on the real chart (in-app browser,
+2026-08-06): fomo's visible band was 108.9M–119.5M in a 187px pane — barely
+±5%, so a level off by more than that is drawn perfectly and seen by nobody.
+`vettedMcapClose` refused the export-poll close whenever the ledger held ANY
+entry — including an entirely STALE one (`if (barCloseLedger.size) return
+null`) — so on a token quiet for 15 s the level fell back to the resolver's
+own cap and left the visible range. Bubbles survived it because F-40 freezes
+them; the line alone recomputed on every 2 s repost, which is precisely why
+the maintainer saw bubbles and no line. The gate is now on FRESHNESS (a
+fresh entry that failed unit vetting still refuses; an all-stale ledger does
+not), the line's frozen level carries across reposts that did not change the
+averages (freeze parity with bubbles, while a DCA still moves it), the spec
+finally carries `currentMcap` so F-35's preferred-close discriminator stops
+being dead code, and a level outside the chart's own visible range now
+reports `off-range` instead of `ok:true`. The drawing code itself was proven
+correct on the live chart first — canvas pixels showed the dashed line on the
+exact expected row — which is what ruled it out and pointed upstream.
+
 **F-40 · S1 · The F-39 bubble showed "for a second", then vanished — and blinked through zooms — because its level was recomputed every frame from moving evidence; off-chart snipes also never replayed onto an already-open chart**
 `price-bridge.js` layoutBubbles · `content.js` adoptState · fomo.family,
 maintainer field test minutes after F-39 shipped ("for a 2nd you can see
