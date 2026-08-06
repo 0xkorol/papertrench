@@ -21,6 +21,19 @@ Kept current for Chrome Web Store review and for anyone auditing the source.
   (Earlier alphas
   injected everywhere; fixed as DEFECTS.md O-09 and enforced by
   `scripts/preflight.sh` and a manifest test.)
+- **Paper perpetual futures (v3.0.0).** A second, separate content-script
+  entry loads the perps stack on the two venues it simulates:
+  **app.hyperliquid.xyz** and jup.ag. It is the same paper-trading engine —
+  it reads the venue's own prices and funding to price a SIMULATED position,
+  places no real order, and touches no wallet or order control. This is the
+  only host the extension has added since v2.4.0, and it is listed here
+  because a permissions document that omits a host we inject into is simply
+  wrong, whatever the injected code does.
+- **Forge (v3.0.0).** The banner generator runs inside the dex upload boxes
+  on sites already listed above and adds NO new host or API permission: it
+  reads the page's own size hints and sets a file on the page's existing
+  upload input. The image model is the user's own BYOK endpoint, called with
+  the user's own key.
 - **Opt-in Instant Links spread (Turbo II).** Three off-by-default toggles
   (Discord, Telegram Web, every site) register ONE bundle at runtime via
   `chrome.scripting`: the two URL classifiers, the trajectory predictor, and
