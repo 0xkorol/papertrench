@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Weekly Trench Sprint</title>
+<meta name="description" content="One shared week, UTC Monday to Monday. Only rounds opened and closed inside the window count, scored by ROI on window-start equity — verified from the same hash chain as everything else.">
+<meta property="og:title" content="PaperTrench — Weekly Trench Sprint">
+<meta property="og:description" content="A fresh race every week: same chain, same verification, one comparable number. No entry fee, no real money, no faked rows.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .sprint-clock { display: flex; gap: 26px; flex-wrap: wrap; margin-top: 34px; }
+  .sprint-clock .num { font-family: var(--mono); font-size: 30px; font-weight: 800; letter-spacing: -0.5px; }
+  .sprint-clock .lbl { font-size: 12px; color: var(--dim); font-weight: 700; margin-top: 2px; letter-spacing: .6px; }
+  .sprint-board { padding: 22px; max-width: 860px; margin: 0 auto; }
+  .lb-note { color: var(--dim); font-size: 12.5px; line-height: 1.65; }
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="sprint.html" aria-current="page">Weekly Sprint</a>
+      <a href="news.html">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero news-hero">
+  <div class="wrap">
+    <span class="hero-badge reveal"><span class="dot"></span>A fresh race every week · UTC Monday to Monday</span>
+    <h1 class="reveal d1">The weekly <span class="grad-orange">Trench Sprint.</span></h1>
+    <p class="hero-sub reveal d2">Same chain, same verification, one shared window. Only rounds <strong>opened AND closed inside the week</strong> count, scored by return on your equity at the window's open — so a 10&nbsp;◎ bankroll races a 1,000&nbsp;◎ whale on even terms. Trade normally, submit your record on the leaderboard page, and your week is in.</p>
+    <div class="sprint-clock reveal d3" id="clock">
+      <div><div class="num" style="color:var(--orange2)" id="clock-week">—</div><div class="lbl">WEEK</div></div>
+      <div><div class="num" style="color:var(--green)" id="clock-left">—</div><div class="lbl">REMAINING</div></div>
+      <div><div class="num" style="color:var(--blue)" id="clock-entries">—</div><div class="lbl">ENTRIES</div></div>
+    </div>
+  </div>
+</header>
+
+<section style="padding:24px 0 40px">
+  <div class="wrap">
+    <div class="visual-card sprint-board reveal">
+      <div class="lb-title"><span class="shield">⚡</span>This week's standings
+        <span style="margin-left:auto;font-size:11px;font-weight:800;letter-spacing:1px;color:var(--green);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:4px 10px;background:rgba(52,211,153,.08)">CHAIN-VERIFIED</span></div>
+      <div id="board"><p class="lb-note" style="padding:12px 6px">Loading this week…</p></div>
+      <p class="lb-note" style="margin-top:16px">Standings update when players submit on the <a href="leaderboard.html" style="color:var(--orange2)">leaderboard page</a> — resubmitting mid-week refreshes your row from the same extend-only chain. Rows marked VERIFYING… have passed the replay and are still being re-priced against market history.</p>
+    </div>
+  </div>
+</section>
+
+<section style="padding:0 0 80px">
+  <div class="wrap" style="max-width:860px">
+    <div class="gcard reveal" style="padding:26px">
+      <h3 style="margin:0 0 12px;font-size:16px">Sprint rules — short, because the chain does the enforcing</h3>
+      <ul class="lb-note" style="margin:0;padding-left:18px">
+        <li><strong>The window is UTC Monday 00:00 → next Monday 00:00.</strong> One shared clock, no timezone games — fill timestamps are hash-committed.</li>
+        <li><strong>A round counts only if it opened and closed inside the window.</strong> A bag carried in was last week's decision; a bag carried out has no honest realized number yet.</li>
+        <li><strong>Score is the same formula as the main board</strong> — window ROI × ln(1+rounds) × discipline — applied to the week's slice only.</li>
+        <li><strong>No separate entry, no reset.</strong> Your normal practice IS your entry. The sprint is a lens on the same committed record, which is why it can't be gamed separately.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="news.html">News &amp; patch notes</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="lb.js"></script>
+<script src="reveal.js"></script>
+<script>
+(() => {
+  'use strict';
+  const { row, emptyState, fmt, signed } = window.PTLB;
+
+  (async () => {
+    const el = document.getElementById('board');
+    try {
+      const { body } = await window.PTLB.api('/api/sprint/current');
+      document.getElementById('clock-week').textContent = body.weekId || '—';
+      document.getElementById('clock-entries').textContent = String((body.entries || []).length);
+      const tick = () => {
+        const left = body.endTs - Date.now();
+        if (left <= 0) { document.getElementById('clock-left').textContent = 'closing'; return; }
+        const d = Math.floor(left / 86400000);
+        const h = Math.floor(left % 86400000 / 3600000);
+        const m = Math.floor(left % 3600000 / 60000);
+        document.getElementById('clock-left').textContent = `${d}d ${h}h ${m}m`;
+      };
+      tick();
+      setInterval(tick, 30000);
+
+      const entries = body.entries || [];
+      if (!entries.length) {
+        el.innerHTML = emptyState('Nobody has submitted a round this week yet. One closed round inside the window puts you on this board.');
+        return;
+      }
+      el.innerHTML = entries.map((e, i) => row(e, i,
+        `<span style="color:${e.entry.roiPct >= 0 ? 'var(--green)' : '#ff8a80'}">${signed(e.entry.roiPct, 1, '%')}</span> <small style="opacity:.75">${signed(e.entry.pnlSol, 2)} ◎</small>`,
+        `${e.entry.rounds} rds · ${e.entry.wins}W ${e.entry.losses}L`
+      )).join('');
+    } catch {
+      el.innerHTML = emptyState('The sprint server is unreachable right now. Nothing is shown rather than something stale.');
+    }
+  })();
+})();
+</script>
+</body>
+</html>

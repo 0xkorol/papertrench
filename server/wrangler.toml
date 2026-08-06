@@ -1,0 +1,30 @@
+# PaperTrench leaderboard server — Cloudflare Workers config.
+# See DEPLOY.md for the one-time setup runbook.
+
+name = "papertrench-api"
+main = "worker/index.js"
+compatibility_date = "2026-07-01"
+
+# Pricing cron: drains one pending record per minute under the candle-API
+# budget (25 external lookups/run keeps GeckoTerminal's free tier happy).
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "papertrench"
+database_id = "REPLACE_WITH_D1_ID"   # from: wrangler d1 create papertrench
+
+[vars]
+SITE_ORIGIN = "https://papertrench.com"
+SITE_ORIGIN_ALT = "https://www.papertrench.com"
+COOKIE_DOMAIN = "papertrench.com"
+X_CLIENT_ID = "REPLACE_WITH_X_OAUTH2_CLIENT_ID"
+X_REDIRECT_URI = "https://api.papertrench.com/api/auth/x/callback"
+
+# Secrets (never in this file):
+#   wrangler secret put SESSION_SECRET     # 32+ random bytes, e.g. `openssl rand -hex 32`
+
+[[routes]]
+pattern = "api.papertrench.com/*"
+zone_name = "papertrench.com"

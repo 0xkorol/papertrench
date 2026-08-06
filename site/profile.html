@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Trader profile</title>
+<meta name="description" content="A verified PaperTrench record: chain-committed fills, server-replayed stats, and sprint history — with the verification status stated plainly.">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .prof-wrap { max-width: 860px; margin: 0 auto; }
+  .prof-head { display: flex; align-items: center; gap: 16px; padding: 26px; }
+  .prof-head img { width: 56px; height: 56px; border-radius: 50%; }
+  .prof-head h1 { font-size: 24px; margin: 0; }
+  .prof-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-top: 22px; }
+  .prof-stat { background: rgba(255,255,255,0.03); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .prof-stat .num { font-family: var(--mono); font-size: 20px; font-weight: 800; }
+  .prof-stat .lbl { font-size: 11.5px; color: var(--dim); font-weight: 700; margin-top: 3px; letter-spacing: .4px; }
+  .lb-note { color: var(--dim); font-size: 12.5px; line-height: 1.65; }
+  .prof-chain { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="leaderboard.html">Leaderboard</a>
+      <a href="sprint.html">Weekly Sprint</a>
+      <a href="news.html">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<section style="padding:110px 0 80px">
+  <div class="wrap prof-wrap">
+    <div id="profile"><p class="lb-note">Loading profile…</p></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="news.html">News &amp; patch notes</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="lb.js"></script>
+<script>
+(() => {
+  'use strict';
+  const { esc, fmt, signed, STATUS_BADGE, emptyState } = window.PTLB;
+  const el = document.getElementById('profile');
+  const handle = new URLSearchParams(window.location.search).get('handle') || '';
+
+  const stat = (num, lbl, color) =>
+    `<div class="prof-stat"><div class="num" style="color:${color || 'inherit'}">${num}</div><div class="lbl">${lbl}</div></div>`;
+
+  (async () => {
+    if (!handle) { el.innerHTML = emptyState('No handle given. Open a profile from the leaderboard.'); return; }
+    let body;
+    try { body = (await window.PTLB.api('/api/profile?handle=' + encodeURIComponent(handle))).body; }
+    catch { el.innerHTML = emptyState('The server is unreachable right now.'); return; }
+    if (!body || body.ok === false) {
+      el.innerHTML = emptyState('No record for @' + esc(handle) + '. Profiles exist once a chain has been submitted.');
+      return;
+    }
+    document.title = 'PaperTrench — @' + body.handle;
+    const r = body.record;
+    const s = r && r.stats;
+    el.innerHTML = `
+      <div class="visual-card prof-head">
+        ${body.avatarUrl ? `<img src="${esc(body.avatarUrl)}" alt="" referrerpolicy="no-referrer">` : ''}
+        <div>
+          <h1>@${esc(body.handle)} ${r ? (STATUS_BADGE[r.status] || '') : ''}</h1>
+          <p class="lb-note" style="margin:6px 0 0">${esc(body.displayName || '')}${r ? ` · ${r.chainLen} committed fills · ${fmt(r.startingSol, 1)} ◎ declared bankroll` : ''}</p>
+        </div>
+      </div>
+      ${!r ? emptyState('Signed in, but no record submitted yet.') : `
+      <div class="prof-stats">
+        ${stat(esc(signed(s.roiPct, 1, '%')), 'ROI ON BANKROLL', s.roiPct >= 0 ? 'var(--green)' : '#ff8a80')}
+        ${stat(esc(signed(s.realizedPnlSol, 2)) + ' ◎', 'REALIZED P&L', s.realizedPnlSol >= 0 ? 'var(--green)' : '#ff8a80')}
+        ${stat(String(s.rounds), 'CLOSED ROUNDS')}
+        ${stat(esc(fmt(s.winRate * 100, 0)) + '%', 'WIN RATE')}
+        ${stat(esc(fmt(s.score, 1)), 'SEASON SCORE', 'var(--orange2)')}
+        ${stat(esc(fmt(s.maxDrawdown * 100, 0)) + '%', 'MAX DRAWDOWN')}
+      </div>
+      <div class="gcard" style="padding:20px;margin-top:22px">
+        <p class="lb-note" style="margin:0">
+          <strong>Verification:</strong>
+          ${r.status === 'verified' ? `every link re-hashed, book replayed, and ${r.pricing ? fmt(r.pricing.counts.ok, 0) : 'all'} fill prices confirmed against market history${r.pricing && r.pricing.counts.noData ? ` (${r.pricing.counts.noData} lacked public candle data — coverage ${fmt(r.pricing.coverage * 100, 0)}%)` : ''}.`
+          : r.status === 'pending' ? 'chain re-hashed and replayed; prices still being re-checked against market history.'
+          : r.status === 'partial' ? `chain valid and replayed, but only ${r.pricing ? fmt(r.pricing.coverage * 100, 0) : '—'}% of fills had public candle data to check against. Shown, labeled, ranked below fully verified records.`
+          : 'this record failed verification and does not rank.'}
+          ${r.claimMismatch ? ' ⚠ The claimed P&L differed from the chain replay; replayed numbers are shown.' : ''}
+        </p>
+        <p class="prof-chain" style="margin:12px 0 0">chain head: ${esc(r.head)}</p>
+      </div>
+      ${body.sprints && body.sprints.length ? `
+      <div class="gcard" style="padding:20px;margin-top:22px">
+        <h3 style="margin:0 0 10px;font-size:15px">Sprint history</h3>
+        ${body.sprints.map((w) => `
+          <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px">
+            <span style="font-family:var(--mono);color:var(--dim)">${esc(w.weekId)}</span>
+            <span>${w.entry.rounds} rds · ${w.entry.wins}W ${w.entry.losses}L</span>
+            <span style="color:${w.entry.roiPct >= 0 ? 'var(--green)' : '#ff8a80'};font-weight:700">${esc(signed(w.entry.roiPct, 1, '%'))}</span>
+          </div>`).join('')}
+      </div>` : ''}`}
+    `;
+  })();
+})();
+</script>
+</body>
+</html>

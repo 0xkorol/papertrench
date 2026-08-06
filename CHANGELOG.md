@@ -3,6 +3,35 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## Unreleased
+
+The leaderboard goes live — the social half of PaperTrench, operated
+entirely through the website so the extension stays lightweight and
+disconnected.
+
+- **A real leaderboard server** (`server/`, Cloudflare Workers + D1). Your
+  submitted chain is re-hashed link by link, replayed from the raw fills,
+  and every price re-checked against the token's actual traded range that
+  minute. Standings never rank a self-reported number, a replaced history,
+  or a price that never existed.
+- **papertrench.com/leaderboard** — season standings with X sign-in, one
+  ranked record per verified account. Rank is process-weighted: ROI on
+  your declared bankroll × sustained rounds × discipline (revenge
+  re-entries and drawdown cost you). Five closed rounds minimum; one
+  lottery ticket does not top this board.
+- **The weekly Trench Sprint** — UTC Monday-to-Monday, only rounds opened
+  AND closed inside the window, scored by ROI on window-start equity so a
+  10 ◎ bankroll races a whale evenly. Your normal practice is your entry.
+- **Public profiles** with verification status stated plainly (verified /
+  verifying / partial data), chain head, and sprint history.
+- **Two ways to submit, both yours to initiate.** Export your record as a
+  JSON file from the dashboard's Leaderboard tab, or flip the new
+  **Site sync** toggle (off by default) and click Sync on the site — the
+  extension answers papertrench.com only, and still never phones home.
+- **Self-serve deletion** on the leaderboard page, and an updated privacy
+  policy that states the split precisely: extension fully local, website
+  leaderboard opt-in only.
+
 ## v2.11.1 — 2026-08-05
 
 - **The Game tab actually shows up now.** v2.11.0 wired the tab's button,

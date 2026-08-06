@@ -1,0 +1,11 @@
+{
+  "name": "papertrench-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PaperTrench leaderboard server — verifies attestation chains, re-prices fills against market history, and runs the seasonal boards. Pure core + Cloudflare Workers adapters.",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}

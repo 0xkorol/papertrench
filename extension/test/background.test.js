@@ -17,6 +17,7 @@ function serviceWorker(opts = {}) {
     pt_state: { positions: {}, rounds: [], journal: [] },
   };
   let messageListener = null;
+  let externalListener = null;
   const fetchCalls = [];
   const captureCalls = [];
   // Real Chrome exposes a storage failure by setting chrome.runtime.lastError
@@ -61,6 +62,8 @@ function serviceWorker(opts = {}) {
     URLSearchParams,
     AbortController,
     Uint8Array,
+    TextEncoder,
+    crypto, // attest.js hashes through WebCrypto; Node's global implements it
     setTimeout,
     clearTimeout,
     setInterval: () => 1,
@@ -106,6 +109,7 @@ function serviceWorker(opts = {}) {
         id: 'papertrench-test',
         openOptionsPage: () => {},
         onMessage: { addListener: (listener) => { messageListener = listener; } },
+        onMessageExternal: { addListener: (listener) => { externalListener = listener; } },
         onStartup: { addListener: () => {} },
         onInstalled: { addListener: () => {} },
         sendMessage: async () => ({}),
@@ -154,6 +158,7 @@ function serviceWorker(opts = {}) {
   return {
     values, fetchCalls, captureCalls,
     get listener() { return messageListener; },
+    get external() { return externalListener; },
     get isAllowedEndpoint() { return context.isAllowedEndpoint; },
     get storage() {
       return {
@@ -434,5 +439,84 @@ test('a closed trading tab yields no frame either', async () => {
 
   assert.deepEqual(worker.captureCalls, [],
     'a vanished tab cannot be depicted; the frame must be skipped, not guessed');
+});
+
+/* ---------------- site bridge (leaderboard sync) ----------------
+ *
+ * The one external surface the extension has. These tests lock its three
+ * promises: only papertrench.com is answered, nothing is served until the
+ * user turns Site sync on, and what IS served is the same buildSubmission
+ * evidence the manual export produces — never a diverging second story.
+ */
+
+function sendExternal(listener, message, sender) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('bridge response timed out')), 2000);
+    listener(message, sender, (response) => { clearTimeout(timeout); resolve(response); });
+  });
+}
+
+const SITE_SENDER = { origin: 'https://papertrench.com' };
+
+function bridgeTrade(over) {
+  return Object.assign({
+    id: 'bt1', sessionId: 'pts-bridge', mint: MINT, side: 'buy',
+    qty: 1000, priceNative: 0.001, solGross: 1, solNet: 0.99, ts: 1_000_000,
+  }, over || {});
+}
+
+test('the bridge refuses every origin but papertrench.com', async () => {
+  const worker = serviceWorker();
+  const res = await sendExternal(worker.external,
+    { type: 'pt_bridge_get_record' }, { origin: 'https://evil.example' });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'origin-not-allowed');
+});
+
+test('the bridge is off by default — the site is told, never served', async () => {
+  const worker = serviceWorker();
+  const res = await sendExternal(worker.external, { type: 'pt_bridge_get_record' }, SITE_SENDER);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'bridge-disabled');
+  const ping = await sendExternal(worker.external, { type: 'pt_bridge_ping' }, SITE_SENDER);
+  assert.equal(ping.ok, true);
+  assert.equal(ping.bridgeEnabled, false);
+});
+
+test('with Site sync on, the bridge serves buildSubmission evidence from the real chain', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_settings = Object.assign({}, worker.values.pt_settings,
+    { leaderboardBridge: true, balanceStartSol: 10 });
+  const first = await send(worker.listener, { type: 'pt_attest_append', trade: bridgeTrade() });
+  assert.equal(first.ok, true, first.error);
+  const second = await send(worker.listener, { type: 'pt_attest_append', trade: bridgeTrade({
+    id: 'bt2', side: 'sell', priceNative: 0.002, solGross: 2, solNet: 1.98, ts: 1_060_000,
+  }) });
+  assert.equal(second.ok, true, second.error);
+
+  const res = await sendExternal(worker.external, { type: 'pt_bridge_get_record' }, SITE_SENDER);
+  assert.equal(res.ok, true);
+  assert.equal(res.payload.chain.length, 2);
+  assert.equal(res.payload.head, res.payload.chain[1].hash);
+  assert.equal(res.payload.claim.startingBalanceSol, 10);
+  // The claim mirrors the chain replay — one story, told twice.
+  assert.ok(Math.abs(res.payload.claim.realizedPnlSol - (1.98 - 0.99)) < 1e-9);
+  assert.equal(typeof res.payload.trustModel, 'string');
+});
+
+test('an empty chain is not served as evidence of anything', async () => {
+  const worker = serviceWorker();
+  worker.values.pt_settings = Object.assign({}, worker.values.pt_settings,
+    { leaderboardBridge: true });
+  const res = await sendExternal(worker.external, { type: 'pt_bridge_get_record' }, SITE_SENDER);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'chain-empty');
+});
+
+test('unknown bridge requests are refused by name', async () => {
+  const worker = serviceWorker();
+  const res = await sendExternal(worker.external, { type: 'pt_bridge_drop_tables' }, SITE_SENDER);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'unknown-request');
 });
 

@@ -1,0 +1,116 @@
+/* PaperTrench server — historical candle source (GeckoTerminal adapter).
+ *
+ * pricing.js asks one question: "what USD range did this token — and SOL —
+ * trade in during this minute?" This adapter answers it from GeckoTerminal's
+ * free OHLCV API with a D1 cache in front, because historical minutes never
+ * change: one popular mint's minute, fetched once, serves every verifier
+ * forever.
+ *
+ * Budget honesty: the free tier allows ~30 calls/min. The cron drains pricing
+ * work under a per-run lookup budget, so a burst of submissions queues
+ * instead of hammering the API. A mint with no pool or no candle data yields
+ * null → pricing marks those fills 'no-data' (never a pass, never a fail).
+ */
+'use strict';
+
+const GT = 'https://api.geckoterminal.com/api/v2';
+// Raydium SOL/USDC — the deepest, oldest SOL pool; used for SOL/USD minutes.
+const SOL_USD_POOL = '58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2';
+const SOL_KEY = '__SOL_USD__';
+const NO_DATA_RETRY_MS = 6 * 60 * 60 * 1000;
+const POOL_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function gtJson(url) {
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (res.status === 429) throw new Error('geckoterminal-rate-limited');
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/** Top pool for a mint, cached in D1 with a TTL (young tokens gain pools). */
+async function poolFor(env, mint) {
+  const now = Date.now();
+  const cached = await env.DB.prepare('SELECT pool_id, fetched_at FROM pools WHERE mint = ?')
+    .bind(mint).first();
+  if (cached && (cached.pool_id || now - cached.fetched_at < POOL_TTL_MS)) {
+    return cached.pool_id || null;
+  }
+  const data = await gtJson(`${GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`);
+  const pool = data && Array.isArray(data.data) && data.data[0]
+    ? String(data.data[0].attributes.address) : null;
+  await env.DB.prepare(`
+    INSERT INTO pools (mint, pool_id, fetched_at) VALUES (?, ?, ?)
+    ON CONFLICT(mint) DO UPDATE SET pool_id = excluded.pool_id, fetched_at = excluded.fetched_at`)
+    .bind(mint, pool, now).run();
+  return pool;
+}
+
+/** {low, high} in USD for the minute containing minuteTs, or null. */
+async function ohlcvMinute(pool, minuteTs) {
+  const beforeSec = Math.floor(minuteTs / 1000) + 120;
+  const data = await gtJson(
+    `${GT}/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/minute` +
+    `?aggregate=1&before_timestamp=${beforeSec}&limit=5&currency=usd`);
+  const rows = data && data.data && data.data.attributes && data.data.attributes.ohlcv_list;
+  if (!Array.isArray(rows)) return null;
+  const wantSec = Math.floor(minuteTs / 1000);
+  for (const row of rows) {
+    // [ts, open, high, low, close, volume]
+    if (Number(row[0]) === wantSec) {
+      const high = Number(row[2]);
+      const low = Number(row[3]);
+      return high > 0 && low > 0 ? { low, high } : null;
+    }
+  }
+  return null;
+}
+
+async function cachedCandle(env, key, minuteTs, fetcher) {
+  const now = Date.now();
+  const hit = await env.DB.prepare(
+    'SELECT candles_json, fetched_at FROM candle_cache WHERE mint = ? AND minute_ts = ?')
+    .bind(key, minuteTs).first();
+  if (hit) {
+    const value = hit.candles_json ? JSON.parse(hit.candles_json) : null;
+    if (value || now - hit.fetched_at < NO_DATA_RETRY_MS) return { value, fromCache: true };
+  }
+  const value = await fetcher();
+  await env.DB.prepare(`
+    INSERT INTO candle_cache (mint, minute_ts, candles_json, fetched_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(mint, minute_ts) DO UPDATE SET
+      candles_json = excluded.candles_json, fetched_at = excluded.fetched_at`)
+    .bind(key, minuteTs, value ? JSON.stringify(value) : null, now).run();
+  return { value, fromCache: false };
+}
+
+/**
+ * The getCandles function pricing.js consumes, bound to this environment.
+ * Counts real API hits into `budget` ({ used, max }) and throws
+ * 'candle-budget-exhausted' when the run's budget is gone, which the cron
+ * treats as "stop here, resume next run".
+ */
+function makeGetCandles(env, budget) {
+  return async function getCandles(mint, minuteTs) {
+    const spend = async (fn) => {
+      if (budget.used >= budget.max) throw new Error('candle-budget-exhausted');
+      const result = await fn();
+      return result;
+    };
+
+    const sol = await cachedCandle(env, SOL_KEY, minuteTs, () =>
+      spend(() => ohlcvMinute(SOL_USD_POOL, minuteTs)));
+    if (!sol.fromCache) budget.used++;
+
+    const token = await cachedCandle(env, mint, minuteTs, async () => {
+      const pool = await spend(() => poolFor(env, mint));
+      if (!pool) return null;
+      return spend(() => ohlcvMinute(pool, minuteTs));
+    });
+    if (!token.fromCache) budget.used++;
+
+    if (!token.value || !sol.value) return null;
+    return { tokenUsd: token.value, solUsd: sol.value };
+  };
+}
+
+module.exports = { makeGetCandles, SOL_USD_POOL };

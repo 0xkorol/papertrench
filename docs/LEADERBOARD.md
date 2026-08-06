@@ -82,8 +82,24 @@ recomputation. A mismatch is itself a signal.
 
 ## Current status
 
-The client half is implemented and shipping. **No leaderboard server exists
-yet**, so the extension shows only your own verified record and no global
-standings are invented. Chains are committed locally in the meantime, so records
-are already verifiable the moment ranking goes live — nothing has to be
-reconstructed retroactively.
+Both halves exist. The client half ships in the extension; the server half
+lives in [`server/`](../server/README.md) (pure verification core +
+Cloudflare Workers adapters) and implements every check above, plus:
+
+- **Extend-only anchoring** (check 5 made concrete): the stored head must
+  appear at its committed position in the next submission, so a chain can
+  be extended but never replaced — including after a local reset.
+- **Three-state re-pricing.** Fills are checked against the token's USD
+  minute candle crossed with the SOL/USD range for the same minute. An
+  impossible price rejects the record; a minute with no public candle data
+  is counted as coverage honestly (`partial` tier), never passed silently.
+- **Process-weighted ranking** (`ROI × ln(1+rounds) × discipline`, five
+  closed rounds minimum) and the weekly **Trench Sprint**, both computed
+  from the same chain — there is no second record to game.
+
+The record reaches the site two ways, both user-initiated: a JSON export
+from the dashboard, or the site's Sync button asking the extension over
+`externally_connectable` — which the extension answers only for
+papertrench.com and only when the dashboard's **Site sync** toggle is on
+(off by default). The extension still never initiates a network call to
+any PaperTrench server.

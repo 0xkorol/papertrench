@@ -110,6 +110,18 @@ function roundsCsv(rounds) {
  * Client-side download, mirroring the popup backup pattern: Blob → object
  * URL → synthetic click → revoke shortly after.
  */
+function downloadJson(filename, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 function downloadCsv(filename, text) {
   const blob = new Blob([text], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
@@ -3147,10 +3159,14 @@ function renderLeaderboard(el) {
 }
 
 function renderStandingsPlaceholder(identity, stats) {
-  // No leaderboard service is configured, so no remote standings are invented.
+  // Remote standings are never invented here: this card shows YOUR row and
+  // the two hand-off paths to the board at papertrench.com. The extension
+  // still never phones home — export is a local file, and Site sync only
+  // ANSWERS a request the site makes when you click over there.
   const roiPct = settings.balanceStartSol > 0
     ? (stats.realizedPnlSol / settings.balanceStartSol) * 100
     : 0;
+  const chain = attestChain;
   return `
     <div class="lb-rank me">
       <span class="pos">—</span>
@@ -3162,13 +3178,16 @@ function renderStandingsPlaceholder(identity, stats) {
       </span>
     </div>
     <p class="dim" style="font-size:12px;line-height:1.6;margin:14px 0 0">
-      No leaderboard server is configured yet, so no global standings are shown.
-      Your chain is being committed locally in the meantime, so your record is
-      already verifiable the moment ranking goes live — nothing needs to be
-      reconstructed retroactively. ROI is shown next to absolute P&amp;L because
-      the starting bankroll is a free choice: +10 SOL on a 10 SOL bankroll is a
-      different result than +10 SOL on 1,000, and rankings must compare like with like.
-    </p>`;
+      Global standings live at <a href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener" style="color:var(--orange2)">papertrench.com/leaderboard</a>,
+      recomputed server-side from submitted chains — never from a self-reported
+      number. ROI is shown next to absolute P&amp;L because the starting bankroll
+      is a free choice: +10 SOL on 10 is not +10 SOL on 1,000.
+    </p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn-sec" id="lb-export" ${chain.length ? '' : 'disabled'}>Export record (JSON)</button>
+      <a class="btn-sec" href="https://papertrench.com/leaderboard.html" target="_blank" rel="noopener" style="text-decoration:none">Open leaderboard ↗</a>
+    </div>
+    <div class="field field-check" style="margin-top:14px"><label><input type="checkbox" id="lb-bridge" ${settings.leaderboardBridge === true ? 'checked' : ''}> Site sync</label><small>Lets papertrench.com read your verified record when you click Sync there — nothing is sent anywhere on its own, and no other site can ask. Off means the site tells you to use the exported file instead.</small></div>`;
 }
 
 /** Verify the chain and show the user exactly what a server would compute. */
@@ -3194,6 +3213,31 @@ async function bindLeaderboard(el) {
       delete settings.leaderboardIdentity;
       try { await saveSettings(); } catch (err) { console.error('PaperTrench: identity save failed', err); }
       renderSection('leaderboard');
+    });
+  }
+
+  // Manual hand-off path: the same buildSubmission() payload the site bridge
+  // serves, as a local file the user carries to papertrench.com themselves.
+  const exportBtn = el.querySelector('#lb-export');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      const chain = attestChain; // F-14: loaded from the segmented store
+      if (!chain.length) return;
+      const payload = AT.buildSubmission({
+        chain,
+        identity: settings.leaderboardIdentity || null,
+        startingBalanceSol: settings.balanceStartSol,
+        stats: E.sessionStats(state, settings),
+      });
+      downloadJson(`papertrench-record-${csvStamp()}.json`, JSON.stringify(payload, null, 2));
+    });
+  }
+
+  const bridge = el.querySelector('#lb-bridge');
+  if (bridge) {
+    bridge.addEventListener('change', async () => {
+      settings.leaderboardBridge = bridge.checked === true;
+      try { await saveSettings(); } catch (err) { console.error('PaperTrench: bridge save failed', err); }
     });
   }
 

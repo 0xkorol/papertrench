@@ -1,0 +1,104 @@
+/* PaperTrench server — submission pipeline.
+ *
+ * The server-side half of docs/LEADERBOARD.md, as one pure orchestration:
+ *
+ *   1. shape gate        — malformed or absurd payloads never reach crypto
+ *   2. verifyChain       — every link re-hashed, order enforced
+ *   3. head monotonicity — a later submission must EXTEND the chain already
+ *                          committed to; swapping in a fresh, luckier history
+ *                          is the oldest cheat on any self-reported board
+ *   4. replay            — standings come from replayChain, never `claim`;
+ *                          a claim/replay mismatch is recorded as a signal
+ *   5. re-pricing        — separate, resumable phase (pricing.js) because it
+ *                          costs external lookups; a record ranks as
+ *                          'verified' only after it survives this
+ *
+ * Pure: no storage, no fetch. The worker owns persistence and rate limits.
+ */
+'use strict';
+
+const { verifyChain, replayChain } = require('./chain.js');
+const { recordStats } = require('./ranking.js');
+const { priceChain, recordVerdict } = require('./pricing.js');
+
+const MAX_CHAIN_LINKS = 50000;
+const MAX_STARTING_SOL = 100000;
+
+/** Cheap structural gate. Returns null when acceptable, else a reason. */
+function shapeProblem(payload) {
+  if (!payload || typeof payload !== 'object') return 'not-an-object';
+  if (payload.version !== 1) return 'unknown-version';
+  if (!Array.isArray(payload.chain)) return 'chain-missing';
+  if (!payload.chain.length) return 'chain-empty';
+  if (payload.chain.length > MAX_CHAIN_LINKS) return 'chain-too-long';
+  const start = Number(payload.claim && payload.claim.startingBalanceSol);
+  if (!(start > 0) || start > MAX_STARTING_SOL) return 'starting-balance-invalid';
+  if (typeof payload.head !== 'string' || !payload.head) return 'head-missing';
+  const tail = payload.chain[payload.chain.length - 1];
+  if (!tail || tail.hash !== payload.head) return 'head-mismatch';
+  return null;
+}
+
+/**
+ * The fast checks (1–4). `previous` is the stored record for this identity
+ * ({ head, chainLen }) or null on first submission.
+ *
+ * Returns { accepted, reason?, stats?, replayed?, claimMismatch? }.
+ */
+async function fastChecks(payload, previous) {
+  const shape = shapeProblem(payload);
+  if (shape) return { accepted: false, reason: 'shape:' + shape };
+
+  const verification = await verifyChain(payload.chain);
+  if (!verification.valid) {
+    return {
+      accepted: false,
+      reason: 'chain-invalid',
+      problems: verification.problems.slice(0, 20),
+    };
+  }
+
+  if (previous && previous.head && previous.chainLen > 0) {
+    if (payload.chain.length < previous.chainLen) {
+      return { accepted: false, reason: 'chain-shrunk' };
+    }
+    const anchor = payload.chain[previous.chainLen - 1];
+    if (!anchor || anchor.hash !== previous.head) {
+      return { accepted: false, reason: 'chain-replaced' };
+    }
+  }
+
+  const start = Number(payload.claim.startingBalanceSol);
+  const replayed = replayChain(payload.chain, start);
+  const claimedPnl = Number(payload.claim.realizedPnlSol) || 0;
+  const claimMismatch = Math.abs(replayed.realizedPnlSol - claimedPnl) > 1e-6;
+  const stats = recordStats(payload.chain, start);
+
+  return { accepted: true, stats, replayed, claimMismatch };
+}
+
+/**
+ * The pricing phase (5), resumable. `progress` is null on first call or the
+ * previous call's return value; the runtime persists it between cron runs.
+ */
+async function priceRecord(payload, getCandles, progress, opts) {
+  const options = opts || {};
+  const prior = progress && Array.isArray(progress.verdicts) ? progress : { cursor: 0, verdicts: [] };
+  const run = await priceChain(payload.chain, getCandles, {
+    startAt: prior.cursor,
+    maxLookups: options.maxLookups,
+    tolerance: options.tolerance,
+  });
+  // priceChain judges from startAt onward, so the slices never overlap.
+  const merged = prior.verdicts.concat(run.verdicts);
+  const done = merged.length === payload.chain.length;
+  const result = {
+    done,
+    cursor: run.cursor,
+    verdicts: merged,
+  };
+  if (done) result.verdict = recordVerdict(merged, { minCoverage: options.minCoverage });
+  return result;
+}
+
+module.exports = { MAX_CHAIN_LINKS, MAX_STARTING_SOL, shapeProblem, fastChecks, priceRecord };

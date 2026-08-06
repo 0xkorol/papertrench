@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperTrench — Leaderboard</title>
+<meta name="description" content="Season standings recomputed server-side from tamper-evident trade chains. Every fill re-checked against real market history — no self-reported numbers, ever.">
+<meta property="og:title" content="PaperTrench — Leaderboard">
+<meta property="og:description" content="A paper-trading leaderboard that can't be faked: hash-chained fills, server-side replay, prices re-verified against market history.">
+<meta property="og:image" content="https://onlyterp.github.io/papertrench/assets/video-poster.jpg">
+<link rel="icon" type="image/png" href="assets/icon128.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .lb-page-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 900px) { .lb-page-grid { grid-template-columns: 1fr; } }
+  .lb-board { padding: 22px; }
+  .lb-side { padding: 22px; }
+  .lb-side h3 { font-size: 15px; font-weight: 800; margin: 0 0 12px; }
+  .lb-side + .lb-side { margin-top: 22px; }
+  .lb-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .lb-note { color: var(--dim); font-size: 12.5px; line-height: 1.65; }
+  .lb-status { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; word-break: break-all;
+               background: rgba(255,255,255,0.03); border: 1px solid var(--line);
+               border-radius: 10px; padding: 12px 14px; margin-top: 12px; display: none; }
+  .lb-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .lb-me { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+  .lb-me img { width: 32px; height: 32px; border-radius: 50%; }
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="PaperTrench logo">PaperTrench</a>
+    <div class="nav-links">
+      <a href="leaderboard.html" aria-current="page">Leaderboard</a>
+      <a href="sprint.html">Weekly Sprint</a>
+      <a href="news.html">News</a>
+      <a href="index.html#install">Install</a>
+      <a class="nav-live" href="streams.html" title="Watch streamers run the PaperTrench Challenge live on Twitch"><span class="dot"></span>Watch Live</a>
+      <a class="nav-cta" href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero news-hero">
+  <div class="wrap">
+    <span class="hero-badge reveal"><span class="dot"></span>Every row recomputed server-side · zero self-reported numbers</span>
+    <h1 class="reveal d1">Season <span class="grad-orange">standings.</span></h1>
+    <p class="hero-sub reveal d2">Every record here arrived as a <strong>hash chain of fills committed the moment they happened</strong>. The server re-hashes every link, replays the whole book itself, and re-checks every price against real market history. Rank comes from return on bankroll, sustained rounds, and discipline — <strong>not</strong> from one lottery ticket.</p>
+  </div>
+</header>
+
+<section style="padding:24px 0 80px">
+  <div class="wrap">
+    <div class="lb-page-grid">
+
+      <div class="visual-card lb-board reveal">
+        <div class="lb-title"><span class="shield">🛡</span>Global standings
+          <span style="margin-left:auto;font-size:11px;font-weight:800;letter-spacing:1px;color:var(--green);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:4px 10px;background:rgba(52,211,153,.08)">CHAIN-VERIFIED</span></div>
+        <div class="lb-tabs">
+          <a class="filter-chip" href="leaderboard.html" aria-current="page" style="border-color:var(--orange);color:var(--orange2)">All-time</a>
+          <a class="filter-chip" href="sprint.html">This week's Sprint →</a>
+        </div>
+        <div id="board"><p class="lb-note" style="padding:12px 6px">Loading standings…</p></div>
+      </div>
+
+      <div>
+        <div class="visual-card lb-side reveal d1">
+          <h3>Your record</h3>
+          <div id="account"><p class="lb-note">Checking sign-in…</p></div>
+          <div class="lb-actions" id="submit-actions" style="display:none">
+            <button class="btn btn-primary" id="sync-btn">⛓ Sync from extension</button>
+            <label class="btn btn-ghost" style="cursor:pointer">Upload exported record
+              <input type="file" id="upload-input" accept="application/json,.json" style="display:none">
+            </label>
+          </div>
+          <div class="lb-status" id="submit-status"></div>
+          <p class="lb-note" style="margin-top:14px">Sync asks the extension for your committed chain — it only answers if you enabled
+            <strong>Site sync</strong> in the dashboard's Leaderboard tab, and no other site can ask. Or export the record as a file
+            there and upload it here; both paths carry identical evidence. The extension itself never phones home.</p>
+        </div>
+
+        <div class="visual-card lb-side reveal d2">
+          <h3>How ranking stays honest</h3>
+          <ul class="lb-note" style="margin:0;padding-left:18px">
+            <li><strong>Replayed, not trusted.</strong> Standings are computed from your raw fills server-side. The claimed P&amp;L is only compared against the replay — a mismatch is a signal, never a rank.</li>
+            <li><strong>Re-priced against history.</strong> Every fill is checked against the token's real traded range in that exact minute. Fabricated prices reject the record.</li>
+            <li><strong>Extend-only.</strong> A submitted chain must extend the one you already committed. Deleting a bad week and starting fresh breaks the anchor.</li>
+            <li><strong>Score = ROI × ln(1+rounds) × discipline.</strong> Return on declared bankroll, weighted by sustained rounds, discounted for revenge re-entries and drawdown. Five closed rounds minimum. One moonshot doesn't top this board.</li>
+            <li><strong>One record per X account.</strong> Sybils cost a real, public identity each.</li>
+          </ul>
+          <p class="lb-note" style="margin-top:12px">Full protocol: <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener" style="color:var(--orange2)">docs/LEADERBOARD.md</a></p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <a class="nav-logo" href="index.html"><img src="assets/icon128.png" alt="">PaperTrench</a>
+      <div class="foot-links">
+        <a href="news.html">News &amp; patch notes</a>
+        <a href="streams.html">Live on Twitch</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/OnlyTerp/papertrench" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/docs/LEADERBOARD.md" target="_blank" rel="noopener">Leaderboard protocol</a>
+        <a href="https://github.com/OnlyTerp/papertrench/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="lb.js"></script>
+<script src="reveal.js"></script>
+<script>
+(() => {
+  'use strict';
+  const { me, signIn, logout, bridgePing, bridgeGetRecord, submit,
+          row, emptyState, esc, fmt, signed } = window.PTLB;
+
+  /* ---------------- board ---------------- */
+
+  (async () => {
+    const el = document.getElementById('board');
+    try {
+      const { body } = await window.PTLB.api('/api/leaderboard');
+      const entries = (body && body.entries) || [];
+      if (!entries.length) {
+        el.innerHTML = emptyState('No ranked records yet. Five closed rounds gets you on the board — the first verified chain in makes history.');
+        return;
+      }
+      el.innerHTML = entries.map((e, i) => row(e, i,
+        `<span style="color:${e.stats.roiPct >= 0 ? 'var(--green)' : '#ff8a80'}">${signed(e.stats.roiPct, 1, '%')}</span> <small style="opacity:.75">${signed(e.stats.realizedPnlSol, 2)} ◎</small>`,
+        `${e.stats.rounds} rds · ${fmt(e.stats.winRate * 100, 0)}% W · ${fmt(e.stats.score, 1)} pts`
+      )).join('');
+    } catch {
+      el.innerHTML = emptyState('The leaderboard server is unreachable right now. Nothing is shown rather than something stale.');
+    }
+  })();
+
+  /* ---------------- account + submission ---------------- */
+
+  const accountEl = document.getElementById('account');
+  const actionsEl = document.getElementById('submit-actions');
+  const statusEl = document.getElementById('submit-status');
+  let pendingPayload = null;
+
+  function status(html) { statusEl.style.display = 'block'; statusEl.innerHTML = html; }
+
+  (async () => {
+    const session = await me();
+    if (session.unreachable) {
+      accountEl.innerHTML = '<p class="lb-note">Server unreachable — sign-in and submissions are down. The board above may also be stale.</p>';
+      return;
+    }
+    if (!session.signedIn) {
+      accountEl.innerHTML = `
+        <p class="lb-note" style="margin-bottom:12px">Sign in with X to rank. One record per account — that's what makes the board sybil-expensive.</p>
+        <button class="btn btn-primary" id="signin-btn">𝕏 Sign in with X</button>`;
+      document.getElementById('signin-btn').addEventListener('click', signIn);
+      return;
+    }
+    accountEl.innerHTML = `
+      <div class="lb-me">${session.avatarUrl ? `<img src="${esc(session.avatarUrl)}" alt="" referrerpolicy="no-referrer">` : ''}@${esc(session.handle)}
+        <a href="profile.html?handle=${encodeURIComponent(session.handle)}" style="margin-left:auto;font-size:12.5px;color:var(--orange2)">Profile →</a></div>
+      <p class="lb-note" style="margin-top:10px">Signed in. Submit your record below — it re-verifies on every submission, and a new chain must extend the last one you sent.
+        <a href="#" id="logout-link" style="color:var(--dim)">(sign out)</a> ·
+        <a href="#" id="delete-link" style="color:var(--dim)">(delete my data)</a></p>`;
+    document.getElementById('logout-link').addEventListener('click', (e) => { e.preventDefault(); logout(); });
+    document.getElementById('delete-link').addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!window.confirm('Delete your account, record, and sprint history from the leaderboard server? Your local extension data is untouched. This cannot be undone.')) return;
+      await window.PTLB.api('/api/me/delete', { method: 'POST' });
+      window.location.reload();
+    });
+    actionsEl.style.display = 'flex';
+  })();
+
+  function previewPayload(payload, source) {
+    pendingPayload = payload;
+    const fills = payload.chain.length;
+    const head = String(payload.head || '').slice(0, 12);
+    status(`
+      <div>${source}: <strong>${fills} committed fills</strong>, head <span style="color:var(--orange2)">${esc(head)}…</span></div>
+      <div>claimed ${esc(signed(payload.claim.realizedPnlSol, 3))} ◎ on a ${esc(fmt(payload.claim.startingBalanceSol, 1))} ◎ bankroll — the server will replay and re-price all of it.</div>
+      <button class="btn btn-primary" id="confirm-submit" style="margin-top:10px">Submit to leaderboard</button>`);
+    document.getElementById('confirm-submit').addEventListener('click', doSubmit);
+  }
+
+  async function doSubmit() {
+    if (!pendingPayload) return;
+    status('Submitting — the server is re-hashing every link and replaying your book…');
+    const { status: code, body } = await submit(pendingPayload);
+    pendingPayload = null;
+    if (body && body.ok) {
+      status(`✓ Accepted: ${body.stats.rounds} rounds, ${esc(signed(body.stats.roiPct, 1, '%'))} ROI, score ${esc(fmt(body.stats.score, 1))}.<br>
+        Prices are now being re-checked against market history — your row shows <strong>VERIFYING…</strong> until that lands.${body.claimMismatch ? '<br>⚠ Your displayed P&L differs from the chain-derived result; the replayed number is what ranks.' : ''}`);
+    } else if (code === 401) {
+      status('You need to sign in with X first — the button above.');
+    } else if (code === 429) {
+      status('Rate limit: six submissions an hour. Take a breath and resubmit later.');
+    } else {
+      const reason = body && body.reason ? body.reason : 'server-error';
+      status(`✗ Rejected: <strong>${esc(reason)}</strong>${reason === 'chain-replaced' ? ' — a submission must extend the chain you already committed, not replace it. That includes after a local reset.' : ''}`);
+    }
+  }
+
+  document.getElementById('sync-btn').addEventListener('click', async () => {
+    status('Asking the extension…');
+    const ping = await bridgePing();
+    if (!ping) {
+      status('Extension not detected. If you installed from a release zip (unpacked), Chrome gives it a machine-specific id this site can\'t reach — use <strong>Export record (JSON)</strong> in the dashboard\'s Leaderboard tab and upload the file here instead.');
+      return;
+    }
+    if (!ping.bridgeEnabled) {
+      status('The extension answered, but <strong>Site sync is off</strong>. Enable it in the dashboard → Leaderboard → Site sync, then click Sync again. Off is the default on purpose.');
+      return;
+    }
+    const record = await bridgeGetRecord();
+    if (!record || !record.ok) {
+      status('The extension declined: ' + esc(record && record.reason || 'no response') + (record && record.reason === 'chain-empty' ? ' — make some paper trades first; your first fill anchors the chain.' : ''));
+      return;
+    }
+    previewPayload(record.payload, 'From extension');
+  });
+
+  document.getElementById('upload-input').addEventListener('change', (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const payload = JSON.parse(String(reader.result));
+        if (!payload || !Array.isArray(payload.chain)) throw new Error('not a record');
+        previewPayload(payload, 'From file');
+      } catch {
+        status('That file isn\'t a PaperTrench record export. Use Export record (JSON) in the dashboard\'s Leaderboard tab.');
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  });
+})();
+</script>
+</body>
+</html>

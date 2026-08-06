@@ -163,6 +163,12 @@
       ]
     }
   ],
+  "externally_connectable": {
+    "matches": [
+      "https://papertrench.com/*",
+      "https://www.papertrench.com/*"
+    ]
+  },
   "options_page": "dashboard.html",
   "icons": {
     "16": "icons/icon16.png",
