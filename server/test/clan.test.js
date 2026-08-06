@@ -1,0 +1,365 @@
+/* Clans add the first thing in this product that a person can put on a
+ * leaderboard without having traded it themselves: other people's records. So
+ * every test here is an attack on that seam — donate a past record to a clan,
+ * carry a clan with one hero, buy a rank by recruiting bodies, raise a score by
+ * expelling the weak, hide a rejected record inside a roster, or impersonate
+ * another clan with a character nobody can see.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const C = require('../core/clan.js');
+const { appendFill, GENESIS } = require('../core/chain.js');
+const { windowOf } = require('../core/sprint.js');
+
+const H = 3600000;
+const T0 = Date.UTC(2026, 6, 6, 0); // a Monday, so week windows line up cleanly
+
+async function chainOf(fills) {
+  const links = [];
+  let prev = GENESIS;
+  for (const f of fills) {
+    const link = await appendFill(prev, f);
+    link.seq = links.length;
+    links.push(link);
+    prev = link.hash;
+  }
+  return links;
+}
+
+let seq = 0;
+function buy(mint, sol, ts) {
+  return { id: 'f' + (seq++), sessionId: 's', mint, side: 'buy',
+           qty: sol * 1000, priceNative: 0.001, solGross: sol, solNet: sol * 0.99, ts };
+}
+function sell(mint, qty, price, ts) {
+  const gross = qty * price;
+  return { id: 'f' + (seq++), sessionId: 's', mint, side: 'sell',
+           qty, priceNative: price, solGross: gross, solNet: gross * 0.99, ts };
+}
+
+/** `count` closed rounds, one per hour from `startTs`, each 1 ◎ in at `price` out. */
+async function closedRounds(tag, count, price, startTs) {
+  const fills = [];
+  for (let i = 0; i < count; i++) {
+    const mint = tag + i;
+    fills.push(buy(mint, 1, startTs + i * 2 * H));
+    fills.push(sell(mint, 1000, price, startTs + i * 2 * H + H));
+  }
+  return chainOf(fills);
+}
+
+/** A member row in the shape `standing()` consumes. */
+function member(handle, entry, extra) {
+  return Object.assign({ handle, userId: handle.length, status: 'verified',
+                         joinedAt: T0, entry }, extra || {});
+}
+
+/** A synthetic entry — enough for the aggregation tests, which are about which
+ * members count, not about re-deriving window math already covered elsewhere. */
+const entryOf = (score, rounds) => ({ score, rounds, roiPct: score, pnlSol: score / 10 });
+
+/* ================= rule 1: you bring your future, not your past ========== */
+
+test('a lifetime record joins a clan and contributes NOTHING from before the join', async () => {
+  seq = 0;
+  // Nine profitable rounds, all closed before the clan ever recruited them.
+  const chain = await closedRounds('OLD', 9, 0.002, T0);
+  const joinedAt = T0 + 40 * H; // after every one of those rounds closed
+
+  const entry = C.memberEntry(chain, 10, joinedAt, C.SEASON_WINDOW);
+  assert.equal(entry.rounds, 0, 'pre-join rounds must not count for the clan');
+  assert.equal(entry.pnlSol, 0);
+  assert.equal(entry.score, 0);
+
+  // The same chain, for a member who was there the whole time, is the control.
+  const founder = C.memberEntry(chain, 10, T0 - H, C.SEASON_WINDOW);
+  assert.equal(founder.rounds, 9, 'the control must see the same rounds');
+  assert.ok(founder.score > 0);
+});
+
+test('the same rounds cannot be donated to a second clan by switching', async () => {
+  seq = 100;
+  const chain = await closedRounds('SW', 6, 0.002, T0);
+  const lastClose = T0 + 5 * 2 * H + H;
+
+  const inFirstClan = C.memberEntry(chain, 10, T0 - H, C.SEASON_WINDOW);
+  const inSecondClan = C.memberEntry(chain, 10, lastClose + H, C.SEASON_WINDOW);
+
+  assert.equal(inFirstClan.rounds, 6);
+  assert.equal(inSecondClan.rounds, 0,
+    'a round belongs to the clan you were in when you closed it, and to no other');
+});
+
+test('a round straddling the join is not counted — it was opened elsewhere', async () => {
+  seq = 200;
+  const chain = await chainOf([
+    buy('STRADDLE', 1, T0),
+    sell('STRADDLE', 1000, 0.002, T0 + 10 * H),
+  ]);
+  const entry = C.memberEntry(chain, 10, T0 + 5 * H, C.SEASON_WINDOW);
+  assert.equal(entry.rounds, 0,
+    'the window rule is open AND close inside — half a round is not a contribution');
+});
+
+test('joining after a window has closed contributes null, not a zeroed row', async () => {
+  seq = 300;
+  const chain = await closedRounds('LATE', 5, 0.002, T0);
+  const lastWeek = windowOf(T0);
+  const entry = C.memberEntry(chain, 10, lastWeek.endTs + H, lastWeek);
+  assert.equal(entry, null,
+    'someone who was not in the clan that week did not "trade zero" that week');
+});
+
+test('a member joining mid-week counts only the rest of that week', async () => {
+  seq = 400;
+  const week = windowOf(T0 + 12 * H);
+  const joinedAt = week.startTs + 20 * H;
+  // Two rounds before they joined, three after — one chain, in order.
+  const chain = await chainOf([
+    buy('BEF0', 1, week.startTs + H), sell('BEF0', 1000, 0.002, week.startTs + 2 * H),
+    buy('BEF1', 1, week.startTs + 3 * H), sell('BEF1', 1000, 0.002, week.startTs + 4 * H),
+    buy('AFT0', 1, joinedAt + H), sell('AFT0', 1000, 0.002, joinedAt + 2 * H),
+    buy('AFT1', 1, joinedAt + 3 * H), sell('AFT1', 1000, 0.002, joinedAt + 4 * H),
+    buy('AFT2', 1, joinedAt + 5 * H), sell('AFT2', 1000, 0.002, joinedAt + 6 * H),
+  ]);
+  const entry = C.memberEntry(chain, 10, joinedAt, week);
+  assert.equal(entry.rounds, 3, 'only the rounds closed after the join, inside the week');
+  assert.equal(entry.startTs, joinedAt, 'the slice starts at the join, not at the week');
+  assert.equal(entry.endTs, week.endTs);
+});
+
+/* ============ rule 2: the mean of the top five, and five to rank ========= */
+
+test('one hero cannot carry a clan — five have to clear the bar', () => {
+  const hero = member('hero', entryOf(400, 30));
+  const bench = [1, 2, 3, 4].map((i) => member('bench' + i, entryOf(0, 0)));
+  const s = C.standing([hero, ...bench]);
+  assert.equal(s.ranked, false);
+  assert.equal(s.score, null, 'an unranked clan has no score — not a zero');
+  assert.equal(s.qualified, 1);
+  assert.equal(s.needed, 4);
+});
+
+test('recruiting bodies buys nothing: unqualified members never move the score', () => {
+  const five = [90, 80, 70, 60, 50].map((v, i) => member('t' + i, entryOf(v, 10)));
+  const alone = C.standing(five);
+  assert.equal(alone.ranked, true);
+  assert.equal(alone.score, 70);
+
+  const padded = C.standing([...five, ...Array.from({ length: 20 },
+    (_, i) => member('filler' + i, entryOf(5, 9)))]);
+  assert.equal(padded.score, 70, 'twenty more members must not change the number');
+  assert.equal(padded.roster, 25);
+  assert.equal(padded.qualified, 25, 'they are counted honestly, they just do not score');
+});
+
+test('summing would have crowned the padded clan — the mean is why it does not', () => {
+  const good = [90, 80, 70, 60, 50].map((v, i) => member('g' + i, entryOf(v, 10)));
+  const many = Array.from({ length: 40 }, (_, i) => member('m' + i, entryOf(20, 10)));
+  const sum = (list) => list.reduce((t, m) => t + m.entry.score, 0);
+  assert.ok(sum(many) > sum(good), 'a sum-of-scores board would rank the mob first');
+  assert.ok(C.standing(good).score > C.standing(many).score,
+    'the top-five mean ranks the traders first');
+});
+
+test('CUTTING A STRUGGLING MEMBER CAN NEVER RAISE THE SCORE', () => {
+  const strong = [90, 80, 70, 60, 50].map((v, i) => member('s' + i, entryOf(v, 10)));
+  const struggling = member('learning', entryOf(-40, 12));
+
+  const withThem = C.standing([...strong, struggling]);
+  const withoutThem = C.standing(strong);
+  assert.equal(withThem.score, withoutThem.score,
+    'expelling the weakest changes nothing — there is no incentive to do it');
+
+  // And when the roster is tight, expelling actively costs the clan its rank.
+  const tight = C.standing([...strong.slice(0, 4), struggling]);
+  assert.equal(tight.ranked, true);
+  assert.equal(C.standing(strong.slice(0, 4)).ranked, false,
+    'cutting a qualified member below the minimum unranks the clan');
+});
+
+test('averaging the whole roster would punish teaching; this does not', () => {
+  const core = [90, 80, 70, 60, 50].map((v, i) => member('c' + i, entryOf(v, 10)));
+  const beginners = Array.from({ length: 10 }, (_, i) => member('new' + i, entryOf(-30, 8)));
+  const mean = (list) => list.reduce((t, m) => t + m.entry.score, 0) / list.length;
+  assert.ok(mean([...core, ...beginners]) < mean(core),
+    'a whole-roster mean would charge the clan for every beginner it takes in');
+  assert.equal(C.standing([...core, ...beginners]).score, C.standing(core).score);
+});
+
+test('a rejected record cannot hide inside a roster', () => {
+  const four = [90, 80, 70, 60].map((v, i) => member('r' + i, entryOf(v, 10)));
+  const cheat = member('rejected_one', entryOf(999, 40), { status: 'rejected' });
+  const s = C.standing([...four, cheat]);
+  assert.equal(s.ranked, false, 'a rejected record is not a fifth member');
+  assert.ok(!s.counting.some((m) => m.handle === 'rejected_one'));
+});
+
+test('pending and partial records still count — verification tier is not a filter', () => {
+  const roster = [90, 80, 70, 60, 50].map((v, i) =>
+    member('p' + i, entryOf(v, 10), { status: i % 2 ? 'pending' : 'partial' }));
+  assert.equal(C.standing(roster).ranked, true);
+});
+
+test('the five that make the number are named, best first', () => {
+  const roster = [10, 90, 50, 70, 30, 60].map((v, i) => member('n' + i, entryOf(v, 10)));
+  const s = C.standing(roster);
+  assert.deepEqual(s.counting.map((m) => m.score), [90, 70, 60, 50, 30]);
+  assert.equal(s.score, (90 + 70 + 60 + 50 + 30) / 5);
+});
+
+test('the round floor is the season board floor, and a week is looser', () => {
+  const roster = [90, 80, 70, 60, 50].map((v, i) => member('f' + i, entryOf(v, 3)));
+  assert.equal(C.standing(roster).ranked, false, 'three rounds is a sample, not a season record');
+  assert.equal(C.standing(roster, { minRounds: C.MIN_WEEK_ROUNDS }).ranked, true);
+  assert.equal(C.MIN_SEASON_ROUNDS, 5);
+});
+
+test('volume figures describe activity and never feed the score', () => {
+  const roster = [
+    member('a', { score: 50, rounds: 10, roiPct: 50, pnlSol: 4 }),
+    member('b', { score: 40, rounds: 6, roiPct: 40, pnlSol: 3 }),
+    member('idle', { score: 0, rounds: 0, roiPct: 0, pnlSol: 0 }),
+  ];
+  const s = C.standing(roster);
+  assert.equal(s.rounds, 16, 'idle members contribute no rounds');
+  assert.equal(s.active, 2);
+  assert.equal(s.pnlSol, 7);
+  assert.equal(s.score, null, 'volume does not rank a clan that has not fielded five');
+});
+
+/* ========================= identity and impersonation ==================== */
+
+test('tags are short, uppercase, alphanumeric — and some are not for sale', () => {
+  assert.equal(C.tagProblem('rats'), null);
+  assert.equal(C.normalizeTag(' rats '), 'RATS');
+  assert.equal(C.tagProblem('TRENCH'), 'tag-shape', 'six characters is a name, not a tag');
+  assert.equal(C.tagProblem('T'), 'tag-shape');
+  assert.equal(C.tagProblem('TOOLONG'), 'tag-shape');
+  assert.equal(C.tagProblem('T-T'), 'tag-shape');
+  assert.equal(C.tagProblem('ADMIN'), 'tag-reserved');
+  assert.equal(C.tagProblem('staff'), 'tag-reserved');
+});
+
+test('a name cannot impersonate PaperTrench itself, however it is spelled', () => {
+  assert.equal(C.nameProblem('PaperTrench Official'), 'name-reserved');
+  assert.equal(C.nameProblem('paper trench'), 'name-reserved',
+    'the check runs on the uniqueness key, so spacing does not defeat it');
+  assert.equal(C.nameProblem('p a p e r t r e n c h'), 'name-reserved');
+  assert.equal(C.nameProblem('Trench Rats'), null, 'ordinary names are unaffected');
+});
+
+test('invisible characters cannot fork a name into a lookalike', () => {
+  // U+2009 THIN SPACE between the words: renders as a space, is not one.
+  // Written as an escape on purpose: a literal thin space here is invisible,
+  // and an editor 'tidying' it into a plain space would delete the test.
+  const sneaky = 'Trench Rats';
+  assert.notEqual(sneaky, 'Trench Rats', 'the fixture must really hold a non-ASCII space');
+  assert.equal(C.nameProblem(sneaky), null, 'it is normalised, not rejected');
+  assert.equal(C.normalizeName(sneaky), 'Trench Rats');
+  assert.equal(C.nameKey(sneaky), C.nameKey('Trench Rats'));
+  assert.equal(C.nameKey('trenchrats'), C.nameKey('Trench-Rats!'),
+    'the uniqueness key collapses cosmetic differences so both cannot exist');
+});
+
+test('non-ASCII names are refused rather than rendered next to verified numbers', () => {
+  assert.equal(C.nameProblem('Тrench Rats'), 'name-charset'); // Cyrillic Т
+  assert.equal(C.nameProblem('Trench 🐀'), 'name-charset');
+  assert.equal(C.nameProblem('..'), 'name-too-short');
+  assert.equal(C.nameProblem('a'.repeat(25)), 'name-too-long');
+});
+
+test('mottos are bounded and plain text', () => {
+  assert.equal(C.mottoProblem(''), null);
+  assert.equal(C.mottoProblem('We take the loss and move on.'), null);
+  assert.equal(C.mottoProblem('<script>alert(1)</script>'), 'motto-charset');
+  assert.equal(C.mottoProblem('x'.repeat(C.MOTTO_MAX + 1)), 'motto-too-long');
+});
+
+/* ============================== membership =============================== */
+
+test('you can only be in one clan, and creating one is joining one', () => {
+  assert.equal(C.createProblem({ tag: 'RATS', name: 'Trench Rats' }), null);
+  assert.equal(C.createProblem({ tag: 'RATS', name: 'Trench Rats', alreadyInClan: true }),
+    'already-in-a-clan');
+  assert.equal(C.joinProblem({ open: true }, 3, { alreadyInClan: true }), 'already-in-a-clan');
+});
+
+test('an invite-only clan needs its code, and an empty code opens nothing', () => {
+  const clan = { open: false, joinCode: 'TRENCH-ABC123', founderId: 1 };
+  assert.equal(C.joinProblem(clan, 3, { code: 'trench-abc123' }), null, 'codes are case-blind');
+  assert.equal(C.joinProblem(clan, 3, { code: 'TRENCH-WRONG' }), 'bad-code');
+  assert.equal(C.joinProblem(clan, 3, {}), 'bad-code');
+  assert.equal(C.joinProblem({ open: false, joinCode: '' }, 3, { code: '' }), 'bad-code',
+    'a clan with no code must not be joinable by sending no code');
+  assert.equal(C.joinProblem({ open: true, joinCode: '' }, 3, {}), null);
+});
+
+test('a full clan is full, and a missing one says so', () => {
+  assert.equal(C.joinProblem({ open: true }, C.MAX_MEMBERS, {}), 'clan-full');
+  assert.equal(C.joinProblem(null, 0, {}), 'not-found');
+});
+
+test('only the founder kicks, and never themselves', () => {
+  const clan = { founderId: 7 };
+  assert.equal(C.kickProblem(clan, 7, 9), null);
+  assert.equal(C.kickProblem(clan, 9, 7), 'not-founder');
+  assert.equal(C.kickProblem(clan, 7, 7), 'cannot-kick-founder');
+});
+
+test('a departing founder hands the clan to its longest-standing member', () => {
+  const members = [
+    { userId: 1, joinedAt: T0 },
+    { userId: 4, joinedAt: T0 + 5 * H },
+    { userId: 3, joinedAt: T0 + 2 * H },
+  ];
+  assert.equal(C.successor(members, 1).userId, 3);
+  assert.equal(C.successor([{ userId: 1, joinedAt: T0 }], 1), null,
+    'the last member out disbands the clan rather than leaving an ownerless shell');
+});
+
+test('successor ties break deterministically, so two servers agree', () => {
+  const members = [{ userId: 9, joinedAt: T0 }, { userId: 2, joinedAt: T0 }, { userId: 5, joinedAt: T0 }];
+  assert.equal(C.successor(members, 99).userId, 2);
+});
+
+/* ===================== end-to-end over real chains ======================= */
+
+test('a real five-member clan ranks on the mean of five real window entries', async () => {
+  seq = 1000;
+  const roster = [];
+  const prices = [0.0022, 0.0020, 0.0018, 0.0016, 0.0014];
+  for (let i = 0; i < prices.length; i++) {
+    seq = 2000 + i * 100;
+    const chain = await closedRounds('M' + i, 6, prices[i], T0 + H);
+    roster.push(member('trader' + i,
+      C.memberEntry(chain, 10, T0, C.SEASON_WINDOW)));
+  }
+  const s = C.standing(roster);
+  assert.equal(s.ranked, true);
+  assert.equal(s.counting.length, 5);
+  assert.equal(s.counting[0].handle, 'trader0', 'the best return leads the five');
+  const mean = s.counting.reduce((t, m) => t + m.score, 0) / 5;
+  assert.ok(Math.abs(s.score - mean) < 1e-12);
+  assert.equal(s.rounds, 30);
+});
+
+test('a sixth member who joined yesterday cannot lift yesterday\'s standing', async () => {
+  seq = 5000;
+  const roster = [];
+  for (let i = 0; i < 5; i++) {
+    seq = 6000 + i * 100;
+    const chain = await closedRounds('B' + i, 6, 0.0015, T0 + H);
+    roster.push(member('base' + i, C.memberEntry(chain, 10, T0, C.SEASON_WINDOW)));
+  }
+  const before = C.standing(roster).score;
+
+  seq = 7000;
+  const star = await closedRounds('STAR', 20, 0.004, T0 + H); // a monster record
+  const lastClose = T0 + H + 19 * 2 * H + H;
+  roster.push(member('mercenary', C.memberEntry(star, 10, lastClose + H, C.SEASON_WINDOW)));
+
+  assert.equal(C.standing(roster).score, before,
+    'their record came with them; their past did not');
+});
