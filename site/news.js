@@ -28,6 +28,20 @@
 
   const RELEASES = [
     {
+      v: '3.1.0', date: 'Aug 6, 2026', iso: '2026-08-06',
+      tags: ['fix', 'feature'],
+      title: 'The users-found-it batch — every item traces to a named field report',
+      blurb: 'Two of these guard the honesty of the numbers themselves: a fill can no longer execute at a resurrected dead price, and rapid buys can no longer vanish and come back wrong.',
+      points: [
+        '<b>A fill can no longer execute at a resurrected dead price.</b> Field report with screenshots: a coin crashed ~30K → ~8K, the DCA buy filled honestly at the crashed price, and the sell a minute later filled at the pre-crash level — a loss shown as +167%. Any fill price that contradicts what your own screen just accepted as market truth now needs a second, independent source to vouch for it; a refusal names both numbers. A real 4x pump is confirmed by any fresh source and fills normally.',
+        '<b>Rapid buys can no longer vanish and come back wrong.</b> Two parts of the extension writing the wallet at the same moment could silently overwrite each other — positions disappeared, then returned with false P&L. Every wallet write now goes through one strictly-ordered commit with conflict detection; a write that loses the race adopts the winner and re-applies itself.',
+        '<b>Brand-new coins are tradeable the moment you land on them — whatever launchpad they came from.</b> Every pending address is probed on-chain once: a decodable pool becomes a live price feed with an immediate first quote, and a bare mint gives up its real supply so the site’s own market-cap feed can price a non-pump launch honestly. The probe retries while the coin stays unindexed.',
+        '<b>Signing in on the site links the extension by itself</b> — the dashboard’s chip goes green on its own, and one-click Sync now works for unpacked installs too (still behind the off-by-default Site-sync toggle). Chain-conflict rejections on the leaderboard carry a “delete my server record and start over” button.',
+        '<b>The sell buttons stopped moving.</b> The P&L number above them wraps and un-wraps as it changes length, which shoved the quick-sell row around under your cursor. The card now reserves that space permanently.',
+        '<b>X sign-in on papertrench.com sticks in every browser</b> — the session no longer depends on a cross-domain cookie that Safari, Firefox and private-mode Chromium drop. (Deployed site-side the same day; noted here because the extension release completes the loop.)',
+      ],
+    },
+    {
       v: '3.0.0', date: 'Aug 6, 2026', iso: '2026-08-06',
       tags: ['feature', 'fix'],
       major: true,
