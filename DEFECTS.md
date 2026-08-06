@@ -387,6 +387,16 @@ check live, not guess: quote-validation band acceptance under fast moves,
 feed latency between site stream and chart paint on fomo/GMGN, mcap-mode
 bootstrap on non-pump tokens. This entry stays OPEN until reproduced and
 fixed with a lock.
+Field notes (in-app browser sweep, 2026-08-05, no extension loaded in that
+pane): fomo adapter behavior verified against live reality — a
+/tokens/robinhood/0x… page correctly refuses detect() (non-solana slug,
+O-11), and the live title "108.8M MC | CASHCAT | fomo" matches the shipped
+title-feed pattern; fomo's TradingView lives in a same-origin BLOB iframe
+with no window global (the bridge's iframe-discovery path is the right
+one). GMGN token page verified: blob-iframe TV + #global-tv-overlay fiber
+anchor present, title "VINE $8.31M | GMGN.AI | …". Padre could not be
+probed (pane not signed in). The fill-vs-chart diff still requires the
+extension running in a Claude-visible browser.
 
 **F-35 · S1 · The average line landed a supply-factor off whenever the SAME token streamed in two chart units at once — the token gate can't see units**
 `price-bridge.js` lastBarClose (single global), lineLevelFor mcap branches,
