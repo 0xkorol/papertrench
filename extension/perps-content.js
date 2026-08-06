@@ -698,13 +698,20 @@
     els.openBtn.textContent = 'OPEN ' + inputs.side.toUpperCase();
     els.openBtn.classList.toggle('short', inputs.side === 'short');
 
+    // The slider may only offer leverage the venue actually accepts. Jupiter
+    // refuses below 1.1x, so a slider that bottoms out at 1x hands the user
+    // a setting that can only ever be rejected — the ticket looked broken
+    // when it was merely being asked for something impossible.
+    const venueMin = adapter.venue === 'jupiter' ? 2 : 1;
+    let venueMax = 250;
     if (adapter.venue === 'hyperliquid') {
       const a = hlAssets && hlAssets[adapter.market];
-      const max = a ? a.maxLeverage : 20;
-      if (els.lev.max !== String(max)) { els.lev.max = String(max); if (inputs.leverage > max) { inputs.leverage = max; els.lev.value = String(max); } }
-    } else if (els.lev.max !== '250') {
-      els.lev.max = '250';
+      venueMax = a ? a.maxLeverage : 20;
     }
+    if (els.lev.min !== String(venueMin)) els.lev.min = String(venueMin);
+    if (els.lev.max !== String(venueMax)) els.lev.max = String(venueMax);
+    if (inputs.leverage < venueMin) { inputs.leverage = venueMin; els.lev.value = String(venueMin); }
+    if (inputs.leverage > venueMax) { inputs.leverage = venueMax; els.lev.value = String(venueMax); }
 
     // The TA strip: regime + setups when we have real bars, warm-up truth
     // when we do not, nothing at all on venues without a candle source.

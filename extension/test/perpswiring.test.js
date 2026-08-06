@@ -175,6 +175,18 @@ test('a missing venue number is chased every second, not every thirty', () => {
     'and the leverage tiers likewise');
 });
 
+test('the leverage slider only offers leverage the venue accepts', () => {
+  // Jupiter refuses below 1.1x. A slider that bottoms out at 1x hands the
+  // user a setting that can only ever be rejected, so the ticket reads as
+  // broken when it is merely being asked for something impossible.
+  const render = contentSrc.slice(contentSrc.indexOf('function render()'));
+  assert.match(render, /const venueMin = adapter\.venue === 'jupiter' \? 2 : 1;/,
+    'Jupiter must not offer a sub-minimum setting');
+  assert.match(render, /if \(inputs\.leverage < venueMin\)/, 'and an out-of-range value is clamped up');
+  assert.match(render, /if \(inputs\.leverage > venueMax\)/, 'as well as down');
+  assert.match(render, /els\.lev\.min !== String\(venueMin\)/, 'the control itself carries the floor');
+});
+
 test('a known borrow rate survives an unlucky read', () => {
   // The venue re-renders its header; a single blank read must not close a
   // ticket that was open a moment ago.
