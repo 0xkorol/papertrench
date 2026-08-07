@@ -28,6 +28,19 @@
 
   const RELEASES = [
     {
+      v: '3.2.0', date: 'Aug 7, 2026', iso: '2026-08-07',
+      tags: ['feature', 'fix', 'speed'],
+      title: 'A twelfth terminal, fill receipts, and the quarter-second first quote',
+      blurb: 'lute.gg joins at full parity, every fill now records where its price came from, and a brand-new coin prices in ~200ms — measured live on real launches, not asserted.',
+      points: [
+        '<b>lute.gg is a supported terminal now, at full parity.</b> Overlay, live fills on the chart, warm links, X-Ray. Lute is a social terminal, so the adapter ships with the pollution guards that keep other people’s entry prices and PnL — every price-shaped number in a holder row — treated as history, never as the market.',
+        '<b>Fills carry receipts.</b> Every fill records where its price came from and how old each source was. They already caught a real one: a sell that booked ~20% under the chart (a win rendered as -9.6%) — value-lag wearing a fresh timestamp. The next “my fill was wrong” report comes with evidence attached.',
+        '<b>The first quote on a brand-new coin lands in a quarter second.</b> The bottleneck was one silent RPC endpoint eating its full 4-second timeout before failover. The connection pool now hedges — a slow endpoint gets a racing competitor after half a second — and the sniping path stopped re-fetching state it already held. Measured live: 155–245ms on coins 30–74 seconds old, agreeing with an independent source to 0.06%.',
+        '<b>If your region’s price connection is slow, PaperTrench tells you — with the fix.</b> Public RPC endpoints throttle by region. When the pool measures itself slow on real evidence, it says so once, with the number and a two-minute guide to a free personal endpoint. Nothing leaves your machine; found and first solved by a community member, credited in the guide.',
+        '<b>The OFF switch turns everything off — including paper perps</b> (it used to leave the perps ticket mounted), <b>the speed feature never opens a tab you didn’t click for</b> (pre-created viewer tabs read as a malfunction twice — now every warm viewer is click-created), <b>the stream overlay bar stopped overlapping its own labels</b> in narrow OBS windows, and <b>the Fees &amp; costs dropdown is readable again</b>.',
+      ],
+    },
+    {
       v: '3.1.0', date: 'Aug 6, 2026', iso: '2026-08-06',
       tags: ['fix', 'feature'],
       title: 'The users-found-it batch — every item traces to a named field report',
