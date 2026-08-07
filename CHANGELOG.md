@@ -3,7 +3,24 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
-## Unreleased
+## v3.2.0 — 2026-08-07
+
+Every item traces to a named field report from the last two days — the
+same-week batch continues, and it adds a twelfth supported terminal.
+
+- **lute.gg is a supported terminal now, at full parity.** Overlay, live
+  fills on the chart, warm links, X-Ray — the whole kit. Lute is a social
+  terminal, so the adapter ships with the same pollution guards the fomo
+  arc established: holder rows carry other people's entry prices and PnL,
+  and every one of those price-shaped numbers is treated as someone's
+  history, never as the market.
+
+- **Fills carry receipts now — and they caught a real one.** A sell on
+  lute booked ~20% under the chart (a win rendered as -9.6%): value-lag
+  wearing a fresh timestamp, too small for the fill witness's ratio to
+  challenge. Every fill now records where its price came from and how old
+  each source was, so the next "my fill was wrong" report comes with the
+  evidence attached instead of a shrug.
 
 - **If your region's public price connection is slow, PaperTrench now tells
   you — with the fix.** A community member in the Balkans found every
