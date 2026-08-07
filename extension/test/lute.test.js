@@ -14,6 +14,27 @@
  * URL-agnostic (the fomo fixtures ship response.url = '' for the same
  * reason), so these locks pin SHAPE behavior; route truth is a live-probe
  * item on the QA matrix.
+ *
+ * Live re-probe (in-app browser, LOGGED IN, 2026-08-06):
+ *  - The loaded token-page title is "BONK ↑ $2.46B • Lute" — symbol plus a
+ *    $-keyed MARKET CAP. The default gmgn TITLE_PATTERNS fallback extracts
+ *    the cap correctly and the on-chain anchor band validates it; no lute
+ *    entry needed. (The pre-load title "Lute • Trade" carries no figure.)
+ *  - The chart is the SELF-HOSTED TradingView standalone library
+ *    (/charting_library/ bundles). Discovery anchors confirmed live:
+ *    iframe id tradingview_*, options bag in window[frameId],
+ *    contentWindow.tradingViewApi. The datafeed HAS getMarks (with
+ *    markSubscriptions/marksFetched state) — friend-trade marks ARE the
+ *    product — so lute is native-marks class, NOT fomo's shapes-only
+ *    class. A chart-truth fake for that surface is future work; this
+ *    suite deliberately stays chartless until those shapes are captured.
+ *  - Named routes live-verified: compass, momentum, portfolio, discover,
+ *    predict (missed by the landing corpus), plus bare /trade. Token
+ *    pages are LOGIN-GATED: logged-out /trade/<mint> bounces to login.
+ *  - The Top Traders UI carries per-trader avg buy/sell MCAPs and PnL
+ *    that sit INSIDE the 3x accept band of the live cap — the exact
+ *    reason the toptraders subtree taint exists. Wire-format key
+ *    spellings ride a WebSocket and remain landing-recon facts.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');

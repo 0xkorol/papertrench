@@ -123,6 +123,8 @@ const MATRIX = [
   ['https://lute.gg/trade/momentum', 'lute', null, null, 'named route momentum must not mount (O-10)'],
   ['https://lute.gg/trade/portfolio', 'lute', null, null, 'named route portfolio must not mount (O-10)'],
   ['https://lute.gg/trade/discover', 'lute', null, null, 'named route discover must not mount (O-10)'],
+  ['https://lute.gg/trade/predict', 'lute', null, null, 'named route predict must not mount (O-10; live-verified 2026-08-06, missed by the landing corpus)'],
+  ['https://lute.gg/trade', 'lute', null, null, 'bare /trade is the terminal home, not a token page'],
   ['https://lute.gg/', 'lute', null, null, 'landing page is not a token page'],
   ['https://lute.gg/login', 'lute', null, null, 'login page must not mount (O-10)'],
   ['https://lute.gg/signup', 'lute', null, null, 'signup page must not mount (O-10)'],
