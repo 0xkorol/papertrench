@@ -539,6 +539,29 @@
   const relCount = document.getElementById('relCount');
   if (relCount) relCount.textContent = String(RELEASES.length);
 
+  // "Just shipped": the hub's top strip mirrors the newest archive entries,
+  // linking into their timeline anchors. Filled from RELEASES itself — a
+  // hand-maintained copy up top is how v3.1.0–v3.2.1 shipped while the page
+  // still led with v3.0.0 (maintainer report: "i dont see it"). The strip
+  // reads the same array the timeline does, so it can never go stale.
+  const latestGrid = document.getElementById('latestGrid');
+  if (latestGrid) {
+    for (const r of RELEASES.slice(0, 3)) {
+      const a = document.createElement('a');
+      a.className = 'latest-card reveal';
+      a.href = '#' + (r.site ? 'site-' + r.iso : 'v' + r.v.replace(/\./g, '-'));
+      a.innerHTML = `
+        <div class="feat-meta">
+          <span class="ver-chip${r.major ? ' major' : ''}">${r.site ? 'Website' : 'v' + r.v}</span>
+          <time class="feat-date" datetime="${r.iso}">${r.date}</time>
+        </div>
+        <h3>${r.title}</h3>
+        <p>${r.blurb || ''}</p>
+        <span class="go">Read the notes ↓</span>`;
+      latestGrid.appendChild(a);
+    }
+  }
+
   /* ---------- filters ---------- */
   let active = 'all';
 

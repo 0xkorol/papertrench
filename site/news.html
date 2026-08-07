@@ -17,6 +17,13 @@
   .news-stats { display: flex; gap: 40px; flex-wrap: wrap; margin-top: 40px; }
   .news-stats .num { font-family: var(--mono); font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
   .news-stats .lbl { font-size: 12.5px; color: var(--dim); font-weight: 600; margin-top: 2px; }
+  .latest-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 28px; }
+  @media (max-width: 900px) { .latest-grid { grid-template-columns: 1fr; } }
+  .latest-card { display: block; padding: 18px 20px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); text-decoration: none; color: inherit; transition: border-color .16s; }
+  .latest-card:hover { border-color: rgba(255,157,69,0.45); }
+  .latest-card h3 { margin: 10px 0 8px; font-size: 16.5px; line-height: 1.35; }
+  .latest-card p { margin: 0; font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+  .latest-card .go { display: inline-block; margin-top: 10px; font-size: 12.5px; font-weight: 700; color: var(--orange2); }
 </style>
 </head>
 <body>
@@ -65,6 +72,16 @@
     </div>
   </div>
 </header>
+
+<!-- ============ JUST SHIPPED (auto-filled from the archive) ============ -->
+<section id="just-shipped" style="padding:48px 0 0">
+  <div class="wrap">
+    <span class="sec-kicker k-green reveal">Hot off the build</span>
+    <h2 class="reveal d1">Just shipped</h2>
+    <p class="sec-sub reveal d2">The newest releases, pulled from the archive below by the page itself — this strip can never go stale.</p>
+    <div class="latest-grid" id="latestGrid"></div>
+  </div>
+</section>
 
 <!-- ============ FEATURED ARTICLES ============ -->
 <section id="features" style="padding:56px 0 0">
