@@ -7,6 +7,29 @@ comes first.** Every hostname, route, and payload shape is captured from the
 live, logged-in site on a dated day. Where the capture is silent, the code
 refuses — by name — instead of guessing.
 
+## Step 0: run the recon (`tools/recon`, see docs/RECON.md)
+
+Before touching any file below, capture the live site and distill a **dossier** —
+a greppable, evidence-cited spec whose sections map 1:1 onto the touch list. It
+turns "sample the live page and hope" into "read the dossier and cite it".
+
+```
+node tools/recon/ptrecon.js capture --site <id> --url https://<site> --headed
+#   …browse the script it prints (token page, holders tab, a refuse route,
+#     a second chain), then close the window…
+node tools/recon/ptrecon.js distill --site <id>
+#   → recon-data/sites/<id>/dossier/DOSSIER.md
+```
+
+Read `DOSSIER.md` whole. Its **§11 OPEN QUESTIONS** is generated, not curated:
+each item is a place the capture was thin or ambiguous (no WS seen, a route
+with one example, a price node with no market origin, a capability seen
+presence-only). **Answer every one before shipping** — by capture, by an
+explicit refusal in code, or by an open QA-MATRIX note — never by assumption.
+If §0 says **CAPTURE VOID** (a bot challenge, not the app), the dossier is
+worthless; re-run headed. The dossier feeds the locks; it does not replace the
+mutation-proof discipline below, and the live pass still governs.
+
 ## The touch list (there is no central registry)
 
 | Where | What |

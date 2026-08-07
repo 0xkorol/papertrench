@@ -12,3 +12,8 @@ dist/
 
 # Internal working notes, never published
 HANDOFF.md
+
+# pt-recon raw captures + dossiers: contain cookies, auth headers, balances,
+# wallet ids. NEVER commit. Sanitized fixtures are copied out deliberately.
+# (*.local above already covers recon-data/DENYLIST.local.)
+recon-data/
