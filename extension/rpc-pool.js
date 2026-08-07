@@ -127,6 +127,43 @@
   let lastBenchedProbeAt = 0;
   const BENCHED_PROBE_MS = 5000;
 
+  // Hedged failover: a HANGING endpoint is worse than a failing one — a hard
+  // failure steps to the next endpoint immediately, but a hang used to eat
+  // the full PROBE_TIMEOUT before failover. Measured live on the sniping
+  // path: an identical getMultipleAccounts cost 422ms, then 4159ms, then
+  // 75ms — the middle call was one silent endpoint consuming its whole 4s.
+  // Now an attempt that has not answered within HEDGE_MS gets a parallel
+  // competitor on the next-ranked endpoint; the first success wins and
+  // aborts the losers. Hedges only fire when the primary is already slow,
+  // so the extra traffic exists exactly when the pool is misbehaving.
+  const HEDGE_MS = 500;
+
+  function attemptEndpoint(endpoint, method, params, controllers) {
+    const started = Date.now();
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    if (controller && controllers) controllers.push(controller);
+    const timer = controller ? setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS) : null;
+    return fetch(endpoint.http, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: controller ? controller.signal : undefined,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error('http ' + response.status);
+      const json = await response.json();
+      if (json.error) throw new Error(json.error.message || 'rpc error');
+      reportSuccess(endpoint.id, Date.now() - started);
+      return json.result;
+    }).catch((error) => {
+      reportFailure(endpoint.id);
+      throw error;
+    }).finally(() => {
+      // The abort timer must clear on EVERY path — a rejected fetch used
+      // to leak it until it fired (DEFECT F-27).
+      if (timer) clearTimeout(timer);
+    });
+  }
+
   async function call(method, params, opts) {
     let endpoints = ranked(opts);
     const now = Date.now();
@@ -137,36 +174,48 @@
       lastBenchedProbeAt = now;
       endpoints = endpoints.slice(0, 1); // the single half-open probe
     }
-    let lastError = null;
+    if (!endpoints.length) throw new Error('no rpc endpoint available');
 
-    for (const endpoint of endpoints) {
-      const started = Date.now();
-      const controller = typeof AbortController === 'function' ? new AbortController() : null;
-      const timer = controller ? setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS) : null;
-      try {
-        const response = await fetch(endpoint.http, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-          signal: controller ? controller.signal : undefined,
-        });
+    const controllers = [];
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      let pending = 0;
+      let index = 0;
+      let hedgeTimer = null;
+      let lastError = null;
 
-        if (!response.ok) throw new Error('http ' + response.status);
-        const json = await response.json();
-        if (json.error) throw new Error(json.error.message || 'rpc error');
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; }
+        // Losers stop spending the endpoint's rate limit on an answer
+        // nobody will read.
+        for (const c of controllers) { try { c.abort(); } catch (_) {} }
+        fn(value);
+      };
 
-        reportSuccess(endpoint.id, Date.now() - started);
-        return json.result;
-      } catch (error) {
-        reportFailure(endpoint.id);
-        lastError = error;
-      } finally {
-        // The abort timer must clear on EVERY path — a rejected fetch used
-        // to leak it until it fired (DEFECT F-27).
-        if (timer) clearTimeout(timer);
-      }
-    }
-    throw lastError || new Error('no rpc endpoint available');
+      const launchNext = () => {
+        hedgeTimer = null;
+        if (settled || index >= endpoints.length) return;
+        const endpoint = endpoints[index++];
+        pending += 1;
+        attemptEndpoint(endpoint, method, params, controllers).then(
+          (result) => { pending -= 1; finish(resolve, result); },
+          (error) => {
+            pending -= 1;
+            lastError = error;
+            if (settled) return;
+            if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; }
+            if (index < endpoints.length) launchNext(); // hard failure: step on immediately
+            else if (pending === 0) finish(reject, lastError || new Error('no rpc endpoint available'));
+          }
+        );
+        // A slow (not failed) attempt earns a competitor.
+        if (!settled && index < endpoints.length) hedgeTimer = setTimeout(launchNext, HEDGE_MS);
+      };
+
+      launchNext();
+    });
   }
 
   /** WebSocket URLs in preference order, for the streaming feed to walk. */

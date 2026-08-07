@@ -127,8 +127,12 @@
       return { kind, watch: poolAddress, pool, decimals, mint };
     }
     if (kind === 'pump-curve') {
-      const decimals = await mintDecimals([mint]);
-      return { kind, watch: poolAddress, decimals, mint };
+      // Every pump.fun mint has exactly 6 decimals — a rule of the program,
+      // verified live (the constant already prices curves in onchain.js).
+      // Fetching a protocol constant over RPC cost the sniping path a full
+      // round trip on the keyless public pool (measured live: ~700ms of a
+      // 3.7s first quote on a 48-second-old coin).
+      return { kind, watch: poolAddress, decimals: { [mint]: O.PUMP_TOKEN_DECIMALS }, mint };
     }
     // Constant product: the price lives in the two vaults, so those are what
     // must be watched, not the pool header. The decimals map is required to
@@ -584,26 +588,46 @@
   /** Watch + prime a pool of any decodable kind. `knownMint` is the page's
    * claim when it has one; it is trusted only where the pool corroborates
    * it. `preread` avoids a second fetch when the caller already holds the
-   * pool account. */
-  async function prewatchPool(poolAddress, knownMint, preread) {
-    const account = preread || (await getAccounts([poolAddress]))[0];
+   * pool account (with its read slot, when the caller kept it).
+   *
+   * Latency is the point of this function — measured live on a 48-second
+   * pump launch, the original sequence cost ~3.7s over the keyless public
+   * pool: five round trips, two of them re-reading state already in hand
+   * and one fetching a protocol constant. Now: single-account pools prime
+   * from the FIRST read's bytes+slot (no re-read), and the reserve-account
+   * scan runs in the background when the page already named the mint —
+   * the rug guard reads reserveAccounts() lazily and tolerates it landing
+   * a beat later. */
+  async function prewatchPool(poolAddress, knownMint, preread, prereadSlot) {
+    let account = preread || null;
+    let readSlot = Number(prereadSlot) || 0;
+    if (!account) {
+      const { slot, accounts } = await getAccountsWithSlot([poolAddress]);
+      account = accounts[0];
+      readSlot = slot;
+    }
     if (!account) return null;
     const kind = O.poolKindForOwner(account.owner);
     if (!kind) return null;
     const bytes = O.bytesFromBase64(account.data[0]);
 
     let realMint = knownMint || null;
-    let reserveAccount = null;
+    let reserveLater = null;
 
     if (kind === 'pump-curve') {
       const curve = O.decodePumpCurve(bytes);
       if (!curve || curve.complete) return null; // migrated: the resolver path owns it
-      // The reserve token account is wanted either way (it identifies the
-      // mint when only the pool was known, and the rug guard must exclude it
-      // from holder concentration), so this read is unconditional.
-      const found = await curveMint(poolAddress);
-      reserveAccount = found ? found.reserveAccount : null;
-      realMint = realMint || (found && found.mint) || null;
+      // The reserve token account identifies the mint when only the pool was
+      // known, and the rug guard must exclude it from holder concentration.
+      // When the page already named the mint, the scan need not block the
+      // first quote.
+      if (realMint) {
+        reserveLater = curveMint(poolAddress).catch(() => null);
+      } else {
+        const found = await curveMint(poolAddress);
+        reserveLater = Promise.resolve(found);
+        realMint = (found && found.mint) || null;
+      }
     } else if (kind === 'whirlpool' || kind === 'clmm') {
       const decoded = O.decodeWhirlpool(bytes);
       if (!decoded) return null;
@@ -617,8 +641,33 @@
     const live = await watch(realMint, poolAddress);
     if (!live) return null;
     const entry = watched.get(realMint);
-    if (entry && entry.desc && reserveAccount) entry.desc.reserveAccount = reserveAccount;
-    const quote = await primeEntry(realMint);
+    if (entry && reserveLater) {
+      reserveLater.then((found) => {
+        if (found && found.reserveAccount && entry.desc) entry.desc.reserveAccount = found.reserveAccount;
+      }).catch(() => {});
+    }
+
+    // Prime from the read this function already made. Single-account pools
+    // (curve, whirlpool/CLMM) carry their whole price in the bytes in hand;
+    // only vault pairs still need primeEntry's own read. Same slot guards as
+    // the socket path — a frame that raced us is never overwritten by older
+    // state.
+    let quote = null;
+    if (entry && kind !== 'cp-vaults' && readSlot > 0 && O.isNewerObservation(readSlot, entry.slot)) {
+      entry.raw = bytes;
+      const priceNative = priceFromEntry(entry);
+      if (priceNative > 0) {
+        entry.slot = readSlot;
+        entry.priceNative = priceNative;
+        entry.observedAt = Date.now();
+        quote = {
+          mint: realMint, priceNative, slot: readSlot,
+          source: 'onchain', poolKind: kind, observedAt: entry.observedAt,
+        };
+        emit(quote);
+      }
+    }
+    if (!quote) quote = await primeEntry(realMint);
     return {
       mint: realMint,
       pool: poolAddress,
@@ -650,13 +699,14 @@
 
       const address = pool || mint;
       if (!address) return null;
-      const [account] = await getAccounts([address]);
+      const { slot, accounts } = await getAccountsWithSlot([address]);
+      const account = accounts[0];
       if (!account) return null;
 
       // The chain's classification, not the page's kind label (F-45).
       if (O.poolKindForOwner(account.owner)) {
         const hint = typeof mint === 'string' && mint !== address ? mint : null;
-        return await prewatchPool(address, hint, account);
+        return await prewatchPool(address, hint, account, slot);
       }
       return mintFactsFromAccount(account, address);
     } catch (error) {

@@ -5,6 +5,18 @@ details live in the commit messages.
 
 ## Unreleased
 
+- **The first quote on a brand-new coin now lands in a quarter second.**
+  Field report: "waiting for first quote… is it not for fast scalping?"
+  Measured live against real launches: the on-chain first quote took
+  ~3.7-4.3 seconds, almost all of it one silent RPC endpoint eating its
+  full 4-second timeout before failover. The RPC pool now hedges — an
+  endpoint that hasn't answered in half a second gets a racing competitor,
+  first answer wins — and the sniping path stopped re-fetching state it
+  already held (including a protocol constant it fetched over the
+  network). Re-measured live: 155-245ms to a chain-read first quote on
+  coins 30-74 seconds old, agreeing with the aggregator price to 0.06%.
+  Slow endpoints now cost half a second everywhere, not four.
+
 - **The OFF switch now turns everything off — including paper perps.** The
   perps ticket shipped after the master switch existed and never learned
   it, so "Turn PaperTrench on" could be showing while the ticket sat on

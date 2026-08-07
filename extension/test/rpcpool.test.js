@@ -225,9 +225,12 @@ test("F-09: a fully benched pool fails fast instead of hammering dead endpoints"
 });
 
 test("F-27: the abort timer clears on every path, including a rejected fetch", () => {
+  // The fetch + timer moved from call() into attemptEndpoint() when hedged
+  // failover landed; the contract is unchanged and anchors there now.
   const src = fs.readFileSync(path.join(ROOT, "rpc-pool.js"), "utf8");
-  const fnStart = src.indexOf("async function call(");
+  const fnStart = src.indexOf("function attemptEndpoint(");
+  assert.ok(fnStart !== -1, "the per-endpoint attempt must exist");
   const block = src.slice(fnStart, src.indexOf("\n  }", fnStart) + 4);
-  assert.match(block, /finally \{[\s\S]*?clearTimeout\(timer\)/,
+  assert.match(block, /\.finally\(\(\) => \{[\s\S]*?clearTimeout\(timer\)/,
     "clearTimeout must live in a finally so a rejected fetch cannot leak the abort timer");
 });

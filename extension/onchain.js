@@ -329,6 +329,7 @@
 
   const api = {
     TOKEN_PROGRAM, TOKEN_2022_PROGRAM, WSOL_MINT, POOL_KINDS, PUMP_PROGRAM,
+    PUMP_TOKEN_DECIMALS,
     bytesFromBase64, readU64, readU128, readPubkey, b58decode,
     decodeMint, decodeTokenAccount, decodeWhirlpool, decodePumpCurve,
     priceFromSqrtPrice, priceFromPumpCurve, priceFromVaults,
