@@ -42,11 +42,53 @@
   const COOLDOWN_MS = 60_000;
   const PROBE_TIMEOUT_MS = 4000;
 
-  const health = new Map(); // id -> { failures, benchedUntil, latencyMs }
+  const health = new Map(); // id -> { failures, benchedUntil, latencyMs, samples }
   let userEndpoint = null;
 
+  /* Health persists across service-worker restarts. MV3 kills the worker
+   * constantly, and an in-memory map made every wake re-learn which
+   * endpoint is fast — a user whose region throttles the pool re-paid the
+   * discovery cost dozens of times a session. Geography changes rarely;
+   * the map is tiny; storage.local it is. Node (the test runner) has no
+   * chrome — persistence degrades to a no-op there, never a throw. */
+  const HEALTH_KEY = 'pt_rpc_health';
+  let healthSaveTimer = null;
+  function persistHealthSoon() {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+      if (healthSaveTimer) return;
+      healthSaveTimer = setTimeout(() => {
+        healthSaveTimer = null;
+        const out = {};
+        for (const [id, s] of health) {
+          out[id] = { latencyMs: s.latencyMs, failures: s.failures, samples: s.samples || 0 };
+        }
+        try { chrome.storage.local.set({ [HEALTH_KEY]: out }); } catch (_) {}
+      }, 500);
+    } catch (_) {}
+  }
+  (function restoreHealth() {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+      chrome.storage.local.get([HEALTH_KEY], (value) => {
+        if (chrome.runtime && chrome.runtime.lastError) return;
+        const saved = value && value[HEALTH_KEY];
+        if (!saved || typeof saved !== 'object') return;
+        for (const id of Object.keys(saved)) {
+          const s = saved[id];
+          // Merge only where this session has learned nothing yet — live
+          // observations always beat a restored estimate. Benches never
+          // restore: a 60s cooldown from a dead worker is ancient history.
+          const cur = stateFor(id);
+          if (cur.latencyMs == null && typeof s.latencyMs === 'number') cur.latencyMs = s.latencyMs;
+          if (typeof s.samples === 'number') cur.samples = Math.max(cur.samples || 0, s.samples);
+        }
+      });
+    } catch (_) {}
+  })();
+
   function stateFor(id) {
-    if (!health.has(id)) health.set(id, { failures: 0, benchedUntil: 0, latencyMs: null });
+    if (!health.has(id)) health.set(id, { failures: 0, benchedUntil: 0, latencyMs: null, samples: 0 });
     return health.get(id);
   }
 
@@ -104,7 +146,9 @@
       state.latencyMs = state.latencyMs == null
         ? latencyMs
         : state.latencyMs * 0.7 + latencyMs * 0.3;
+      state.samples = (state.samples || 0) + 1;
     }
+    persistHealthSoon();
   }
 
   function reportFailure(id) {
@@ -112,6 +156,28 @@
     state.failures += 1;
     // Two strikes benches an endpoint; a single blip is not worth losing it.
     if (state.failures >= 2) state.benchedUntil = Date.now() + COOLDOWN_MS;
+    persistHealthSoon();
+  }
+
+  /**
+   * The pool's honest self-assessment: the smoothed latency of the BEST
+   * public endpoint, and how much evidence sits behind it. This is what
+   * lets the product notice "the keyless pool is slow from HERE" and say
+   * the fix out loud instead of every user in a throttled region
+   * rediscovering it alone (field report: cojica456, Balkans — all three
+   * public endpoints slow; a free personal endpoint made launches
+   * instant). Null until anything is measured.
+   */
+  function poolLatency() {
+    let best = null;
+    let samples = 0;
+    for (const endpoint of PUBLIC_ENDPOINTS) {
+      const s = health.get(endpoint.id);
+      if (!s || s.latencyMs == null) continue;
+      samples += s.samples || 0;
+      if (best == null || s.latencyMs < best) best = s.latencyMs;
+    }
+    return best == null ? null : { bestMs: Math.round(best), samples };
   }
 
   /**
@@ -226,7 +292,7 @@
   const api = {
     PUBLIC_ENDPOINTS, COOLDOWN_MS,
     setUserEndpoint, hasUserEndpoint,
-    ranked, call, websocketUrls,
+    ranked, call, websocketUrls, poolLatency,
     reportSuccess, reportFailure,
     _health: health,
     _reset: () => { health.clear(); userEndpoint = null; },

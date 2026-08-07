@@ -1761,6 +1761,18 @@
         publishPageState();
       }
 
+      // The slow-pool notice (cojica456's report, solved for everyone): the
+      // worker measured the public price connection as slow from this
+      // machine and wrote the notice exactly once. Say it at the moment it
+      // exists, in the place the user is trading.
+      const rpcNotice = changes.pt_rpc_notice;
+      if (rpcNotice && rpcNotice.newValue && !rpcNotice.oldValue) {
+        const ms = Number(rpcNotice.newValue.bestMs) || 0;
+        toast('Heads-up: the public price connection is slow from your region'
+          + (ms ? ` (~${ms}ms)` : '')
+          + '. A free personal endpoint makes new coins instant — Dashboard → Settings → Price connection.');
+      }
+
       const stateChange = changes[E.STORAGE_KEYS.state];
       if (!stateChange) return;
       const next = stateChange.newValue;

@@ -5,6 +5,20 @@ details live in the commit messages.
 
 ## Unreleased
 
+- **If your region's public price connection is slow, PaperTrench now tells
+  you — with the fix.** A community member in the Balkans found every
+  keyless public endpoint throttled from where they live, and solved it
+  themselves by pasting a free personal RPC endpoint into Settings. Nobody
+  should have to discover that alone: the extension now reads its own
+  measured latency, and when the public pool stays slow on real evidence
+  (and you haven't set an endpoint), it says so once — with the measured
+  number and a two-minute guide (docs/RPC-SPEEDUP.md). Endpoint health now
+  also survives restarts, so the fastest endpoint is known from the first
+  click of every session. Nothing is sent anywhere: this is the extension
+  reading its own numbers. (We checked every other keyless provider for
+  the pool — all now dead or key-gated; the three shipped survivors are
+  the whole keyless commons, which is why the honest fix is telling you.)
+
 - **The first quote on a brand-new coin now lands in a quarter second.**
   Field report: "waiting for first quote… is it not for fast scalping?"
   Measured live against real launches: the on-chain first quote took

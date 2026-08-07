@@ -2782,6 +2782,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const settings = await getSettings();
           FEED.configure({ rpcUrl: settings.rpcUrl || null });
           sendResponse({ live: await FEED.watch(message.mint, message.pool) });
+          // The moment slowness hurts is the moment worth checking for it.
+          maybeNoteSlowPool(settings).catch(() => {});
         } catch (e) { sendResponse({ live: false }); }
         break;
       }
@@ -2822,6 +2824,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const settings = await getSettings();
           FEED.configure({ rpcUrl: settings.rpcUrl || null });
           sendResponse(await FEED.prewatch({ pool, mint }));
+          // The sniping path is where a throttled region bleeds — check here.
+          maybeNoteSlowPool(settings).catch(() => {});
         } catch (e) { sendResponse(null); }
         break;
       }
@@ -2975,6 +2979,37 @@ refreshFrameInterval().catch(() => {});
  * (settings.leaderboardBridge), off by default. The payload is the same
  * buildSubmission() JSON the manual export produces, so both hand-off paths
  * are byte-equivalent evidence. */
+
+/* ------------------- slow-pool notice (solve it for everyone) -------------
+ *
+ * Field report (cojica456, Balkans): every keyless public endpoint was slow
+ * from their region, launches crawled, and the fix — a free personal RPC
+ * endpoint pasted into Settings — took two minutes once they DISCOVERED it
+ * themselves. Nobody should have to discover it. The pool measures its own
+ * latency; when the best public endpoint stays slow across real evidence
+ * and the user has no personal endpoint configured, the product says the
+ * fix out loud, exactly once. No telemetry leaves the machine — this is
+ * the extension reading its own numbers.
+ */
+const SLOW_POOL_MS = 750;
+const SLOW_POOL_MIN_SAMPLES = 12;
+
+async function maybeNoteSlowPool(settings) {
+  try {
+    if (settings && settings.rpcUrl) return; // they already fixed it
+    if (!self.PTRpcPool || typeof PTRpcPool.poolLatency !== 'function') return;
+    const measured = PTRpcPool.poolLatency();
+    if (!measured || measured.samples < SLOW_POOL_MIN_SAMPLES) return;
+    if (measured.bestMs <= SLOW_POOL_MS) return;
+    const flags = await new Promise((resolve) =>
+      chrome.storage.local.get(['pt_rpc_slow_told'], (v) => resolve(v || {})));
+    if (flags.pt_rpc_slow_told) return; // once per install, never a nag
+    await new Promise((resolve) => chrome.storage.local.set({
+      pt_rpc_slow_told: Date.now(),
+      pt_rpc_notice: { bestMs: measured.bestMs, samples: measured.samples, at: Date.now() },
+    }, () => resolve()));
+  } catch (_) { /* a notice must never break a price path */ }
+}
 
 const BRIDGE_ORIGINS = new Set(['https://papertrench.com', 'https://www.papertrench.com']);
 
