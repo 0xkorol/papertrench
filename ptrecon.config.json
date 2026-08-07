@@ -1,0 +1,35 @@
+{
+  "project": "papertrench",
+  "dataDir": "recon-data",
+  "denylistFile": "recon-data/DENYLIST.local",
+  "chrome": null,
+  "chromeArgs": [],
+  "adapter": {
+    "file": "extension/sites.js",
+    "global": "PaperTrenchSites",
+    "currentSite": "currentSite"
+  },
+  "wiring": {
+    "touchList": [
+      { "file": "extension/sites.js", "label": "adapter match()/detect()/tokenUrl()", "kind": "code", "required": true },
+      { "file": "extension/manifest.json", "label": "origin in MAIN + ISOLATED content_scripts + web_accessible_resources", "kind": "manifest", "required": true, "lists": ["main-content-scripts", "isolated-content-scripts", "web-accessible-resources"] },
+      { "file": "extension/background.js", "label": "WARM_PLATFORM_URLS + WARM_DEST_FAMILIES entry", "kind": "code", "required": true },
+      { "file": "extension/warmdest.js", "label": "host RegExp + classify() branch + familyOfHost line", "kind": "code", "required": true },
+      { "file": "extension/xray-core.js", "label": "CA_HOST_RE (X links to it count as CA carriers)", "kind": "code", "required": true },
+      { "file": "extension/title-feed.js", "label": "TITLE_PATTERNS entry", "kind": "code", "requiredWhenFalse": "titleDefaultFits", "noteFits": "dossier: default $-keyed title pattern FITS — only add an entry if the live title differs", "noteMiss": "dossier: default $-keyed title pattern does NOT fit — a TITLE_PATTERNS entry is REQUIRED" },
+      { "file": "docs/PERMISSIONS.md", "label": "host + justification (permissionsdoc.test.js enforces)", "kind": "code", "required": true },
+      { "file": "docs/QA-MATRIX.md", "label": "a column (stays empty until the live pass)", "kind": "prose", "required": true },
+      { "file": "README.md", "label": "supported-sites prose + counter", "kind": "prose", "required": true },
+      { "file": "site/index.html", "label": "marquee chip + data-check=\"sites\" counter", "kind": "prose", "required": true }
+    ],
+    "priceBridgeNote": "fold the captured history-key spellings into the GENERIC guards (never a site-named branch — threesites.test.js locks against it)"
+  },
+  "dossierHints": {
+    "routeAtlas": "sites.js match()/detect()/tokenUrl(), sitegating MATRIX, warmdest",
+    "endpoints": "strict fakes, price-bridge",
+    "wsChannels": "strict fakes, price-bridge",
+    "pollution": "price-bridge generic guards + pair-form locks",
+    "anchors": "dock placement",
+    "auth": "QA-MATRIX planning"
+  }
+}

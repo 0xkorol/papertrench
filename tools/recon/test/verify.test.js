@@ -15,6 +15,7 @@ const { runVerify, assembleExamples, detectAt, chainsAgree } = require('../lib/v
 const { scaffold } = require('../lib/scaffold');
 const { checkWiring, registrable } = require('../lib/wiring');
 const { diffDossiers } = require('../lib/driftdiff');
+const { loadConfig, writeInitConfig, mergeDenylists, deepMerge, DEFAULTS } = require('../lib/config');
 
 const ADDR = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
 const WALLET = 'MfDuWeqSHEqTFVYZ7LoexgAK9dxk7cy4DFJWjWMGVWa';
@@ -252,6 +253,23 @@ const MANIFEST_WIRED = JSON.stringify({
   web_accessible_resources: [{ matches: ['https://newsite.io/*'], resources: ['x.js'] }],
 });
 
+// A project's wiring config (what ptrecon.config.json declares). The tool reads
+// the touch list from here, not from hardcoded PaperTrench paths.
+const WIRING_CFG = {
+  touchList: [
+    { file: 'extension/sites.js', label: 'adapter', kind: 'code', required: true },
+    { file: 'extension/manifest.json', label: 'manifest', kind: 'manifest', required: true, lists: ['main-content-scripts', 'isolated-content-scripts', 'web-accessible-resources'] },
+    { file: 'extension/background.js', label: 'warm', kind: 'code', required: true },
+    { file: 'extension/warmdest.js', label: 'warmdest', kind: 'code', required: true },
+    { file: 'extension/xray-core.js', label: 'xray', kind: 'code', required: true },
+    { file: 'extension/title-feed.js', label: 'title', kind: 'code', requiredWhenFalse: 'titleDefaultFits', noteFits: 'default fits', noteMiss: 'REQUIRED: title differs' },
+    { file: 'docs/PERMISSIONS.md', label: 'permissions', kind: 'code', required: true },
+    { file: 'docs/QA-MATRIX.md', label: 'qa', kind: 'prose', required: true },
+    { file: 'README.md', label: 'readme', kind: 'prose', required: true },
+    { file: 'site/index.html', label: 'site', kind: 'prose', required: true },
+  ],
+};
+
 test('wiring: a fully-wired host reads FULLY WIRED', () => {
   const root = fakeRepo({
     'extension/sites.js': 'match: (h) => /newsite\\.io$/.test(h)',
@@ -265,7 +283,7 @@ test('wiring: a fully-wired host reads FULLY WIRED', () => {
     'README.md': 'overlays on NewSite and others',
     'site/index.html': '<span>NewSite</span>',
   });
-  const res = checkWiring(root, 'newsite.io', { titleDefaultFits: true }, 'NewSite');
+  const res = checkWiring(root, 'newsite.io', { titleDefaultFits: true }, 'NewSite', WIRING_CFG);
   assert.equal(res.verdict, 'FULLY WIRED', JSON.stringify(res.missingRequired));
   assert.equal(res.missingRequired.length, 0);
   fs.rmSync(root, { recursive: true, force: true });
@@ -283,7 +301,7 @@ test('wiring: catches a host missing from a code file (the left-on-the-table cas
     'docs/PERMISSIONS.md': 'newsite.io',
     'docs/QA-MATRIX.md': 'NewSite', 'README.md': 'NewSite', 'site/index.html': 'NewSite',
   });
-  const res = checkWiring(root, 'newsite.io', {}, 'NewSite');
+  const res = checkWiring(root, 'newsite.io', {}, 'NewSite', WIRING_CFG);
   assert.ok(res.missingRequired.some((r) => r.file === 'extension/xray-core.js'), 'xray-core must be flagged missing');
   assert.match(res.verdict, /REQUIRED code registration/);
   fs.rmSync(root, { recursive: true, force: true });
@@ -298,7 +316,7 @@ test('wiring: matches an ESCAPED-regex host and a DISPLAY NAME (no false miss)',
     'docs/PERMISSIONS.md': 'newsite.io',
     'docs/QA-MATRIX.md': '| NewSite |', 'README.md': 'NewSite', 'site/index.html': 'NewSite',
   });
-  const res = checkWiring(root, 'newsite.io', { titleDefaultFits: true }, 'NewSite');
+  const res = checkWiring(root, 'newsite.io', { titleDefaultFits: true }, 'NewSite', WIRING_CFG);
   const xray = res.rows.find((r) => r.file === 'extension/xray-core.js');
   assert.equal(xray.status, true, 'escaped-regex host must match (backslashes stripped)');
   fs.rmSync(root, { recursive: true, force: true });
@@ -316,10 +334,11 @@ test('wiring: manifest missing one of the three lists is flagged', () => {
     'docs/PERMISSIONS.md': 'newsite.io', 'docs/QA-MATRIX.md': 'NewSite',
     'README.md': 'NewSite', 'site/index.html': 'NewSite',
   });
-  const res = checkWiring(root, 'newsite.io', {}, 'NewSite');
+  const res = checkWiring(root, 'newsite.io', {}, 'NewSite', WIRING_CFG);
   const man = res.rows.find((r) => r.file === 'extension/manifest.json');
   assert.equal(man.status, false, 'manifest missing ISOLATED + WAR must fail');
-  assert.match(man.note, /ISOLATED/);
+  assert.match(man.note, /isolated/i);
+  assert.match(man.note, /web-accessible/i);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -332,9 +351,9 @@ test('wiring: title-feed is REQUIRED when the dossier says the default title doe
     'docs/PERMISSIONS.md': 'newsite.io', 'docs/QA-MATRIX.md': 'NewSite',
     'README.md': 'NewSite', 'site/index.html': 'NewSite',
   };
-  const fits = checkWiring(fakeRepo(base), 'newsite.io', { titleDefaultFits: true }, 'NewSite');
+  const fits = checkWiring(fakeRepo(base), 'newsite.io', { titleDefaultFits: true }, 'NewSite', WIRING_CFG);
   assert.ok(!fits.missingRequired.some((r) => r.file === 'extension/title-feed.js'), 'title optional when default fits');
-  const noFit = checkWiring(fakeRepo(base), 'newsite.io', { titleDefaultFits: false }, 'NewSite');
+  const noFit = checkWiring(fakeRepo(base), 'newsite.io', { titleDefaultFits: false }, 'NewSite', WIRING_CFG);
   assert.ok(noFit.missingRequired.some((r) => r.file === 'extension/title-feed.js'), 'title REQUIRED when default does not fit');
 });
 
@@ -342,6 +361,110 @@ test('wiring: registrable() reduces a subdomain to its registrable domain', () =
   assert.equal(registrable('trade.padre.gg'), 'padre.gg');
   assert.equal(registrable('gmgn.ai'), 'gmgn.ai');
   assert.equal(registrable('photon-sol.tinyastro.io'), 'tinyastro.io');
+});
+
+// ---------------------------------------------------------------------------
+// portability — the tool works for a NON-PaperTrench project via config
+// ---------------------------------------------------------------------------
+
+test('config: loadConfig discovers a project config and merges over defaults', () => {
+  const root = fakeRepo({ 'ptrecon.config.json': JSON.stringify({ project: 'other', adapter: { file: 'src/x.js', global: 'Foo' } }) });
+  const { projectRoot, config, found } = loadConfig({ project: root }, '/nonexistent');
+  assert.equal(found, true);
+  assert.equal(projectRoot, root);
+  assert.equal(config.project, 'other');
+  assert.equal(config.adapter.global, 'Foo');
+  assert.equal(config.adapter.currentSite, 'currentSite', 'default merged in');
+  assert.equal(config.dataDir, 'recon-data', 'default dataDir');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('config: mergeDenylists — an EMPTY leftover cannot shadow the real list (audit CRITICAL)', () => {
+  // The refactor briefly let an empty recon-data/DENYLIST.local shadow a populated
+  // denylist in a relocated PT_RECON_DATA store → scrubber inert → leak. Merge, skip empties.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ptrecon-deny-'));
+  const empty = path.join(dir, 'empty.local');
+  const real = path.join(dir, 'real.local');
+  fs.writeFileSync(empty, '   \n\n'); // whitespace-only leftover
+  fs.writeFileSync(real, 'satoshiwallet7000\n');
+  // Empty listed FIRST (the shadowing position) must not win.
+  const merged = mergeDenylists([empty, real]);
+  assert.match(merged, /satoshiwallet7000/, 'the populated list is used even behind an empty leftover');
+  // A missing file is skipped; identical paths deduped; all-empty → ''.
+  assert.equal(mergeDenylists([empty, '/does/not/exist', empty]).trim(), '');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('config: a MALFORMED config throws (never silently falls back to defaults)', () => {
+  const root = fakeRepo({ 'ptrecon.config.json': '{ "adapter": { bad json ' });
+  assert.throws(() => loadConfig({ project: root }, '/nope'), /malformed JSON/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('wiring: a string `required` naming a flag works like requiredWhenFalse', () => {
+  const base = {
+    'src/a.js': 'newsite.io', 'README.md': 'NewSite',
+    'src/title.js': 'unrelated content',
+  };
+  const cfg = { touchList: [
+    { file: 'src/a.js', label: 'adapter', kind: 'code', required: true },
+    { file: 'README.md', label: 'docs', kind: 'prose', required: true },
+    { file: 'src/title.js', label: 'title', kind: 'code', required: 'titleDefaultFits' }, // string-flag form
+  ] };
+  const fits = checkWiring(fakeRepo(base), 'newsite.io', { titleDefaultFits: true }, 'NewSite', cfg);
+  assert.ok(!fits.missingRequired.some((r) => r.file === 'src/title.js'), 'optional when the flag is true');
+  const noFit = checkWiring(fakeRepo(base), 'newsite.io', { titleDefaultFits: false }, 'NewSite', cfg);
+  assert.ok(noFit.missingRequired.some((r) => r.file === 'src/title.js'), 'REQUIRED when the flag is false');
+});
+
+test('config: writeInitConfig scaffolds a config and never clobbers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ptrecon-init-'));
+  const a = writeInitConfig(dir);
+  assert.equal(a.created, true);
+  assert.ok(fs.existsSync(a.dest));
+  const b = writeInitConfig(dir);
+  assert.equal(b.created, false, 'second call must not overwrite');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('verify: a NON-PaperTrench adapter contract works via adapterCfg (universal)', () => {
+  // A different project sets a DIFFERENT global and API method — declared in
+  // ptrecon.config.json. The verifier must drive it, not assume PaperTrenchSites.
+  const CURSOR_ADAPTER = `(() => {
+    const api = { whichSite: () => ({ id: 'cursor', resolve: () => {
+      const m = location.pathname.match(/^\\/coin\\/([1-9A-HJ-NP-Za-km-z]{32,44})/);
+      return m ? { kind: 'mint', address: m[1] } : null;
+    } }) };
+    globalThis.CursorTerminals = api;
+  })();`;
+  const cfg = { global: 'CursorTerminals', currentSite: 'whichSite', detect: 'resolve', file: 'cursor.js' };
+  const examples = [{ rawUrl: `https://x.io/coin/${ADDR}`, display: 'd', ann: { looksTokenPage: true, hadLivePrice: true } }];
+  const { rows, summary } = runVerify(CURSOR_ADAPTER, examples, cfg);
+  assert.equal(rows[0].mounted, true, 'the custom-global adapter mounted the token page');
+  assert.equal(rows[0].address, ADDR);
+  assert.equal(summary.verdict, 'AGREES with the capture');
+});
+
+test('wiring: works for a NON-PaperTrench project touch list (universal)', () => {
+  // A completely different project shape — no extension/, different files.
+  const root = fakeRepo({
+    'src/adapters.ts': 'match host newsite.io',
+    'app.manifest.json': JSON.stringify({ content_scripts: [{ matches: ['https://newsite.io/*'] }], host_permissions: ['https://newsite.io/*'] }),
+    'SITES.md': 'we support NewSite',
+  });
+  const cfg = {
+    touchList: [
+      { file: 'src/adapters.ts', label: 'adapter', kind: 'code', required: true },
+      { file: 'app.manifest.json', label: 'manifest', kind: 'manifest', required: true, lists: ['content_scripts', 'host_permissions'] },
+      { file: 'SITES.md', label: 'docs', kind: 'prose', required: true },
+      { file: 'missing.js', label: 'a file they forgot', kind: 'code', required: true },
+    ],
+  };
+  const res = checkWiring(root, 'newsite.io', {}, 'NewSite', cfg);
+  assert.ok(res.rows.find((r) => r.file === 'src/adapters.ts').status, 'adapter present');
+  assert.ok(res.rows.find((r) => r.file === 'app.manifest.json').status, 'manifest lists present');
+  assert.ok(res.missingRequired.some((r) => r.file === 'missing.js'), 'the forgotten file is flagged');
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------

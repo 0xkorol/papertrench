@@ -60,6 +60,29 @@ if paper-safe, a page that must refuse, chain switch); covering it is what turns
 `sitegating.test.js` does — it is the same `detect()` the extension runs, judged
 against the real URL corpus instead of a hand-picked one.
 
+## Portability — one tool, any project, any harness
+
+The engine (`capture`/`distill`/`scaffold`/`diff`) is project-agnostic; it captures and reverse-
+engineers any site. The two project-specific commands read their binding from a **`ptrecon.config.json`**
+at the project root:
+
+- `adapter` — the file that defines the site adapter, the global it sets, and the method returning the
+  current site. `check` loads it in a `vm` and drives `detect()` through this contract.
+- `wiring.touchList` — every registration point a new site must touch (each `{file, label, kind, required}`;
+  `kind: 'manifest'` also names the manifest `lists` to check; `required` may name a dossier flag like
+  `titleDefaultFits` for a conditional entry).
+- `dataDir`, `denylistFile`, `chrome`, `chromeArgs`, and optional `dossierHints` (the "§N → feeds X"
+  labels).
+
+PaperTrench ships its config at the repo root, so the commands work out of the box here. For another
+project: `node tools/recon/ptrecon.js init` scaffolds a starter config, or pass `--project <dir>` /
+`--config <file>` to point at one from anywhere. Nothing project-specific is hardcoded in the tool.
+
+It is also packaged as a **skill** at `.claude/skills/pt-recon/SKILL.md` — a Claude Code skill that
+doubles as a plain contract any other harness's agent can follow (run the CLI over a shell, read
+`DOSSIER.md`, obey §0/§11/§12). Copy or symlink that directory to `~/.claude/skills/pt-recon` to make
+it available in every session.
+
 ## The trust boundary
 
 - `recon-data/` is **gitignored, forever**. Raw captures contain your cookies,

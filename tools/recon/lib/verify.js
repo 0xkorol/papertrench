@@ -13,39 +13,45 @@
 const vm = require('node:vm');
 const { normalizeUrl } = require('./schema');
 
-// Load the shipped adapter source into a fresh sandbox pinned to `href`, and
-// return its detection at that URL. Mirrors extension/test/sitegating.test.js
-// so the verifier sees exactly what the extension sees.
-function detectAt(adapterSrc, href) {
+const DEFAULT_ADAPTER = { global: 'PaperTrenchSites', currentSite: 'currentSite', detect: 'detect' };
+
+// Load the project's adapter source into a fresh sandbox pinned to `href`, and
+// return its detection at that URL. Mirrors how the project's own gating test
+// loads the adapter, so the verifier sees exactly what the app sees. The
+// adapter contract (which global it sets, which method returns the current
+// site) comes from ptrecon.config.json's `adapter` block.
+function detectAt(adapterSrc, href, adapterCfg) {
+  const cfg = { ...DEFAULT_ADAPTER, ...(adapterCfg || {}) };
   let url;
   try { url = new URL(href); } catch { return { error: 'bad url' }; }
   const sandbox = {
-    window: {}, self: {},
+    window: {}, self: {}, globalThis: {},
     location: { href, hostname: url.hostname, pathname: url.pathname, search: url.search },
     URL, URLSearchParams, console: { log() {}, warn() {}, error() {} },
   };
+  if (!cfg.global) return { error: 'adapter.global not set in ptrecon.config.json (the global your adapter assigns, e.g. "MySites")' };
   try {
     vm.createContext(sandbox);
-    vm.runInContext(adapterSrc, sandbox, { filename: 'sites.js', timeout: 2000 });
-    const api = sandbox.window.PaperTrenchSites || sandbox.self.PaperTrenchSites;
-    if (!api || typeof api.currentSite !== 'function') return { error: 'sites.js did not expose PaperTrenchSites.currentSite' };
-    const site = api.currentSite();
+    vm.runInContext(adapterSrc, sandbox, { filename: cfg.file || 'adapter.js', timeout: 2000 });
+    const api = sandbox.window[cfg.global] || sandbox.self[cfg.global] || sandbox.globalThis[cfg.global];
+    if (!api || typeof api[cfg.currentSite] !== 'function') return { error: `adapter did not expose ${cfg.global}.${cfg.currentSite}() (check ptrecon.config.json adapter block)` };
+    const site = api[cfg.currentSite]();
     if (!site) return { siteId: null, token: null };
     let token = null;
-    try { token = typeof site.detect === 'function' ? site.detect() : null; } catch (e) { return { siteId: site.id, error: 'detect() threw: ' + e.message }; }
+    try { token = typeof site[cfg.detect] === 'function' ? site[cfg.detect]() : null; } catch (e) { return { siteId: site.id, error: `${cfg.detect}() threw: ` + e.message }; }
     return { siteId: site.id, token };
   } catch (e) {
-    return { error: 'sites.js failed to load: ' + e.message };
+    return { error: 'adapter failed to load: ' + e.message };
   }
 }
 
 // examples: [{ rawUrl, display, ann }] where ann is the corpus annotation
 // { looksTokenPage, looksListPage, looksHistoryPage, hadLivePrice, priceNodeCount, chain }.
 // Returns { rows, summary }.
-function runVerify(adapterSrc, examples) {
+function runVerify(adapterSrc, examples, adapterCfg) {
   const rows = [];
   for (const ex of examples) {
-    const res = detectAt(adapterSrc, ex.rawUrl);
+    const res = detectAt(adapterSrc, ex.rawUrl, adapterCfg);
     const mounted = !!(res.token && (res.token.kind || res.token.address));
     const flags = [];
 

@@ -398,6 +398,7 @@ function distill(capDir, outDir, opts = {}) {
     endpoints, wsChannels, wsOpen, provenance, pollutionKeys, capsPresence, chartTraffic,
     anchorSeen, snapshotCount, authHits, walls, errorSummary, questions, injectionHits,
     scrubber, mutations, captureBlocked, blockVendor, docBlocked, corpus, wsFailed,
+    hints: opts.hints || {},
   });
   fs.writeFileSync(path.join(outDir, 'DOSSIER.md'), md);
 
@@ -453,6 +454,9 @@ function statusRange(statuses) {
 function renderDossier(d) {
   const L = [];
   const p = (s = '') => L.push(s);
+  // Section "→ feeds X" hints come from config.dossierHints, with a generic
+  // fallback so the dossier reads sensibly for any project (not just PaperTrench).
+  const H = (k, fb) => (d.hints && d.hints[k]) || fb;
   const m = d.manifest;
   p(`# Dossier: ${m.site}`);
   p('');
@@ -509,7 +513,7 @@ function renderDossier(d) {
   p('');
 
   // §2
-  p('## §2 Route atlas → `sites.js` match()/detect()/tokenUrl(), sitegating MATRIX, warmdest');
+  p(`## §2 Route atlas → ${H('routeAtlas', 'the adapter\'s match()/detect(), routing, and gating')}`);
   p('');
   p('Nav/doc routes observed, normalized (`{address}`/`{evm}`/`{chain}`/`{num}` = variable segment):');
   p('');
@@ -523,7 +527,7 @@ function renderDossier(d) {
   p('');
 
   // §3
-  p('## §3 Endpoint inventory → strict fakes, price-bridge');
+  p(`## §3 Endpoint inventory → ${H('endpoints', 'strict fakes, the price/data layer')}`);
   p('');
   p('| method | pattern | host | n | status | auth | fixture |');
   p('|---|---|---|---|---|---|---|');
@@ -543,7 +547,7 @@ function renderDossier(d) {
   }
 
   // §4
-  p('## §4 WebSocket / SSE channels → strict fakes, price-bridge');
+  p(`## §4 WebSocket / SSE channels → ${H('wsChannels', 'strict fakes, the price/data layer')}`);
   p('');
   if (d.wsFailed && d.wsFailed.length) {
     p('⚠️ **Rejected handshakes** — these WebSockets opened but were refused with **zero frames**. They are NOT a channel you can fake (F-39): the capture never saw them carry data. The live price came from polling instead — see §3/§5. (A logged-in capture may connect where this one was bot-gated.)');
@@ -592,7 +596,7 @@ function renderDossier(d) {
   p('');
 
   // §6
-  p('## §6 Pollution candidates → price-bridge generic guards + pair-form locks');
+  p(`## §6 Pollution candidates → ${H('pollution', 'the generic price guards + pollution locks')}`);
   p('');
   const histNodes = d.provenance.filter((n) => n.roleTally['history-shaped']);
   if (histNodes.length) {
@@ -615,7 +619,7 @@ function renderDossier(d) {
   p('');
 
   // §8
-  p('## §8 DOM anchors (stability scored) → dock placement');
+  p(`## §8 DOM anchors (stability scored) → ${H('anchors', 'overlay / dock placement')}`);
   p('');
   p(`Selector candidates from ${d.snapshotCount} DOM snapshots. \`corr\` = value traced to a network origin. Prefer high-obs, correlated, \`data-\`/\`#id\` anchored paths; distrust \`nth-of-type\` chains.`);
   p('');
@@ -628,7 +632,7 @@ function renderDossier(d) {
   p('');
 
   // §9
-  p('## §9 Auth states → QA-MATRIX planning');
+  p(`## §9 Auth states → ${H('auth', 'QA / live-pass planning')}`);
   p('');
   p(`Auth-bearing requests captured: **${d.authHits}**. Login/connect routes visited: ${d.walls.length ? d.walls.slice(0, 4).map((w) => '`' + shortPath(w) + '`').join(', ') : 'none'}.`);
   p('');

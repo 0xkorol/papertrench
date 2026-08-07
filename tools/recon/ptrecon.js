@@ -20,14 +20,19 @@ const { makeScrubber, loadDenylist } = require('./lib/scrub');
 const { scaffold } = require('./lib/scaffold');
 const { checkWiring } = require('./lib/wiring');
 const { diffDossiers } = require('./lib/driftdiff');
+const { loadConfig, writeInitConfig, mergeDenylists } = require('./lib/config');
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
-// Raw captures hold cookies/auth/balances. Default location is recon-data/
-// (gitignored), but PT_RECON_DATA moves the whole store off the repo tree
-// entirely — preferred, so secrets never sit inside a public working copy.
-const DATA_ROOT = process.env.PT_RECON_DATA
-  ? path.resolve(process.env.PT_RECON_DATA)
-  : path.join(REPO_ROOT, 'recon-data');
+// The tool's own location — the fallback project root (so PaperTrench's config
+// at the repo root is found even when invoked from elsewhere in the tree).
+const TOOL_ROOT = path.resolve(__dirname, '..', '..');
+
+// Run context, set by main() from ptrecon.config.json. PROJECT_ROOT anchors all
+// config-relative paths; DATA_ROOT holds captures/dossiers (gitignore it).
+// Raw captures hold cookies/auth/balances — PT_RECON_DATA moves the whole store
+// off the repo tree entirely, preferred so secrets never sit in a public copy.
+let PROJECT_ROOT = TOOL_ROOT;
+let CONFIG = null;
+let DATA_ROOT = null;
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -46,6 +51,7 @@ function parseArgs(argv) {
 function findChrome(explicit) {
   const candidates = [
     explicit,
+    CONFIG && CONFIG.chrome,
     process.env.PT_RECON_CHROME,
     process.env.CHROME_PATH,
     // Playwright's cached Chromium (present on this machine).
@@ -93,8 +99,10 @@ function stamp() {
 }
 
 function loadDenylistText() {
-  const f = path.join(DATA_ROOT, 'DENYLIST.local');
-  try { return fs.readFileSync(f, 'utf8'); } catch { return ''; }
+  const rel = (CONFIG && CONFIG.denylistFile) || 'recon-data/DENYLIST.local';
+  // Merge every candidate (see mergeDenylists) so an empty leftover can never
+  // shadow the real, populated denylist in a relocated data store.
+  return mergeDenylists([path.resolve(PROJECT_ROOT, rel), path.join(DATA_ROOT, 'DENYLIST.local')]);
 }
 
 async function cmdCapture(args) {
@@ -122,7 +130,7 @@ async function cmdCapture(args) {
   const headless = args.headed ? false : (!!args.headless || !!autoUrls);
   const minutes = args.minutes && args.minutes !== true ? Number(args.minutes) : (autoUrls ? 0 : 15);
 
-  process.stderr.write(`\n[pt-recon] capture → ${path.relative(REPO_ROOT, capDir)}\n`);
+  process.stderr.write(`\n[pt-recon] capture → ${path.relative(PROJECT_ROOT, capDir)}\n`);
   process.stderr.write(`[pt-recon] chrome: ${chrome}\n`);
   process.stderr.write(`[pt-recon] mode: ${autoUrls ? 'auto (' + autoUrls.length + ' urls)' : 'headed'}${headless ? ' [headless]' : ''}\n`);
   if (!autoUrls) {
@@ -161,8 +169,8 @@ async function cmdDistill(args) {
     : newestCapture(site);
   if (!capDir) throw new Error(`no completed capture for site "${site}" — run capture first`);
   const outDir = path.join(siteDir(site), 'dossier');
-  process.stderr.write(`[pt-recon] distilling ${path.relative(REPO_ROOT, capDir)} → ${path.relative(REPO_ROOT, outDir)}\n`);
-  const res = distill(capDir, outDir, { denylistText: loadDenylistText() });
+  process.stderr.write(`[pt-recon] distilling ${path.relative(PROJECT_ROOT, capDir)} → ${path.relative(PROJECT_ROOT, outDir)}\n`);
+  const res = distill(capDir, outDir, { denylistText: loadDenylistText(), hints: (CONFIG && CONFIG.dossierHints) || {} });
   if (res.captureBlocked) {
     process.stderr.write(`\n[pt-recon] ⚠️  CAPTURE VOID — the site served a bot challenge, not the app.\n`);
     process.stderr.write(`[pt-recon]     This dossier describes the challenge page. Re-run HEADED:\n`);
@@ -173,7 +181,7 @@ async function cmdDistill(args) {
   process.stderr.write(`  chainSlugs=${res.counts.chainSlugs} redactions=${res.counts.redactions} injectionFlags=${res.counts.injectionHits}\n`);
   process.stderr.write(`  OPEN QUESTIONS: ${res.counts.openQuestions}\n`);
   for (const q of res.questions) process.stderr.write(`    [${q.id}] ${q.text.slice(0, 90)}…\n`);
-  process.stderr.write(`\n[pt-recon] read: ${path.relative(REPO_ROOT, path.join(outDir, 'DOSSIER.md'))}\n`);
+  process.stderr.write(`\n[pt-recon] read: ${path.relative(PROJECT_ROOT, path.join(outDir, 'DOSSIER.md'))}\n`);
 }
 
 function readJsonl(file) {
@@ -194,10 +202,12 @@ async function cmdCheck(args) {
   const corpusPath = path.join(dossierDir, 'corpus.json');
   if (!fs.existsSync(corpusPath)) throw new Error(`no corpus.json — run distill --site ${site} first`);
 
+  const adapterCfg = (CONFIG && CONFIG.adapter) || {};
   const adapterPath = args.adapter && args.adapter !== true
     ? path.resolve(String(args.adapter))
-    : path.join(REPO_ROOT, 'extension', 'sites.js');
-  if (!fs.existsSync(adapterPath)) throw new Error(`adapter not found: ${adapterPath} (pass --adapter PATH)`);
+    : (adapterCfg.file ? path.join(PROJECT_ROOT, adapterCfg.file) : null);
+  if (!adapterPath) throw new Error('no adapter configured — set adapter.file in ptrecon.config.json or pass --adapter PATH');
+  if (!fs.existsSync(adapterPath)) throw new Error(`adapter not found: ${adapterPath} (config adapter.file, or pass --adapter PATH)`);
   const adapterSrc = fs.readFileSync(adapterPath, 'utf8');
 
   // Raw nav/doc URLs (unscrubbed, local only) give detect() faithful input;
@@ -213,9 +223,9 @@ async function cmdCheck(args) {
 
   const examples = assembleExamples(rawUrls, corpus.urls || [], scrubber);
   if (!examples.length) throw new Error(`no testable nav/doc URLs in capture ${path.basename(capDir)} (raw events.jsonl + network.jsonl) — capture a token page and re-run`);
-  const { rows, summary } = runVerify(adapterSrc, examples);
+  const { rows, summary } = runVerify(adapterSrc, examples, adapterCfg);
 
-  process.stderr.write(`\n[pt-recon] check — ${path.relative(REPO_ROOT, adapterPath)} vs ${examples.length} real pages from ${path.basename(capDir)}\n\n`);
+  process.stderr.write(`\n[pt-recon] check — ${path.relative(PROJECT_ROOT, adapterPath)} vs ${examples.length} real pages from ${path.basename(capDir)}\n\n`);
   const icon = (r) => r.error ? '⚠️ ' : r.mounted ? '● MOUNT ' : '○ refuse';
   for (const r of rows) {
     const detail = r.error ? r.error : r.mounted ? `${r.kind || '?'} ${short(r.address)} chain=${r.chain || '—'}` : '';
@@ -294,7 +304,7 @@ function cmdWiring(args) {
   if (!host) throw new Error('need a host: pass --host <host> or --site <id> (after distill, which writes the primary host)');
   const name = args.name && args.name !== true ? String(args.name) : null;
 
-  const res = checkWiring(REPO_ROOT, host, dossier, name);
+  const res = checkWiring(PROJECT_ROOT, host, dossier, name, CONFIG && CONFIG.wiring);
   process.stderr.write(`\n[pt-recon] wiring check for \`${host}\`${name ? ' (' + name + ')' : ''} across the touch list:\n\n`);
   for (const r of res.rows) {
     // ✓ present · optional/absent ? prose-unconfirmed ✗ required-code-missing
@@ -304,7 +314,7 @@ function cmdWiring(args) {
     process.stderr.write(`      ${r.label}\n`);
     if (r.note && !(r.status && r.kind === 'prose')) process.stderr.write(`      → ${r.note}\n`);
   }
-  process.stderr.write(`\n  price-bridge.js: ${res.priceBridgeNote}\n`);
+  if (res.priceBridgeNote) process.stderr.write(`\n  note: ${res.priceBridgeNote}\n`);
   process.stderr.write(`\n[pt-recon] ${res.verdict}\n`);
   if (res.missingRequired.length) {
     process.stderr.write('  still to wire (code): ' + res.missingRequired.map((r) => r.file).join(', ') + '\n');
@@ -320,12 +330,12 @@ function cmdScaffold(args) {
   const dossierDir = path.join(siteDir(site), 'dossier');
   if (!fs.existsSync(path.join(dossierDir, 'corpus.json'))) throw new Error(`no dossier for "${site}" — run distill --site ${site} first`);
   const outDir = path.join(siteDir(site), 'scaffold');
-  const res = scaffold(dossierDir, outDir, site);
-  process.stderr.write(`\n[pt-recon] scaffold → ${path.relative(REPO_ROOT, outDir)}\n`);
+  const res = scaffold(dossierDir, outDir, site, CONFIG && CONFIG.adapter);
+  process.stderr.write(`\n[pt-recon] scaffold → ${path.relative(PROJECT_ROOT, outDir)}\n`);
   for (const f of res.files) process.stderr.write(`  ${f}\n`);
   process.stderr.write(`  from: ${res.tokenPages} token page(s), ${res.refuseRoutes} refuse route(s), ${res.endpoints} endpoint(s), ${res.wsChannels} WS channel(s)\n`);
   if (!res.tokenPages) process.stderr.write(`  ⚠️  no token page captured — the gating test has no positive rows. Capture one and re-run.\n`);
-  process.stderr.write(`  These are DRAFTS with TODOs — confirm against the dossier + live site, prove the lock can fail, then copy into extension/test/.\n`);
+  process.stderr.write(`  These are DRAFTS with TODOs — confirm against the dossier + live site, prove the lock can fail, then copy into your test suite.\n`);
 }
 
 function cmdList() {
@@ -339,9 +349,35 @@ function cmdList() {
   }
 }
 
+function cmdInit(args) {
+  const dest = args.project && args.project !== true ? String(args.project) : process.cwd();
+  const { dest: file, created } = writeInitConfig(dest);
+  if (created) {
+    process.stderr.write(`[pt-recon] wrote ${file}\n  Edit it: set adapter.file/global and wiring.touchList for your project, then\n  add its dataDir to .gitignore. capture/distill work immediately; check/wiring use the config.\n`);
+  } else {
+    process.stderr.write(`[pt-recon] ${file} already exists — not overwriting.\n`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
+
+  // `init` writes a config; it must run BEFORE config resolution.
+  if (cmd === 'init') { cmdInit(args); return; }
+
+  // Resolve the project binding: --config, --project, walk-up from cwd, else the
+  // tool's own repo (PaperTrench). Sets the run context every command reads.
+  const resolved = loadConfig(args, TOOL_ROOT);
+  PROJECT_ROOT = resolved.projectRoot;
+  CONFIG = resolved.config;
+  DATA_ROOT = process.env.PT_RECON_DATA
+    ? path.resolve(process.env.PT_RECON_DATA)
+    : path.join(PROJECT_ROOT, CONFIG.dataDir || 'recon-data');
+  if (!resolved.found && ['check', 'wiring'].includes(cmd)) {
+    process.stderr.write('[pt-recon] no ptrecon.config.json found — check/wiring need one. Run `ptrecon init`, or pass --project <dir>.\n');
+  }
+
   fs.mkdirSync(DATA_ROOT, { recursive: true });
   try {
     if (cmd === 'capture') await cmdCapture(args);
@@ -352,15 +388,18 @@ async function main() {
     else if (cmd === 'diff') cmdDiff(args);
     else if (cmd === 'list') cmdList();
     else {
-      process.stderr.write('pt-recon — capture a site, distill a dossier.\n\n');
-      process.stderr.write('  capture --site <id> [--url U | --auto U1,U2] [--headed] [--minutes N] [--chrome PATH]\n');
-      process.stderr.write('  distill --site <id> [--capture DIR]\n');
-      process.stderr.write('  check    --site <id> [--adapter extension/sites.js]  # run your detect() over the real corpus\n');
-      process.stderr.write('  scaffold --site <id>                                 # draft the gating test + fake from the dossier\n');
-      process.stderr.write('  wiring   --site <id> | --host <host> [--name N]      # is the host registered in ALL ~10 touch-list files?\n');
-      process.stderr.write('  diff     --site <id>                                 # drift: diff the two newest captures\n');
+      process.stderr.write('pt-recon — capture a site, distill an evidence-cited dossier, verify your adapter.\n');
+      process.stderr.write(`  project: ${resolved.found ? CONFIG.project || PROJECT_ROOT : '(none — run `init`)'}   data: ${DATA_ROOT}\n\n`);
+      process.stderr.write('  capture  --site <id> [--url U | --auto U1,U2] [--headed] [--minutes N] [--chrome PATH]\n');
+      process.stderr.write('  distill  --site <id> [--capture DIR]\n');
+      process.stderr.write('  scaffold --site <id>                            # draft the gating test + fake from the dossier\n');
+      process.stderr.write('  check    --site <id> [--adapter PATH]           # run your detect() over the real captured pages\n');
+      process.stderr.write('  wiring   --site <id> | --host <host> [--name N] # is the host in every touch-list file?\n');
+      process.stderr.write('  diff     --site <id>                            # drift: diff the two newest captures\n');
+      process.stderr.write('  init     [--project DIR]                        # scaffold a ptrecon.config.json for a project\n');
       process.stderr.write('  list\n\n');
-      process.stderr.write('See docs/RECON.md.\n');
+      process.stderr.write('  Global flags: --project <dir> | --config <file> select the project binding.\n');
+      process.stderr.write('  See docs/RECON.md and .claude/skills/pt-recon/SKILL.md.\n');
       process.exitCode = cmd ? 1 : 0;
     }
   } catch (e) {
