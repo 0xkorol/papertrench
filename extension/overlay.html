@@ -48,7 +48,12 @@
       overflow: hidden;
     }
     body.layout-card .widget { width: 384px; }
-    body.layout-bar  .widget { display: flex; align-items: stretch; height: 84px; }
+    /* The bar WRAPS at narrow widths instead of crushing: it used to be a
+       fixed 84px flex row, and in a small OBS window the tiles (min-width:0)
+       shrank below their own nowrap labels — REALIZED/WIN RATE/ROUNDS
+       printed over each other (amogus field report, screenshot). Decoration
+       may wrap to a second row; numbers never overlap. */
+    body.layout-bar  .widget { display: flex; align-items: stretch; flex-wrap: wrap; min-height: 84px; }
 
     /* Ghost watermark behind the numbers. Deliberately not configurable:
        an overlay that could pass as a real-money P&L on stream would teach
@@ -143,9 +148,11 @@
     body.layout-bar .hero { padding: 0 16px; display: flex; flex-direction: column; justify-content: center; }
     body.layout-bar .equity { font-size: 24px; }
     body.layout-bar .delta { font-size: 11.5px; }
-    body.layout-bar .spark-wrap { width: 120px; padding: 0 6px; display: flex; align-items: center; }
+    body.layout-bar .head, body.layout-bar .hero { min-height: 84px; }
+    body.layout-bar .hero { white-space: nowrap; }
+    body.layout-bar .spark-wrap { width: 120px; padding: 0 6px; display: flex; align-items: center; min-height: 84px; }
     body.layout-bar .spark-wrap canvas { height: 40px; }
-    body.layout-bar .tiles { padding: 0 10px; grid-template-columns: repeat(4, auto); align-content: center; gap: 6px; }
+    body.layout-bar .tiles { flex: none; padding: 8px 10px; grid-template-columns: repeat(4, auto); align-content: center; gap: 6px; }
     body.layout-bar .tile { padding: 6px 9px; }
     body.layout-bar .positions {
       flex: 1; min-width: 0; padding: 0 12px;

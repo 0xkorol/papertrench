@@ -385,15 +385,39 @@
 
   let uiSettings = { tradeEffectsEnabled: true, tradeSoundsEnabled: true };
 
-  function loadUiSettings() {
+  // The app-wide master switch. The perps surface shipped after appEnabled
+  // existed and never learned it — the popup read OFF while the PAPER PERPS
+  // ticket sat on Hyperliquid anyway (amogus field report, screenshot with
+  // both in frame). Off means nothing PaperTrench owns may exist on the
+  // page; the paper book itself persists untouched, exactly like spot.
+  let masterOff = false;
+
+  function applyMasterSwitch(s) {
+    const off = Boolean(s) && s.appEnabled === false;
+    if (off === masterOff) return;
+    masterOff = off;
+    if (off) {
+      leavePage();
+    } else {
+      // Re-enabled: forget the last href so the location poll re-enters the
+      // page and remounts as if freshly navigated.
+      lastHref = '';
+      pollLocation();
+    }
+  }
+
+  function loadUiSettings(done) {
     try {
       chrome.storage.local.get(['pt_settings'], (o) => {
         const s = o && o.pt_settings;
-        if (!s || typeof s !== 'object') return;
-        if (typeof s.tradeEffectsEnabled === 'boolean') uiSettings.tradeEffectsEnabled = s.tradeEffectsEnabled;
-        if (typeof s.tradeSoundsEnabled === 'boolean') uiSettings.tradeSoundsEnabled = s.tradeSoundsEnabled;
+        if (s && typeof s === 'object') {
+          if (typeof s.tradeEffectsEnabled === 'boolean') uiSettings.tradeEffectsEnabled = s.tradeEffectsEnabled;
+          if (typeof s.tradeSoundsEnabled === 'boolean') uiSettings.tradeSoundsEnabled = s.tradeSoundsEnabled;
+          applyMasterSwitch(s);
+        }
+        if (done) done();
       });
-    } catch (e) { /* defaults stand */ }
+    } catch (e) { if (done) done(); /* defaults stand */ }
   }
 
   let audioCtx = null;
@@ -942,6 +966,7 @@
    * seconds rather than one per tick, and it stops the moment entry
    * succeeds or the market is positively ruled out. */
   function pollLocation() {
+    if (masterOff) return; // the master switch owns page presence
     const now = Date.now();
     if (location.href !== lastHref) {
       lastHref = location.href;
@@ -1012,7 +1037,9 @@
     if (area === 'local' && changes.pt_settings) loadUiSettings();
   });
 
-  loadUiSettings();
+  // The first mount waits for settings: a user who turned the master switch
+  // OFF must never see the ticket flash in before the read lands.
+  loadUiSettings(pollLocation);
   managedInterval(pollLocation, LOCATION_POLL_MS);
   managedInterval(pollVenueParams, VENUE_PARAM_POLL_MS);
   managedInterval(refreshParams, PARAMS_REFRESH_MS);
@@ -1024,5 +1051,4 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && alive()) carryTick();
   });
-  pollLocation();
 })();

@@ -130,7 +130,13 @@
       background: var(--raised); border: 1px solid var(--line-2); color: var(--text);
       font-family: var(--mono); font-size: 12px;
     }
-    .qs select { font-family: inherit; }
+    /* The OPEN dropdown is UA-drawn: without color-scheme it renders a LIGHT
+       list while the options inherit this panel's near-white text — white on
+       white (amogus field report, "the text color and background color are
+       the same"). color-scheme flips the UA chrome dark; the explicit option
+       colors cover engines that honor them directly. */
+    .qs select { font-family: inherit; color-scheme: dark; }
+    .qs select option { background: #10141C; color: var(--text); }
     .qs input:focus, .qs select:focus { outline: none; border-color: rgba(255, 157, 69, 0.55); }
     .qs .btns { padding: 3px 0 0; }
     #status { padding: 8px 16px 14px; font-size: 11px; color: var(--faint); min-height: 14px; }

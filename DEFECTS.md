@@ -970,6 +970,15 @@ Not teardown-registered; accumulate per overlay off→on cycle, survive shutdown
 within ~4 s stacks on the 1st; toasts don't follow a dragged panel. confirmed · **fixed v2.0.0** (8 owned slots + bounded queue; stack follows the panel and clears the header)
 **O-29 · S5 · Row-buy debounce fires one scan after teardown** — `content.js:2950-2958`.
 confirmed · **fixed v2.0.0** (debounce cancelled in stopRowBuyObserver from both teardown paths)
+**O-30 · S3 · The perps surface ignored the app-wide master switch** —
+`perps-content.js` had zero `appEnabled` references: the popup read OFF while
+the PAPER PERPS ticket sat on Hyperliquid anyway (amogus field report,
+2026-08-07, screenshot with both in frame). The perps stack shipped after
+appEnabled existed and never learned it — "off means PaperTrench exists
+NOWHERE" held for spot, warm links, and the bar, but not the newest surface.
+confirmed · **fixed (unreleased)** (applyMasterSwitch: off → leavePage, the
+location poll refuses to remount, the FIRST mount waits for the settings
+read so an OFF user never sees a flash; locked in masterswitch.test.js)
 
 ### Movable-elements inventory (summary)
 

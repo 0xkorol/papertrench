@@ -1577,23 +1577,33 @@ function warmDestFeatureOn(settings) {
 }
 
 const WARM_DEST_FAMILIES = {
+  // EVERY family is click-created now — idleUrl is dead by doctrine. The
+  // pump.fun/Solscan pair used to pre-create at trading-page load "so the
+  // session's first click is warm", and users kept reading the appearing
+  // tabs as a malfunction: Eyes343 ("open every time you open/refresh the
+  // DEX", patched with a session-scoped closed-marker) and then TRNC anyway
+  // ("when i load up it randomly opens solscan and pump.fun website") —
+  // the session marker evaporates with every browser restart, so the tabs
+  // came back each morning by construction. Two independent reports of the
+  // same confusion is the answer: PaperTrench never opens a tab the user
+  // did not click for. The first click pays cold and becomes the viewer;
+  // every click after that is warm; hover hints only ever navigate a
+  // viewer that a real click created.
   pumpfun: {
     storageKey: 'pt_warm_tab_pumpfun',
-    idleUrl: 'https://pump.fun/board',
+    idleUrl: null,
     hostRe: /(^|\.)pump\.fun$/,
     label: 'pump.fun',
   },
   solscan: {
     storageKey: 'pt_warm_tab_solscan',
-    idleUrl: 'https://solscan.io/',
+    idleUrl: null,
     hostRe: /(^|\.)solscan\.io$/,
     label: 'Solscan',
   },
-  // The main terminals (maintainer's call: Padre, Axiom, GMGN). No idleUrl —
-  // terminal pages are HEAVY, so these viewers are never pre-created: the
-  // first cross-terminal click pays cold and becomes the viewer, every click
-  // after that is a warm navigate-and-reveal. Prewarm would mean up to five
-  // muted background tabs, which reads as an infestation, not a feature.
+  // The main terminals (maintainer's call: Padre, Axiom, GMGN). Terminal
+  // pages are HEAVY besides: pre-creation here would mean up to five muted
+  // background tabs, which reads as an infestation, not a feature.
   axiom: {
     storageKey: 'pt_warm_tab_axiom',
     idleUrl: null,
@@ -1798,32 +1808,13 @@ function writeWarmDestClosed(family, closed) {
   });
 }
 
-/** Pre-create both hidden viewers so the session's FIRST click is warm.
- * Idempotent under warmSerial, exactly like warmPrewarm — and idempotent
- * against user INTENT: a family whose viewer the user closed sits out until
- * a real click re-requests it. */
-function warmDestPrewarm() {
-  return warmSerial(async () => {
-    const settings = await getSettings();
-    if (!warmDestFeatureOn(settings)) return;
-    for (const family of Object.keys(WARM_DEST_FAMILIES)) {
-      const spec = WARM_DEST_FAMILIES[family];
-      if (!spec.idleUrl) continue; // terminal viewers are click-created only
-      if (await validWarmDestTab(family)) continue;
-      if (await readWarmDestClosed(family)) continue; // closed by the user: stay closed
-      let tab = null;
-      try { tab = await chrome.tabs.create({ url: spec.idleUrl, active: false }); } catch (_) { tab = null; }
-      if (!tab || !Number.isFinite(tab.id)) continue;
-      try { await chrome.tabs.update(tab.id, { muted: true }); } catch (_) {}
-      await writeWarmDestTab(family, { tabId: tab.id, used: false, createdAt: Date.now() });
-    }
-  });
-}
+// warmDestPrewarm used to live here — pre-creating the pump.fun/Solscan
+// viewers at trading-page load. Removed with the idleUrl doctrine change
+// above: viewer creation is click-only, everywhere, so no code path may
+// create a destination tab outside warmDestOpen.
 
 async function warmDestSettingsChanged(settings) {
   if (warmDestFeatureOn(settings)) {
-    const tabs = await new Promise((resolve) => chrome.tabs.query({ url: WARM_PLATFORM_URLS }, (result) => resolve(result || [])));
-    if (tabs.length) warmDestPrewarm().catch(() => {});
     return;
   }
   for (const family of Object.keys(WARM_DEST_FAMILIES)) {
@@ -2635,8 +2626,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
 
+      // pt_warmdest_prewarm existed here until the click-only doctrine
+      // (TRNC/Eyes343 reports); an old content script still sending it gets
+      // a polite no-op instead of an "unknown type" error.
       case 'pt_warmdest_prewarm':
-        warmDestPrewarm().catch(() => {});
         sendResponse({ ok: true });
         break;
 

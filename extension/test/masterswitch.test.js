@@ -88,3 +88,20 @@ test('turning the master switch back on restores the previous configuration', ()
   assert.deepEqual(backOn, stored,
     'off-then-on must round-trip to exactly the configuration the user had');
 });
+
+test('the perps surface honors the master switch (amogus: OFF popup, ticket still mounted)', () => {
+  // The perps stack shipped after appEnabled existed and never learned it —
+  // the popup read OFF while the PAPER PERPS ticket sat on Hyperliquid
+  // anyway. Every surface that mounts UI must check the master switch.
+  const src = read('perps-content.js');
+  assert.match(src, /const off = Boolean\(s\) && s\.appEnabled === false;/,
+    'the perps surface must read the master switch');
+  assert.match(src, /if \(off\) \{\s*\n\s*leavePage\(\);/,
+    'flipping OFF must unmount everything the perps surface owns');
+  assert.match(src, /if \(masterOff\) return; \/\/ the master switch owns page presence/,
+    'the location poll must refuse to (re)mount while the master is off');
+  assert.match(src, /loadUiSettings\(pollLocation\);/,
+    'the first mount must wait for the settings read — an OFF user must never see the ticket flash in');
+  assert.match(src, /applyMasterSwitch\(s\);/,
+    'live settings changes must reach the master-switch handler');
+});

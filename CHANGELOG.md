@@ -3,6 +3,33 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## Unreleased
+
+- **The OFF switch now turns everything off — including paper perps.** The
+  perps ticket shipped after the master switch existed and never learned
+  it, so "Turn PaperTrench on" could be showing while the ticket sat on
+  Hyperliquid anyway (field report with the screenshot to prove it). Off
+  now means off on every surface, and the ticket won't even flash in
+  before the setting is read.
+
+- **PaperTrench never opens a tab you didn't click for.** The speed
+  feature used to pre-open hidden pump.fun and Solscan viewer tabs so your
+  first click would land warm — and two users independently read the
+  appearing tabs as a malfunction ("when i load up it randomly opens
+  solscan and pump.fun"). Every warm viewer is now created only by your
+  own click; the first click pays cold, every one after is instant, and
+  hovering can only ever pre-navigate a tab your click already created.
+
+- **The stream overlay bar stopped printing labels over each other.** In a
+  narrow OBS window the bar's stat tiles crushed together (REALIZED / WIN
+  RATE / ROUNDS overlapping). The bar now wraps to a second row instead of
+  crushing — every label readable at any window width.
+
+- **The Fees & costs dropdown is readable again.** The open dropdown list
+  rendered white-on-white on Windows (the browser draws that list, and it
+  ignored the panel's dark theme). Both the popup's quick settings and
+  every dashboard dropdown now declare their color scheme.
+
 ## v3.1.0 — 2026-08-06
 
 Every item in this release traces to a named field report from the last two

@@ -231,6 +231,11 @@
       font-family: inherit; font-size: 13px;
       transition: border-color 0.16s, box-shadow 0.16s, background 0.16s;
     }
+    /* The OPEN dropdown list is UA-drawn: without color-scheme it renders
+       light while options inherit near-white text — white on white (the
+       popup's Fees & costs had exactly this, amogus field report). */
+    select { color-scheme: dark; }
+    select option { background: #10141C; color: var(--text); }
     input:focus, select:focus, textarea:focus {
       outline: none; border-color: rgba(255, 157, 69, 0.6);
       box-shadow: 0 0 0 3px rgba(255, 157, 69, 0.12);

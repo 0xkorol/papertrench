@@ -106,10 +106,18 @@ test('warmdest.js is wired into the right worlds in the right order', () => {
 test('every warmdest message type sent has a handler on the other side', () => {
   const background = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
   const warmLinks = fs.readFileSync(path.join(ROOT, 'warm-links.js'), 'utf8');
-  for (const type of ['pt_warmdest_open', 'pt_warmdest_hint', 'pt_warmdest_prewarm']) {
+  for (const type of ['pt_warmdest_open', 'pt_warmdest_hint']) {
     assert.match(warmLinks, new RegExp(`type: '${type}'`), `warm-links.js must send ${type}`);
     assert.match(background, new RegExp(`case '${type}'`), `background.js must handle ${type}`);
   }
+  // The prewarm ping is RETIRED (Eyes343/TRNC: tabs appearing without a
+  // click read as a malfunction). Nothing may send it; the worker keeps a
+  // tolerated no-op case so an old content script gets a polite ok instead
+  // of an unknown-type error.
+  assert.doesNotMatch(warmLinks, /type: 'pt_warmdest_prewarm'/,
+    'warm-links.js must no longer ask for pre-created viewers');
+  assert.match(background, /case 'pt_warmdest_prewarm'/,
+    'the worker keeps the tolerated no-op case for old content scripts');
 });
 
 /* ---------------- background flows ---------------- */
@@ -330,21 +338,21 @@ test('hints never create tabs and never touch a viewer the user is reading', asy
     'an active viewer is being READ — hover prefetch must not navigate it');
 });
 
-test('prewarm creates both hidden muted viewers, idempotently', async () => {
+test('the prewarm ping is a no-op — NOTHING is created without a click', async () => {
+  // Doctrine change after two independent reports of the same confusion
+  // (Eyes343: "open every time you open/refresh the DEX"; TRNC: "when i
+  // load up it randomly opens solscan and pump.fun website"). The
+  // session-scoped closed-marker patch evaporated with every browser
+  // restart, so the tabs came back each morning by construction. Viewer
+  // creation now lives in the click path alone, for every family.
   const worker = destWorker({ platformTabs: [{ id: 7 }] });
   await send(worker.listener, { type: 'pt_warmdest_prewarm' });
-  await worker.settle();
-  const created = worker.calls.created;
-  assert.equal(created.length, 2, 'one viewer per family');
-  assert.ok(created.every((c) => c.active === false), 'prewarmed viewers stay hidden');
-  const mutes = worker.calls.updated.filter((u) => u.props.muted === true);
-  assert.equal(mutes.length, 2, 'both viewers are muted while hidden');
-  assert.equal(worker.session.pt_warm_tab_pumpfun.used, false);
-  assert.equal(worker.session.pt_warm_tab_solscan.used, false);
-
   await send(worker.listener, { type: 'pt_warmdest_prewarm' });
   await worker.settle();
-  assert.equal(worker.calls.created.length, 2, 'a second prewarm creates nothing new');
+  assert.equal(worker.calls.created.length, 0,
+    'no tab may ever be created by a prewarm ping');
+  assert.equal(worker.session.pt_warm_tab_pumpfun, undefined, 'no registration either');
+  assert.equal(worker.session.pt_warm_tab_solscan, undefined);
 });
 
 test('toggle-off closes only never-used hidden viewers and clears every registration', async () => {
@@ -380,33 +388,30 @@ test('closing a viewer clears its registration and does NOT respawn it', async (
     'destination viewers do not respawn — a closed viewer stays closed until the next click');
 });
 
-test('a user-closed viewer stays closed through PREWARM; a real click revives the family', async () => {
-  // Community report (Eyes343): pump.fun + Solscan "open every time you
-  // open/refresh the DEX". warm-links.js fires pt_warmdest_prewarm on every
-  // page load (its enabled-edge detector is per-page), and prewarm happily
-  // recreated whatever the user had just closed. The closed marker makes the
-  // user's close stick for the browser session; a genuine click lifts it.
+test('a closed viewer stays closed whatever pings arrive; only a real click revives the family', async () => {
+  // The click creates; the user's close is an instruction; nothing between
+  // those two events may create a tab. (Eyes343's refresh-infestation and
+  // TRNC's load-up report are both this rule, violated.)
   const worker = destWorker({ platformTabs: [{ id: 7 }] });
-  await send(worker.listener, { type: 'pt_warmdest_prewarm' });
+  await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
   await worker.settle();
-  assert.equal(worker.calls.created.length, 2, 'both viewers prewarm initially');
+  assert.ok(worker.session.pt_warm_tab_pumpfun, 'a real click creates the family viewer');
+  const createdAfterClick = worker.calls.created.length;
 
   const pumpId = worker.session.pt_warm_tab_pumpfun.tabId;
   worker.tabsById.delete(pumpId);
   worker.listeners.onRemoved(pumpId, { isWindowClosing: false });
   await worker.settle();
 
-  // The DEX refreshes — warm-links fires prewarm again, twice for good measure.
+  // The DEX refreshes — an old content script pings prewarm, twice.
   await send(worker.listener, { type: 'pt_warmdest_prewarm' });
   await send(worker.listener, { type: 'pt_warmdest_prewarm' });
   await worker.settle();
-  assert.equal(worker.calls.created.length, 2,
-    'prewarm must never resurrect a viewer the user closed (the refresh-infestation report)');
+  assert.equal(worker.calls.created.length, createdAfterClick,
+    'nothing may resurrect a viewer the user closed');
   assert.equal(worker.session.pt_warm_tab_pumpfun, undefined, 'no zombie registration either');
-  assert.ok(worker.session.pt_warm_tab_solscan, 'the untouched family keeps its viewer');
 
-  // A real pump.fun click is the user asking for the destination again — it
-  // lifts the marker and the family recreates on the spot.
+  // A real pump.fun click is the user asking for the destination again.
   await send(worker.listener, { type: 'pt_warmdest_open', url: COIN });
   await worker.settle();
   assert.ok(worker.session.pt_warm_tab_pumpfun, 'the click recreates the family viewer');
@@ -548,8 +553,8 @@ test('terminal viewers are never pre-created — first click pays, then it is wa
   const worker = destWorker({ platformTabs: [{ id: 7 }] });
   await send(worker.listener, { type: 'pt_warmdest_prewarm' });
   await worker.settle();
-  assert.equal(worker.calls.created.length, 2,
-    'prewarm creates ONLY the light pumpfun/solscan viewers, never terminal tabs');
+  assert.equal(worker.calls.created.length, 0,
+    'nothing is pre-created — for terminals or anyone else (click-only doctrine)');
 
   const AXIOM_URL = `https://axiom.trade/meme/${MINT}`;
   const first = await send(worker.listener, { type: 'pt_warmdest_open', url: AXIOM_URL });
@@ -621,8 +626,8 @@ test('the new families ride the click-created viewer flow, never prewarm', async
   const worker = destWorker({ platformTabs: [{ id: 7 }] });
   await send(worker.listener, { type: 'pt_warmdest_prewarm' });
   await worker.settle();
-  assert.equal(worker.calls.created.length, 2,
-    'prewarm still creates ONLY the light pumpfun/solscan viewers — none of the new families');
+  assert.equal(worker.calls.created.length, 0,
+    'nothing is pre-created for any family (click-only doctrine)');
 
   const DEX_URL = `https://dexscreener.com/solana/${MINT}`;
   const first = await send(worker.listener, { type: 'pt_warmdest_open', url: DEX_URL });

@@ -70,11 +70,10 @@
     cardsEnabled = !!(settings && settings.warmHoverCardsEnabled);
     rowHoverEnabled = !!(settings && settings.warmHoverRowEnabled);
     const everywhereOn = !!(settings && settings.warmEverywhereEnabled);
-    const everywhereTurnedOn = everywhereOn && !everywhereEnabled;
     everywhereEnabled = everywhereOn;
-    if (everywhereTurnedOn && contextAlive()) {
-      chrome.runtime.sendMessage({ type: 'pt_warmdest_prewarm' }).catch(() => {});
-    }
+    // No prewarm ping here anymore: destination viewers are click-created
+    // only (TRNC/Eyes343 — tabs appearing without a click read as a bug,
+    // however warm they made the first open).
     setEnabled(on);
   }
 

@@ -1128,6 +1128,21 @@ test('adoption never claims a tab the user is looking at, nor a pinned or audibl
   assert.equal(worker.session.pt_warm_tab.tabId, worker.calls.created[0].id);
 });
 
+test('destination viewers are click-created ONLY — no code path opens a tab the user did not click for', () => {
+  // Two independent field reports of the same confusion (Eyes343: "open
+  // every time you open/refresh the DEX"; TRNC: "when i load up it randomly
+  // opens solscan and pump.fun website") — the pre-created viewers read as
+  // a malfunction, and the session-scoped closed-marker patch evaporated
+  // with every browser restart. Doctrine now: viewer creation lives in the
+  // click path alone, for every family.
+  const src = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  const families = src.slice(src.indexOf('const WARM_DEST_FAMILIES'), src.indexOf('function warmDestFamilyFor') === -1 ? src.indexOf('const WD =') + 4000 : src.indexOf('function warmDestFamilyFor'));
+  assert.doesNotMatch(families, /idleUrl: 'http/,
+    'no destination family may carry a pre-creation URL');
+  assert.doesNotMatch(src, /function warmDestPrewarm/,
+    'the prewarm creator must stay deleted — creation is click-only');
+});
+
 test('prewarm adopts an existing X tab rather than spawning a second one', async () => {
   const worker = warmWorker({ xTabs: [{ id: 75, url: 'https://x.com/home' }] });
   await send(worker.listener, { type: 'pt_warm_prewarm' });
