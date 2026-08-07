@@ -486,6 +486,28 @@ the attestation preimage is untouched). The NEXT occurrence names its
 source in the dashboard journal instead of demanding screenshot forensics.
 Close this defect only by reproducing it with the receipt in hand.
 
+**F-49 · S1 · Axiom mcap-mode: B/S bubbles drawn away from where the trader actually bought and sold**
+toshi100x, Discord screenshot 2026-08-07 (Axiom, "…/USD on Pump" pair,
+MCap axis, both markers displaced from the click points) · **open — needs
+the fill receipts before any fix; do not fix on inference (F-45 rule)**.
+The drawing path is honest (bubbles plot the fill's recorded values; the
+bridge picks the axis), so the recorded values disagreed with the screen.
+Three candidate mechanisms, each with a DIFFERENT fix:
+ (a) the F-48 class pre-receipts: the fill priced from a source lagging
+     the chart by under the witness's 2x ratio — if he is on ≤v3.1.0 this
+     is plausibly already-shipped territory;
+ (b) mixed-supply cap labels: fill.mcap derived through anchor ratios
+     whose mcap/priceUsd pair implied a different SUPPLY than the chart's
+     own cap math (Axiom cap vs aggregator cap disagree when LP burned /
+     supply ≠ 1e9 — both markers then sit at a CONSTANT relative offset,
+     which matches the screenshot's shape);
+ (c) a draw-time derivation for capless fills (genericChartPoint's
+     usd × liveSupply) mixing a click-time price with a later supply.
+Discriminating data, one message from the reporter: extension version,
+the two fill rows from the dashboard (v3.2.0+ receipts name each fill's
+price source and its age), and the prices he believes he traded at.
+Receipts landed in cb17fe1 for exactly this conversation.
+
 **F-47 · S1 · a fill could execute at a resurrected dead price — a loss rendered as +167%**
 content.js quoteForTrade / quote.js · chatcabal, Twitch + Matt Buitrago's
 Discord screenshots, 2026-08-06 (Axiom, migrated Pump-AMM coin "fork",
