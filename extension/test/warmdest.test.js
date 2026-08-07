@@ -510,6 +510,13 @@ test('the classifier routes the main terminals token pages and refuses their oth
   assert.equal(WD.classify(`https://www.fomo.family/tokens/solana/${MINT}`).url,
     `https://fomo.family/tokens/solana/${MINT}`, 'www canonicalizes to the bare host');
 
+  const lute = WD.classify(`https://lute.gg/trade/${MINT}?ref=abc`);
+  assert.equal(lute && lute.family, 'lute');
+  assert.equal(lute.url, `https://lute.gg/trade/${MINT}?ref=abc`,
+    'query passes byte-for-byte');
+  assert.equal(WD.classify(`https://www.lute.gg/trade/${MINT}`).url,
+    `https://lute.gg/trade/${MINT}`, 'www canonicalizes to the bare host');
+
   // The O-10/O-11 discipline carries over: wallet/portfolio/EVM routes and
   // the terminals own list pages must never warm-route.
   for (const href of [
@@ -523,6 +530,9 @@ test('the classifier routes the main terminals token pages and refuses their oth
     'https://fomo.family/u/sometrader',
     'https://fomo.family/profile/sometrader',
     'https://fomo.family/token',
+    'https://lute.gg/trade/compass',
+    'https://lute.gg/trade',
+    'https://lute.gg/login',
   ]) {
     assert.equal(WD.classify(href), null, `${JSON.stringify(href)} must not classify`);
   }

@@ -9,7 +9,7 @@ check it off.
 fresh profile preferred. Have one coin with an open paper position before starting.
 
 | Check | Axiom | Padre | Photon | GMGN | BullX | DexScr | Birdeye | Jupiter | Pump.fun | Lute |
-|---|---|---|---|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|---|---|---|
 | Panel mounts on a token page | | | | | | | | | |
 | Panel does NOT mount on home/screener | | | | | | | | | |
 | Panel does NOT mount on wallet/portfolio routes | | | | | | | | | |
