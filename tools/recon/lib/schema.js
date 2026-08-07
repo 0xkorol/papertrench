@@ -12,25 +12,34 @@ function typeOf(v) {
   return typeof v; // string | number | boolean | object | undefined
 }
 
+const MAX_SHAPE_DEPTH = 40; // JSON.parse accepts far deeper; recursing to match blows the stack
+
 // Merge a value into an accumulating shape node. Objects track per-key shapes
 // and how often each key was present (so "optional" is evidence, not a guess).
-function mergeShape(node, value, samples) {
+// Depth is capped: a hostile or pathological payload can nest thousands deep
+// (JSON.parse is iterative and accepts it), and recursing that far would throw
+// an uncaught RangeError and abort the entire distill.
+function mergeShape(node, value, samples, depth = 0) {
   const t = typeOf(value);
   if (!node) node = { types: {}, count: 0 };
   node.count++;
   node.types[t] = (node.types[t] || 0) + 1;
+  if (depth >= MAX_SHAPE_DEPTH && (t === 'object' || t === 'array')) {
+    node.truncatedDepth = true;
+    return node;
+  }
   if (t === 'object') {
     node.props = node.props || {};
     node.keyPresence = node.keyPresence || {};
     node.objCount = (node.objCount || 0) + 1;
     for (const [k, v] of Object.entries(value)) {
       node.keyPresence[k] = (node.keyPresence[k] || 0) + 1;
-      node.props[k] = mergeShape(node.props[k], v, samples);
+      node.props[k] = mergeShape(node.props[k], v, samples, depth + 1);
     }
   } else if (t === 'array') {
     node.itemCount = (node.itemCount || 0) + 1;
     node.lenSum = (node.lenSum || 0) + value.length;
-    for (const item of value.slice(0, 40)) node.item = mergeShape(node.item, item, samples);
+    for (const item of value.slice(0, 40)) node.item = mergeShape(node.item, item, samples, depth + 1);
   } else if (t === 'string') {
     node.samples = node.samples || new Set();
     if (node.samples.size < 5) node.samples.add(value.slice(0, 40));
@@ -54,14 +63,20 @@ function classifyString(prev, s) {
   return cls;
 }
 
+// A field whose NAME looks secret must not reveal its numeric value through the
+// min/max range (a downstream scrubber redacts strings, not a bare integer like
+// an otp). Suppress the range for these; the shape (type) is still shown.
+const SECRET_NAME_RE = /(otp|cvv|passcode|verification[_-]?code|one[_-]?time|secret|password|passwd|mnemonic|seed[_-]?phrase|privkey|private[_-]?key)/i;
+
 // Render a shape node into terse lines for the dossier.
 function renderShape(node, name = '$', depth = 0, out = [], maxDepth = 4) {
   if (!node || depth > maxDepth) return out;
   const pad = '  '.repeat(depth);
   const types = Object.entries(node.types).sort((a, b) => b[1] - a[1]).map(([t]) => t).join('|');
+  const secretName = SECRET_NAME_RE.test(String(name));
   let extra = '';
   if (node.strClass && node.strClass !== 'text') extra += ` «${node.strClass}»`;
-  if (node.min !== undefined) extra += ` [${node.min}..${node.max}]`;
+  if (node.min !== undefined && !secretName) extra += ` [${node.min}..${node.max}]`;
   if (node.item && node.itemCount) extra += ` avgLen=${(node.lenSum / node.itemCount).toFixed(1)}`;
   out.push(`${pad}${name}: ${types}${extra}`);
   if (node.props) {
@@ -100,7 +115,9 @@ function isVarSegment(seg) {
 const KNOWN_CHAINS = new Set([
   'solana', 'sol', 'ethereum', 'eth', 'base', 'bsc', 'bnb', 'polygon', 'matic',
   'arbitrum', 'arb', 'avax', 'avalanche', 'blast', 'optimism', 'op', 'sui',
-  'ton', 'tron', 'trx', 'pulse', 'pulsechain', 'hyperliquid', 'hyperevm', 'abstract', 'berachain', 'sonic', 'ink', 'unichain',
+  // NOTE: bare 'pulse' is deliberately excluded — it collides with the screener
+  // tab name (axiom.trade/pulse); pulsechain's slug is 'pulsechain'.
+  'ton', 'tron', 'trx', 'pulsechain', 'hyperliquid', 'hyperevm', 'abstract', 'berachain', 'sonic', 'ink', 'unichain',
 ]);
 
 // Returns { pattern, host, segs:[{raw,var}], chainCandidates:[...] }

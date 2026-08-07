@@ -42,6 +42,14 @@ node tools/recon/ptrecon.js scaffold --site gmgn
 #    and flag disagreements (a token page you refuse, a wallet page you mount)
 #    BEFORE the live pass. This is the loop closing on itself.
 node tools/recon/ptrecon.js check --site gmgn
+
+# 6. WIRING — did you register the host in ALL ~10 touch-list files (manifest's
+#    three lists, warmdest, xray-core, …), or leave one on the table?
+node tools/recon/ptrecon.js wiring --site gmgn --name GMGN
+
+# Later: DIFF — re-capture on a schedule and diff dossiers; a renamed route,
+# dropped selector, or vanished WS surfaces as a review before a user hits it.
+node tools/recon/ptrecon.js diff --site gmgn
 ```
 
 Headed captures use a persistent profile per site (log in once, stay logged in;
@@ -117,7 +125,39 @@ adapter without a round-trip through the live site for every mistake.
   **live** price that your adapter **refuses** (`MISSED_TOKEN_PAGE`), and a
   wallet/holders/screener page that your adapter **mounts** (`OVER_MOUNT`,
   O-10). It reports; the `sitegating` locks still decide — but now you find the
-  disagreement before the live pass, not after a user does.
+  disagreement before the live pass, not after a user does. It reads a token
+  page whose address is in the **query string** (BullX `?address=`) as a token
+  page, and a `/address/<wallet>` route or `?tab=holders` sub-view as history.
+
+## Wiring completeness and drift
+
+- **`wiring`** answers "did I register the host everywhere?". Adding a site
+  touches ~10 files with no central registry, so it is easy to wire the adapter
+  and forget `warmdest.js`, `xray-core.js`, or the manifest's third list. It
+  greps every touch-list file (checking the manifest's MAIN + ISOLATED
+  content-scripts + web-accessible-resources specifically) and reports what is
+  still missing, using the dossier to resolve the conditional ones (a
+  `title-feed.js` entry is only required if §1 says the default title does not
+  fit). Code files are a hard ✓/✗; prose files (README, site, QA-MATRIX) key on
+  the display *name* (often abbreviated), so a miss there is "confirm by hand",
+  not a failure. It is a checklist, not a lock.
+- **`diff`** is drift watch. Re-capture a site later and it distills the two
+  newest captures and diffs the structural sidecars: a **removed** route,
+  endpoint, or high-observation DOM anchor — the things a landed adapter relies
+  on — is a warning; additions are informational; a WS that stopped delivering
+  frames flags that the live source may have moved.
+
+## When the WebSocket is rejected
+
+A socket that OPENS, gets a **403 on the upgrade** (bot-gated under automation),
+and delivers **zero frames** is reported as **WS-REJECTED**, distinct from "no
+WS traffic" — the channel never connected, so the live price came from
+elsewhere (polling), and faking a WS the capture never saw carry data is an
+F-39 violation. A logged-in capture may connect where an anonymous one is gated.
+When a live DOM node is fed by a vocab-less socket (`ws-stream`), **PROV-WSMUX**
+warns that a generic socket can multiplex price *and* history frames — inspect
+the frame taxonomy before trusting it as market data. A price matched only in
+the page's initial HTML is labeled `initial-html`, not a market API.
 
 ## Honesty rules (the point of the tool)
 

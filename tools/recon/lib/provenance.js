@@ -33,15 +33,22 @@ function extractNumbers(text, cap = 20000) {
   return nums;
 }
 
-// Canonical key for a number: collapse to significant digits so 1.2345 and
-// 1.23450001 (float noise) and "1.2345" all land on the same bucket, while
-// keeping enough precision that distinct prices stay distinct.
+// Canonical key for a number: round to 6 significant figures so 1.2345 and
+// 1.23450001 (float/render noise) land on the same bucket, then render as a
+// plain number. Crucially it does NOT strip integer trailing zeros — the old
+// version turned 120000 into "12", collapsing distinct market-caps into one
+// bucket and making real mcap/volume values non-distinctive.
 function canonNum(val) {
-  if (val === 0) return '0';
-  const abs = Math.abs(val);
-  // 6 significant figures is plenty to distinguish memecoin prices without
-  // over-splitting on render rounding.
-  return val.toPrecision(Math.min(6, Math.max(1, 6))).replace(/\.?0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+  if (!Number.isFinite(val) || val === 0) return '0';
+  const r = Number(val.toPrecision(6));
+  let s = r.toString();
+  if (s.indexOf('e') !== -1 || s.indexOf('E') !== -1) {
+    // Expand exponential to plain decimal so a tiny memecoin price (2e-7) keeps
+    // its fractional form and stays distinctive. Strip only FRACTIONAL trailing
+    // zeros (the run after the dot) — never integer magnitude.
+    s = r.toFixed(20).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+  }
+  return s;
 }
 
 // Parse a DOM price string ("$12.3K", "1,234", "45%") into its numeric value(s).
@@ -62,6 +69,9 @@ function domValueToNumbers(txt) {
 }
 
 function classifyOriginRole(url, kind) {
+  // A match against the page document is the INITIAL server-rendered value, not
+  // a live feed — never mistake it for a market API.
+  if (kind === 'doc') return 'initial-html';
   const u = (url || '').toLowerCase();
   // Strong HISTORY signals by route vocabulary.
   if (/\b(trades?|history|holders?|holding|positions?|portfolio|activity|txns?|transactions?|fills?|orders?|pnl|leaderboard|top-?traders?|wallet)\b/.test(u)) return 'history-shaped';
@@ -71,18 +81,38 @@ function classifyOriginRole(url, kind) {
   return 'unclassified';
 }
 
+// A number only discriminates origins if it is DISTINCTIVE: a fractional price
+// or a large value (market-cap / volume scale). Bare small integers — counts,
+// single digits, percentages like "5", "12" — appear in nearly every payload,
+// so correlating on them ties a DOM node to unrelated origins and manufactures
+// spurious market/history "mixed" verdicts. (Measured on a live DexScreener
+// token page: filtering these collapsed the false correlations dramatically.)
+function isDistinctive(canonStr) {
+  if (typeof canonStr !== 'string' || !canonStr) return false;
+  if (canonStr.includes('.')) return true;      // a fractional value — a real price
+  return canonStr.replace('-', '').length >= 4; // >= 1000: mcap / volume scale
+}
+
+const AMBIENT_URL_SPREAD = 8; // a number across more origins than this cannot discriminate
+
 // events: parsed domsig lines [{t, sid, prices:[[path,txt],...]}]
 // origins: [{ t, kind:'rest'|'ws', url, numbers:Set<string>, updates:number }]
 //   For WS, callers should pre-group frames per channel and pass one origin per
 //   frame occurrence (we count how many distinct frames carried each number).
 function correlate(sigEvents, origins) {
-  // Index origins by number -> list of {origin, t}
+  // Index origins by number -> list of origins, keeping only distinctive numbers.
   const byNumber = new Map();
   for (const o of origins) {
     for (const num of o.numbers) {
+      if (!isDistinctive(num)) continue;
       if (!byNumber.has(num)) byNumber.set(num, []);
       byNumber.get(num).push(o);
     }
+  }
+  // Drop ambient numbers that appear across too many DISTINCT origins — they
+  // cannot tell one source from another (a value echoed everywhere).
+  for (const [num, list] of byNumber) {
+    if (new Set(list.map((o) => o.url)).size > AMBIENT_URL_SPREAD) byNumber.delete(num);
   }
 
   // node path -> aggregate evidence
@@ -105,6 +135,7 @@ function correlate(sigEvents, origins) {
 
       const wanted = domValueToNumbers(txt);
       for (const num of wanted) {
+        if (!isDistinctive(num)) continue;
         const candidates = byNumber.get(num);
         if (!candidates) continue;
         for (const o of candidates) {
@@ -140,4 +171,4 @@ function correlate(sigEvents, origins) {
   return report;
 }
 
-module.exports = { correlate, extractNumbers, domValueToNumbers, canonNum, classifyOriginRole, CORRELATION_WINDOW_MS };
+module.exports = { correlate, extractNumbers, domValueToNumbers, canonNum, classifyOriginRole, isDistinctive, CORRELATION_WINDOW_MS };

@@ -11,6 +11,10 @@
 
 const REDACT = '«redacted»';
 
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Header names whose *values* are always secret-bearing.
 const SECRET_HEADERS = new Set([
   'authorization', 'cookie', 'set-cookie', 'proxy-authorization',
@@ -20,9 +24,14 @@ const SECRET_HEADERS = new Set([
 ]);
 
 // JSON keys / query params whose values are secret-bearing regardless of shape.
-const SECRET_KEY_RE = /^(.*[-_.])?(auth|authorization|token|secret|password|passwd|pwd|apikey|api_key|access_key|private_key|privatekey|refresh_token|id_token|session|sessionid|sid|jwt|bearer|signature|csrf|xsrf|cookie|credential|otp|mnemonic|seed|seed_phrase|privkey)([-_.].*)?$/i;
+// NOTE: bare `token` is DELIBERATELY absent — on a memecoin site a field keyed
+// `token`/`tokenAddress` holds the token's MINT, which is subject matter, not a
+// secret. Real auth tokens are caught by the specific *_token keys below AND by
+// value shape (JWT/bearer/sk) regardless of key name.
+const SECRET_KEY_RE = /^(.*[-_.])?(auth|authorization|access_token|auth_token|bearer_token|refresh_token|id_token|secret|password|passwd|pwd|apikey|api_key|access_key|private_key|privatekey|session|sessionid|sid|jwt|bearer|signature|csrf|xsrf|cookie|credential|otp|mnemonic|seed|seed_phrase|privkey)([-_.].*)?$/i;
 
 // Value-shaped secrets that can appear anywhere in a string.
+const ADDR_SHAPE_RE = /^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/; // token mint / EVM address — NOT a secret
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b/g;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*/gi;
 const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
@@ -56,21 +65,12 @@ function makeScrubber(denyEntries = []) {
     }
     for (const entry of deny) {
       if (!entry) continue;
-      let idx = out.indexOf(entry);
-      while (idx !== -1) {
-        out = out.slice(0, idx) + REDACT + out.slice(idx + entry.length);
-        bump();
-        idx = out.indexOf(entry, idx + REDACT.length);
-      }
-      // Case-insensitive second pass for usernames/handles.
-      const lower = out.toLowerCase();
-      const el = entry.toLowerCase();
-      let j = lower.indexOf(el);
-      while (j !== -1) {
-        out = out.slice(0, j) + REDACT + out.slice(j + entry.length);
-        bump();
-        j = out.toLowerCase().indexOf(el, j + REDACT.length);
-      }
+      // Case-insensitive, literal match via a regex. This is position-correct by
+      // construction — the old manual index-into-lowercased-copy / slice-the-
+      // original approach misaligned when a character's lowercase changed length
+      // (e.g. U+0130 'İ' → 'i̇'), UNDER-scrubbing the secret. A regex never does.
+      const re = new RegExp(escapeRegExp(entry), 'gi');
+      out = out.replace(re, () => { bump(); return REDACT; });
     }
     return out;
   }
@@ -87,15 +87,26 @@ function makeScrubber(denyEntries = []) {
 
   // Recursively scrub any JSON-ish value; key-name awareness lets us redact a
   // secret value even when its own shape is innocuous (e.g. a short token).
-  function scrubValue(val, keyName) {
+  // Depth-capped so a pathologically deep payload cannot blow the stack.
+  function scrubValue(val, keyName, depth = 0) {
     if (keyName && SECRET_KEY_RE.test(keyName)) {
       if (val !== null && val !== undefined && typeof val !== 'object') { bump(); return REDACT; }
     }
+    // Any key that IS or ENDS IN `token` (token, tokenId, api_token, oauth_token,
+    // user_token, access-token, x-access-token) is an ambiguous credential field:
+    // usually an opaque auth token, but a bare `token` on a memecoin API can hold
+    // the MINT. Redact a long non-address string value; a real mint (address
+    // shape) or a short symbol is preserved. `tokenAddress`/`tokenSymbol` end in
+    // address/symbol, not token, so they are NOT matched.
+    if (keyName && /(^|[-_.])tokens?(id)?$/i.test(keyName) && typeof val === 'string' && val.length >= 16 && !ADDR_SHAPE_RE.test(val)) {
+      bump(); return REDACT;
+    }
     if (typeof val === 'string') return scrubString(val);
-    if (Array.isArray(val)) return val.map((x) => scrubValue(x, keyName));
+    if (depth >= 200 && typeof val === 'object' && val !== null) return '«depth-truncated»';
+    if (Array.isArray(val)) return val.map((x) => scrubValue(x, keyName, depth + 1));
     if (val && typeof val === 'object') {
       const out = {};
-      for (const [k, v] of Object.entries(val)) out[k] = scrubValue(v, k);
+      for (const [k, v] of Object.entries(val)) out[k] = scrubValue(v, k, depth + 1);
       return out;
     }
     return val;

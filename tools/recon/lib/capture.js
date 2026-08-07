@@ -32,8 +32,14 @@ class Recorder {
     this.snapDir = path.join(this.rawDir, 'snapshots');
     for (const d of [this.blobDir, this.snapDir]) fs.mkdirSync(d, { recursive: true });
     this.streams = {};
+    this.streamErrors = [];
     for (const name of ['events', 'network', 'ws', 'domsig', 'mutations']) {
-      this.streams[name] = fs.createWriteStream(path.join(this.rawDir, `${name}.jsonl`), { flags: 'a' });
+      const st = fs.createWriteStream(path.join(this.rawDir, `${name}.jsonl`), { flags: 'a' });
+      // A stream 'error' with no listener is an uncaught exception that would
+      // kill the whole capture (disk full, or a write-after-end at teardown).
+      // Record it and keep going — a partial capture beats a crashed one.
+      st.on('error', (e) => { this.streamErrors.push(`${name}: ${e.message}`); });
+      this.streams[name] = st;
     }
     this.counts = { requests: 0, bodies: 0, wsFrames: 0, sseMessages: 0, sigTicks: 0, snapshots: 0, pages: 0 };
     this.blobSeq = 0;
@@ -340,6 +346,10 @@ async function runCapture(opts) {
     cdp.close();
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } }, 2500).unref();
     await rec.closeStreams();
+    // A capture that never attached a page or recorded nothing is structurally
+    // valid but empty — flag it so a downstream reader does not mistake it for a
+    // clean, complete capture of a quiet site.
+    const thin = rec.counts.pages === 0 || (rec.counts.requests === 0 && rec.counts.sigTicks === 0);
     const manifest = {
       rig: 'pt-recon/0.1.0',
       site,
@@ -351,6 +361,8 @@ async function runCapture(opts) {
       startedAt,
       endedAt: nowIso(),
       endReason: reason,
+      thin,
+      streamErrors: rec.streamErrors && rec.streamErrors.length ? rec.streamErrors : undefined,
       counts: rec.counts,
     };
     fs.writeFileSync(path.join(capDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
@@ -386,9 +398,11 @@ async function runCapture(opts) {
       if (!mainSessionId) break;
       rec.line('events', { t: Date.now(), ev: 'auto-visit', url });
       const loaded = new Promise((resolve) => {
-        const h = (_p, sid) => { if (sid === mainSessionId) resolve(); };
+        // Remove the handler once done — otherwise every URL leaves a stale
+        // load listener that fires on all subsequent navigations.
+        const h = (_p, sid) => { if (sid === mainSessionId) { cdp.off('Page.loadEventFired', h); resolve(); } };
         cdp.on('Page.loadEventFired', h);
-        setTimeout(resolve, 15000);
+        setTimeout(() => { cdp.off('Page.loadEventFired', h); resolve(); }, 15000);
       });
       try {
         await cdp.send('Page.navigate', { url }, mainSessionId);

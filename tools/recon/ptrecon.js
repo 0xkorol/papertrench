@@ -18,6 +18,8 @@ const { distill } = require('./lib/distill');
 const { runVerify, assembleExamples } = require('./lib/verify');
 const { makeScrubber, loadDenylist } = require('./lib/scrub');
 const { scaffold } = require('./lib/scaffold');
+const { checkWiring } = require('./lib/wiring');
+const { diffDossiers } = require('./lib/driftdiff');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 // Raw captures hold cookies/auth/balances. Default location is recon-data/
@@ -210,7 +212,7 @@ async function cmdCheck(args) {
   const scrubber = makeScrubber(loadDenylist(loadDenylistText()));
 
   const examples = assembleExamples(rawUrls, corpus.urls || [], scrubber);
-  if (!examples.length) throw new Error('no testable URLs in the capture — the corpus is empty');
+  if (!examples.length) throw new Error(`no testable nav/doc URLs in capture ${path.basename(capDir)} (raw events.jsonl + network.jsonl) — capture a token page and re-run`);
   const { rows, summary } = runVerify(adapterSrc, examples);
 
   process.stderr.write(`\n[pt-recon] check — ${path.relative(REPO_ROOT, adapterPath)} vs ${examples.length} real pages from ${path.basename(capDir)}\n\n`);
@@ -232,6 +234,85 @@ function short(s, n = 44) {
   if (!s) return '—';
   s = String(s);
   return s.length > n ? '…' + s.slice(-n) : s;
+}
+
+function twoNewestCaptures(site) {
+  const capsDir = path.join(siteDir(site), 'captures');
+  const dirs = fs.existsSync(capsDir)
+    ? fs.readdirSync(capsDir).filter((d) => fs.existsSync(path.join(capsDir, d, 'manifest.json'))).sort()
+    : [];
+  return dirs.slice(-2).map((d) => path.join(capsDir, d));
+}
+
+function cmdDiff(args) {
+  const site = args.site;
+  let oldDir, newDir;
+  if (args.old && args.old !== true && args.new && args.new !== true) {
+    oldDir = path.resolve(String(args.old));
+    newDir = path.resolve(String(args.new));
+  } else {
+    const caps = twoNewestCaptures(site);
+    if (caps.length < 2) throw new Error(`need two captures for "${site}" to diff — capture again over time (have ${caps.length})`);
+    // Distill each into a temp dossier so we compare like-for-like.
+    const denylistText = loadDenylistText();
+    const tmp = path.join(os.tmpdir(), 'ptrecon-diff-' + site);
+    oldDir = path.join(tmp, 'old');
+    newDir = path.join(tmp, 'new');
+    process.stderr.write(`[pt-recon] distilling ${path.basename(caps[0])} (old) and ${path.basename(caps[1])} (new)…\n`);
+    distill(caps[0], oldDir, { denylistText });
+    distill(caps[1], newDir, { denylistText });
+  }
+
+  const d = diffDossiers(oldDir, newDir);
+  process.stderr.write(`\n[pt-recon] drift: ${path.basename(oldDir)} → ${path.basename(newDir)}\n\n`);
+  const section = (title, items, sev) => {
+    if (!items.length) return;
+    process.stderr.write(`  ${sev} ${title}:\n`);
+    for (const it of items.slice(0, 20)) process.stderr.write(`      ${typeof it === 'string' ? it : (it.path ? short(it.path, 60) + ` (was seen ${it.count}x)` : JSON.stringify(it))}\n`);
+  };
+  section('routes REMOVED', d.routes.removed, '⚠️ ');
+  section('endpoints REMOVED', d.endpoints.removed, '⚠️ ');
+  section('WS channels REMOVED', d.ws.removed, '⚠️ ');
+  section('stable DOM anchors GONE (dock/selectors may break)', d.anchorsGone, '⚠️ ');
+  for (const s of d.shifts.filter((x) => x.severity === 'warn')) process.stderr.write(`  ⚠️  ${s.what}\n`);
+  section('routes added', d.routes.added, '·');
+  section('endpoints added', d.endpoints.added, '·');
+  section('WS channels added', d.ws.added, '·');
+  for (const s of d.shifts.filter((x) => x.severity === 'info')) process.stderr.write(`  ·  ${s.what}\n`);
+  process.stderr.write(`\n[pt-recon] ${d.verdict}\n`);
+  if (d.removedCount > 0) process.exitCode = 1;
+}
+
+function cmdWiring(args) {
+  const site = args.site;
+  const dossierDir = site ? path.join(siteDir(site), 'dossier') : null;
+  let dossier = null;
+  if (dossierDir && fs.existsSync(path.join(dossierDir, 'summary.json'))) {
+    dossier = JSON.parse(fs.readFileSync(path.join(dossierDir, 'summary.json'), 'utf8'));
+  }
+  const host = args.host && args.host !== true ? String(args.host) : (dossier && dossier.primaryHost);
+  if (!host) throw new Error('need a host: pass --host <host> or --site <id> (after distill, which writes the primary host)');
+  const name = args.name && args.name !== true ? String(args.name) : null;
+
+  const res = checkWiring(REPO_ROOT, host, dossier, name);
+  process.stderr.write(`\n[pt-recon] wiring check for \`${host}\`${name ? ' (' + name + ')' : ''} across the touch list:\n\n`);
+  for (const r of res.rows) {
+    // ✓ present · optional/absent ? prose-unconfirmed ✗ required-code-missing
+    const mark = r.status ? '✓' : r.need === 'optional' ? '·' : r.kind === 'prose' ? '?' : '✗';
+    const tag = r.status ? '' : r.need === 'optional' ? ' (optional)' : r.kind === 'prose' ? ' (confirm)' : ' (REQUIRED)';
+    process.stderr.write(`  ${mark} ${r.file}${tag}\n`);
+    process.stderr.write(`      ${r.label}\n`);
+    if (r.note && !(r.status && r.kind === 'prose')) process.stderr.write(`      → ${r.note}\n`);
+  }
+  process.stderr.write(`\n  price-bridge.js: ${res.priceBridgeNote}\n`);
+  process.stderr.write(`\n[pt-recon] ${res.verdict}\n`);
+  if (res.missingRequired.length) {
+    process.stderr.write('  still to wire (code): ' + res.missingRequired.map((r) => r.file).join(', ') + '\n');
+  }
+  if (res.proseUnconfirmed.length) {
+    process.stderr.write('  confirm by hand (prose): ' + res.proseUnconfirmed.map((r) => r.file).join(', ') + '\n');
+  }
+  if (res.missingRequired.length) process.exitCode = 1;
 }
 
 function cmdScaffold(args) {
@@ -267,6 +348,8 @@ async function main() {
     else if (cmd === 'distill') await cmdDistill(args);
     else if (cmd === 'check') await cmdCheck(args);
     else if (cmd === 'scaffold') cmdScaffold(args);
+    else if (cmd === 'wiring') cmdWiring(args);
+    else if (cmd === 'diff') cmdDiff(args);
     else if (cmd === 'list') cmdList();
     else {
       process.stderr.write('pt-recon — capture a site, distill a dossier.\n\n');
@@ -274,6 +357,8 @@ async function main() {
       process.stderr.write('  distill --site <id> [--capture DIR]\n');
       process.stderr.write('  check    --site <id> [--adapter extension/sites.js]  # run your detect() over the real corpus\n');
       process.stderr.write('  scaffold --site <id>                                 # draft the gating test + fake from the dossier\n');
+      process.stderr.write('  wiring   --site <id> | --host <host> [--name N]      # is the host registered in ALL ~10 touch-list files?\n');
+      process.stderr.write('  diff     --site <id>                                 # drift: diff the two newest captures\n');
       process.stderr.write('  list\n\n');
       process.stderr.write('See docs/RECON.md.\n');
       process.exitCode = cmd ? 1 : 0;

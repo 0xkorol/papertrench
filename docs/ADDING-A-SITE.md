@@ -20,7 +20,8 @@ node tools/recon/ptrecon.js capture  --site <id> --url https://<site> --headed
 node tools/recon/ptrecon.js distill  --site <id>   # → dossier/DOSSIER.md
 node tools/recon/ptrecon.js scaffold --site <id>   # → draft gating test + fake
 #   …write the ~10 touch-list edits below against the dossier…
-node tools/recon/ptrecon.js check    --site <id>   # your detect() vs the real corpus
+node tools/recon/ptrecon.js check    --site <id>            # your detect() vs the real corpus
+node tools/recon/ptrecon.js wiring   --site <id> --name <N> # registered in ALL touch-list files?
 ```
 
 Read `DOSSIER.md` whole, starting at **§0 Coverage**: if it is 🔴 THIN (no

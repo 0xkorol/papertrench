@@ -15,6 +15,13 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+// Captured strings are UNTRUSTED (a token symbol, a URL, a JSON key from a
+// hostile site). They must never break out of the generated JS. jsStr emits a
+// safe string literal; commentSafe strips newlines so a value cannot escape a
+// // comment into executable code.
+function jsStr(s) { return JSON.stringify(String(s == null ? '' : s)); }
+function commentSafe(s) { return String(s == null ? '' : s).replace(/[\r\n\t\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+
 function scaffold(dossierDir, outDir, siteId) {
   const corpus = readJson(path.join(dossierDir, 'corpus.json'), { urls: [] });
   const endpoints = readJson(path.join(dossierDir, 'endpoints.json'), []);
@@ -72,8 +79,8 @@ function renderGatingTest(siteId, corpus) {
   p(`const MOUNTS = [`);
   if (tokenPages.length) {
     for (const u of tokenPages.slice(0, 12)) {
-      p(`  // ${u.hadLivePrice ? 'live price seen here' : 'NO live price seen — confirm this is a token page'}${u.chain ? `, chain=${u.chain}` : ''}`);
-      p(`  ['${u.example}', /* kind */ 'TODO', /* why */ 'captured token page'],`);
+      p(`  // ${u.hadLivePrice ? 'live price seen here' : 'NO live price seen — confirm this is a token page'}${u.chain ? ', chain=' + commentSafe(u.chain) : ''}`);
+      p(`  [${jsStr(u.example)}, /* kind */ 'TODO', /* why */ 'captured token page'],`);
     }
   } else {
     p(`  // TODO: no token page was captured. Browse one and re-run capture/distill,`);
@@ -86,7 +93,7 @@ function renderGatingTest(siteId, corpus) {
   p(`const REFUSALS = [`);
   if (refuseRoutes.length) {
     for (const u of refuseRoutes.slice(0, 12)) {
-      p(`  ['${u.example}', '${u.looksHistoryPage ? 'history/wallet page (O-10)' : 'list/screener page'}'],`);
+      p(`  [${jsStr(u.example)}, ${jsStr(u.looksHistoryPage ? 'history/wallet page (O-10)' : 'list/screener page')}],`);
     }
   } else {
     p(`  // TODO: no must-refuse route captured. Browse a wallet/holders/settings`);
@@ -126,9 +133,9 @@ function renderFakeStub(siteId, endpoints, ws) {
   if (endpoints.length) {
     p(`// ---- REST endpoints observed (method pattern — status — schema) ----`);
     for (const e of endpoints.filter((x) => x.schema).slice(0, 10)) {
-      p(`// ${e.method} ${e.host}${e.pattern}  [${Object.keys(e.statuses || {}).join(',') || '?'}]${e.auth ? ' 🔒auth' : ''}`);
-      if (e.fixtureRef) p(`//   fixture: ${path.basename(e.fixtureRef)}`);
-      for (const line of (e.schema || []).slice(0, 20)) p(`//     ${line}`);
+      p(commentSafe(`// ${e.method} ${e.host}${e.pattern}  [${Object.keys(e.statuses || {}).join(',') || '?'}]${e.auth ? ' auth' : ''}`));
+      if (e.fixtureRef) p(commentSafe(`//   fixture: ${path.basename(e.fixtureRef)}`));
+      for (const line of (e.schema || []).slice(0, 20)) p(commentSafe(`//     ${line}`));
       p('//');
     }
   } else {
@@ -139,9 +146,9 @@ function renderFakeStub(siteId, endpoints, ws) {
   if (ws.length) {
     p(`// ---- WebSocket channels observed (host — frames — discriminators) ----`);
     for (const c of ws.slice(0, 6)) {
-      p(`// ${c.url}  frames=${c.frames} rate/min≈${Math.round(c.ratePerMin || 0)}`);
-      if (c.discriminators && Object.keys(c.discriminators).length) p(`//   frame types: ${Object.keys(c.discriminators).slice(0, 8).join(', ')}`);
-      for (const line of (c.schema || []).slice(0, 16)) p(`//     ${line}`);
+      p(commentSafe(`// ${c.url}  frames=${c.frames} rate/min≈${Math.round(c.ratePerMin || 0)}`));
+      if (c.discriminators && Object.keys(c.discriminators).length) p(commentSafe(`//   frame types: ${Object.keys(c.discriminators).slice(0, 8).join(', ')}`));
+      for (const line of (c.schema || []).slice(0, 16)) p(commentSafe(`//     ${line}`));
       p('//');
     }
   } else {

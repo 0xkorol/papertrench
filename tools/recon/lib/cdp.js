@@ -46,15 +46,21 @@ function launchChrome({ chrome, profileDir, headless, startUrl, extraArgs = [] }
       proc.kill();
       reject(new Error(`chrome did not report a DevTools endpoint in ${LAUNCH_TIMEOUT_MS}ms\n${err.slice(-2000)}`));
     }, LAUNCH_TIMEOUT_MS);
-    proc.stderr.on('data', (chunk) => {
+    const onData = (chunk) => {
       err += chunk.toString();
       const m = err.match(/DevTools listening on (ws:\/\/\S+)/);
       if (m && !done) {
         done = true;
         clearTimeout(timer);
+        // Detach: leaving this attached would re-scan the whole growing buffer
+        // on every stderr chunk for the entire capture (unbounded mem + O(n^2)).
+        // The caller re-attaches its own drain.
+        proc.stderr.removeListener('data', onData);
+        err = '';
         resolve({ proc, wsUrl: m[1] });
       }
-    });
+    };
+    proc.stderr.on('data', onData);
     proc.on('exit', (code) => {
       if (done) return;
       done = true;
@@ -85,15 +91,22 @@ class CDPClient {
     });
   }
 
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, timeoutMs = 30000) {
     const id = this._nextId++;
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
     return new Promise((resolve, reject) => {
-      this._pending.set(id, { resolve, reject, method });
+      // Per-command timeout: a command Chrome never answers must not stall the
+      // awaiting code forever (it used to hang until the socket happened to close).
+      const timer = setTimeout(() => {
+        if (this._pending.delete(id)) reject(new Error(`${method}: timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      if (timer.unref) timer.unref();
+      this._pending.set(id, { resolve, reject, method, timer });
       try {
         this._ws.send(JSON.stringify(msg));
       } catch (e) {
+        clearTimeout(timer);
         this._pending.delete(id);
         reject(e);
       }
@@ -103,6 +116,11 @@ class CDPClient {
   on(method, fn) {
     if (!this._handlers.has(method)) this._handlers.set(method, new Set());
     this._handlers.get(method).add(fn);
+  }
+
+  off(method, fn) {
+    const set = this._handlers.get(method);
+    if (set) set.delete(fn);
   }
 
   onClose(fn) {
@@ -120,6 +138,7 @@ class CDPClient {
       const p = this._pending.get(msg.id);
       if (!p) return;
       this._pending.delete(msg.id);
+      if (p.timer) clearTimeout(p.timer);
       if (msg.error) p.reject(new Error(`${p.method}: ${msg.error.message}`));
       else p.resolve(msg.result);
       return;
@@ -137,7 +156,7 @@ class CDPClient {
   }
 
   _onClose() {
-    for (const [, p] of this._pending) p.reject(new Error('cdp socket closed'));
+    for (const [, p] of this._pending) { if (p.timer) clearTimeout(p.timer); p.reject(new Error('cdp socket closed')); }
     this._pending.clear();
     for (const fn of this._closeHandlers) {
       try { fn(); } catch { /* closing */ }

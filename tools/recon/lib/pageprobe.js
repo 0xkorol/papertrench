@@ -48,12 +48,17 @@ function probe() {
         if (cls) {
           picked = tag + '.' + esc(cls);
         } else {
+          // Bound the sibling walk: on a huge list (thousands of rows) an
+          // unbounded scan makes each cssPath O(siblings), and the 1s price
+          // scan runs it for up to 300 nodes — enough to freeze a hostile page.
           var idx = 1;
           var sib = node;
-          while ((sib = sib.previousElementSibling)) {
+          var seen = 0;
+          while ((sib = sib.previousElementSibling) && seen < 500) {
+            seen++;
             if (sib.tagName === node.tagName) idx++;
           }
-          picked = tag + ':nth-of-type(' + idx + ')';
+          picked = tag + ':nth-of-type(' + (sib ? 'n' : idx) + ')';
         }
       }
       parts.unshift(picked);
@@ -108,14 +113,19 @@ function probe() {
     var tn;
     while ((tn = walker.nextNode())) {
       if (++visited > 30000 || out.length >= 300) break;
-      var txt = (tn.textContent || '').trim();
+      var raw = tn.textContent || '';
+      // Length-gate BEFORE trim: a giant text node (a hostile page can inline
+      // megabytes) would otherwise be copied and scanned every tick even though
+      // looksPrice rejects anything over 24 chars.
+      if (raw.length > 64) continue;
+      var txt = raw.trim();
       if (!looksPrice(txt)) continue;
       var parent = tn.parentElement;
       if (!parent) continue;
       out.push([cssPath(parent), txt]);
     }
     var joined = '';
-    for (var i2 = 0; i2 < out.length; i2++) joined += out[i2][0] + '' + out[i2][1] + '';
+    for (var i2 = 0; i2 < out.length; i2++) joined += out[i2][0] + '\x1f' + out[i2][1] + '\x1e';
     var h2 = hash(joined);
     if (h2 === lastHash) {
       sameStreak++;
@@ -181,7 +191,9 @@ function probe() {
       send({
         k: 'act', t: Date.now(), type: 'click',
         path: el ? cssPath(el) : '',
-        text: el ? (el.textContent || '').trim().slice(0, 40) : '',
+        // Slice BEFORE trim so clicking a large container does not materialize
+        // and trim its whole subtree text; cap output at 40 chars.
+        text: el ? (el.textContent || '').slice(0, 120).trim().slice(0, 40) : '',
       });
     } catch (e) { /* recorder only */ }
   }, { capture: true, passive: true });

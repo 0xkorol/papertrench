@@ -101,9 +101,16 @@ function runVerify(adapterSrc, examples) {
     medium: rows.reduce((n, r) => n + r.flags.filter((f) => f.level === 'medium').length, 0),
     errors: rows.filter((r) => r.error).length,
   };
+  // A token page the adapter REFUSED but which had no live price only raised a
+  // medium (MAYBE_MISSED), not a high — but it is still a token page the adapter
+  // does not handle. The verdict must not say "AGREES" while that is true, or an
+  // adapter that refuses every token page reads as fine. Any unmounted token
+  // page downgrades the verdict to REVIEW.
+  const tokenPagesRefused = summary.tokenPagesTotal - summary.tokenPagesMounted;
   summary.verdict = summary.errors ? 'ADAPTER ERROR'
     : summary.high ? 'DISAGREEMENTS — review the high flags'
     : summary.tokenPagesTotal === 0 ? 'INCONCLUSIVE — no token page in the corpus to test against'
+    : tokenPagesRefused > 0 ? `REVIEW — ${tokenPagesRefused}/${summary.tokenPagesTotal} token page(s) refused (confirm they are real token pages)`
     : 'AGREES with the capture';
   return { rows, summary };
 }

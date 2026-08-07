@@ -13,19 +13,39 @@ const { normalizeUrl } = require('./schema');
 const HISTORY_RE = /\b(wallet|holders?|holding|portfolio|leaderboard|positions?|activity|history|txns?|transactions?|pnl|top-?traders?|trader|profile|account|settings|watchlist)\b/i;
 const LIST_RE = /\b(trending|screener|pulse|memescope|discover|explore|new-?pairs?|gainers|losers|movers|feed|home|markets?|tokens?|pairs?)\b/i;
 
+const ADDR_VALUE_RE = /^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/;
+// Only an address-shaped value under an address-like KEY counts — a base58
+// referral code or signature under a random key must not flag a token page.
+const ADDR_KEY_RE = /^(address|tokenaddress|pairaddress|token|mint|pair|ca|contract|base|quote|outputmint|inputmint|out|in|buy|sell)$/i;
+
 function classifyUrl(rawUrl, priceInfo) {
   const norm = normalizeUrl(rawUrl);
   if (!norm) return null;
   const path = norm.path || '';
-  const hasVar = /\{(address|evm|uuid|mixed-id)\}/.test(norm.pattern);
-  const looksHistoryPage = HISTORY_RE.test(path);
+  let u = null;
+  try { u = new URL(rawUrl); } catch { /* keep null */ }
+  // An address can live in the PATH (normalized to {address}/{evm}) OR in a
+  // QUERY VALUE — BullX's real token page is neo.bullx.io/terminal?address=<pair>,
+  // birdeye/jupiter do the same. Miss this and a live token page reads as a list.
+  const addrInQuery = u && [...u.searchParams.entries()].some(([k, v]) => ADDR_KEY_RE.test(k) && ADDR_VALUE_RE.test(v));
+  const hasVar = /\{(address|evm|uuid|mixed-id)\}/.test(norm.pattern) || !!addrInQuery;
   const priceNodeCount = priceInfo ? priceInfo.nodeCount : 0;
   const hadLivePrice = priceInfo ? priceInfo.hadLivePrice : false;
-  // A list/screener page shows MANY prices (a table); a token page shows one
-  // dominant ticker. Use both the URL vocabulary and the node count.
-  const looksListPage = (LIST_RE.test(path) && !hasVar) || priceNodeCount >= 8;
-  // A token page: a variable address segment, not a history/list route.
-  const looksTokenPage = hasVar && !looksHistoryPage && !looksListPage;
+  // History if the PATH says so, OR it is a bare /address/<wallet> wallet route
+  // (GMGN's /sol/address/<w> — an O-10 MUST-REFUSE that HISTORY_RE misses). We
+  // do NOT treat a history TAB in the query/hash as a history page: a token page
+  // with ?tab=holders still has the token address in its path and the adapter
+  // MUST mount it — the holders DATA there is a §6 pollution concern, not a
+  // reason to refuse the page (treating it as history caused a false OVER_MOUNT).
+  const looksHistoryPage = HISTORY_RE.test(path) || /\/address(es)?(\/|$)/i.test(path);
+  // A token page is an address (path or query) that is not a wallet/history
+  // route. This wins over node count: a real trading page is dense with numbers
+  // (price, mcap, liquidity, volume, txns) — the ">=8 prices" heuristic must NOT
+  // reclassify it as a list. (Found on a live DexScreener token page: 20+ nodes.)
+  const looksTokenPage = hasVar && !looksHistoryPage;
+  // A list/screener page has NO token address and shows many prices or names
+  // itself a screener.
+  const looksListPage = !hasVar && (LIST_RE.test(path) || priceNodeCount >= 8);
   return {
     host: norm.host,
     pattern: norm.pattern,
