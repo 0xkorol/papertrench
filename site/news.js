@@ -28,6 +28,17 @@
 
   const RELEASES = [
     {
+      v: '3.2.1', date: 'Aug 7, 2026', iso: '2026-08-07',
+      tags: ['fix', 'speed'],
+      title: 'The last launchpad dead end, closed same-day',
+      blurb: 'Fresh launches from launchpads we can’t decode still get their identity instantly — reported on Discord in the afternoon, shipped by evening.',
+      points: [
+        '<b>Unknown pools give up the coin’s identity and real supply.</b> On pair-address pages (Axiom’s /meme/), a brand-new coin whose pool belongs to a launchpad without a verified decoder used to be a full dead end: no price, and no mint either, so nothing could bootstrap. The vault scan now recovers identity and measured supply from any pool — those are protocol facts — and the page’s own feed prices the coin under the usual sanity discipline.',
+        '<b>Price retries ask by mint, not by pool.</b> Aggregators index a fresh launch’s mint within seconds; the pool endpoint waits for the pool to be noticed. Once the coin is identified, retries switch to the fast question.',
+        '<b>What still gets refused, on purpose:</b> the unverified pool’s own price. Bonding curves price on virtual reserves, so a vault ratio from an unknown layout would be an invented number — and an honest blank beats an invented number, every time.',
+      ],
+    },
+    {
       v: '3.2.0', date: 'Aug 7, 2026', iso: '2026-08-07',
       tags: ['feature', 'fix', 'speed'],
       title: 'A twelfth terminal, fill receipts, and the quarter-second first quote',
