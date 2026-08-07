@@ -3,7 +3,7 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
-## Unreleased
+## v3.2.1 — 2026-08-07
 
 - **Fresh launches from launchpads we can't decode still get their
   identity instantly.** On pair-address pages (Axiom's /meme/), a
