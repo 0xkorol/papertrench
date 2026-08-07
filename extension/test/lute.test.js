@@ -26,8 +26,8 @@
  *    contentWindow.tradingViewApi. The datafeed HAS getMarks (with
  *    markSubscriptions/marksFetched state) — friend-trade marks ARE the
  *    product — so lute is native-marks class, NOT fomo's shapes-only
- *    class. A chart-truth fake for that surface is future work; this
- *    suite deliberately stays chartless until those shapes are captured.
+ *    class. The chart-truth locks at the bottom of this file boot that
+ *    captured shape; the walker locks above stay chartless for isolation.
  *  - Named routes live-verified: compass, momentum, portfolio, discover,
  *    predict (missed by the landing corpus), plus bare /trade. Token
  *    pages are LOGIN-GATED: logged-out /trade/<mint> bounces to login.
@@ -369,4 +369,322 @@ test('lute: a genuine market snapshot still ticks (guards must not over-reach)',
     && Array.isArray(t.candidates) && t.candidates.some((c) => c.value === 0.0161));
   assert.ok(snapshotTicks.length >= 1,
     'market snapshots without position markers must keep flowing');
+});
+
+/* ============ Chart-truth locks (live-captured shape, 2026-08-06) ============
+ *
+ * Field defect (WhiteBull, MC axis): the SELL booked at a ~20% stale level
+ * (33.1K) while the chart the trader watched sat at ~41K — a winning trade
+ * rendered as -9.6%. Below the F-47 witness ratio, the only defense is the
+ * chart peg staying alive. These locks boot the shipped price-bridge.js
+ * against lute's LIVE-CAPTURED chart shape and pin every link of that peg:
+ *
+ *  - Chart symbol: "MINT:LUTE/USD" (uppercased by the library; captured as
+ *    DEZXAZ8Z…:BONK/USD on the real site).
+ *  - Discovery: NO fiber anywhere; the options bag (with the datafeed and a
+ *    brokerFactory) sits in window[frameId], and the widget api is
+ *    contentWindow.tradingViewApi — the F-38 composite, lute flavor.
+ *  - Datafeed: subscribeBars keyed on symbolInfo.base_name[0], DEDUPED by
+ *    subscriber uid ("if (this.active.has(n)) return") — a subscription made
+ *    before our patch is never re-made. getMarks EXISTS (friend-trade marks
+ *    are the product).
+ *  - exportData: resolves { schema, data } rows, close at index 4, in the
+ *    axis unit (USD here, captured close 0.000027938; the MC toggle makes
+ *    the same series stream mcap — the unit:'unknown' contract downstream).
+ *  - Broker primitives THROW like the standalone build. brokerFactory was
+ *    PRESENT in the live bag but never CALLED on the real site — F-39:
+ *    presence is not capability, so the fake keeps the conservative floor.
+ */
+
+const LUTE_EXPORT_CLOSE = 0.000027938030166638182; // captured BONK close, 2026-08-06
+
+function runLuteChartBridge(opts = {}) {
+  const timers = [];
+  const timeouts = new Map();
+  let timeoutSeq = 0;
+  const emitted = [];
+  const listeners = {};
+
+  // Site-side datafeed: dedupe + base_name identity, captured semantics.
+  const activeSubs = new Map();
+  const luteDatafeed = {
+    onReady() {}, searchSymbols() {}, resolveSymbol() {}, getBars() {},
+    subscribeBars(symbolInfo, resolution, callback, uid) {
+      const address = symbolInfo && symbolInfo.base_name && symbolInfo.base_name[0];
+      if (!address || activeSubs.has(uid)) return; // live-captured dedupe
+      activeSubs.set(uid, { symbolInfo, resolution, callback, uid });
+    },
+    unsubscribeBars(uid) { activeSubs.delete(uid); },
+    getMarks(symbolInfo, from, to, onDataCallback) {
+      // The site's own friend-trade marks; empty is a valid live answer.
+      setTimeout(() => onDataCallback([]), 0);
+    },
+  };
+
+  const exportRows = [[1786061580, LUTE_EXPORT_CLOSE, LUTE_EXPORT_CLOSE, LUTE_EXPORT_CLOSE, LUTE_EXPORT_CLOSE]];
+  const lineShapes = [];
+  let shapeSeq = 0;
+  const fakePaneDiv = {
+    getBoundingClientRect: () => ({ left: 8, top: 4, width: 800, height: 420 }),
+  };
+  const luteChart = {
+    symbol: () => `${LUTE_MINT.toUpperCase()}:LUTE/USD`,
+    resolution: () => '1S',
+    exportData: () => Promise.resolve({
+      schema: [
+        { type: 'time' },
+        { type: 'value', plotTitle: 'open' },
+        { type: 'value', plotTitle: 'high' },
+        { type: 'value', plotTitle: 'low' },
+        { type: 'value', plotTitle: 'close' },
+      ],
+      data: exportRows.slice(),
+    }),
+    createOrderLine: () => { throw new Error('createOrderLine is only available on Trading Platform'); },
+    createExecutionShape: () => { throw new Error('createExecutionShape is only available on Trading Platform'); },
+    createShape(point, shapeOpts) {
+      const id = `lute-shape-${++shapeSeq}`;
+      const rec = {
+        id, point, opts: shapeOpts,
+        points: [{ price: point && point.price }],
+        props: Object.assign({}, shapeOpts && shapeOpts.overrides,
+          shapeOpts && shapeOpts.text != null ? { text: shapeOpts.text } : null),
+        removed: false,
+      };
+      rec.api = {
+        setPoints(pts) { rec.points = pts; },
+        setProperties(props) { Object.assign(rec.props, props); },
+      };
+      lineShapes.push(rec);
+      return Promise.resolve(id);
+    },
+    getShapeById(id) {
+      const rec = lineShapes.find((s) => s.id === id && !s.removed);
+      if (!rec) throw new Error('unknown entity');
+      return rec.api;
+    },
+    removeEntity(id) {
+      const rec = lineShapes.find((s) => s.id === id);
+      if (rec) rec.removed = true;
+    },
+    getAllShapes: () => lineShapes.filter((s) => !s.removed).map((s) => ({ id: s.id, name: 'horizontal_line' })),
+    refreshMarks() {},
+    _chartWidget: {
+      paneWidgets: () => [{ _div: fakePaneDiv }],
+      model: () => ({
+        timeScale: () => ({ timeToCoordinate: () => 100 }),
+        mainSeries: () => ({
+          priceScale: () => ({ priceToCoordinate: () => 200 }),
+          firstValue: () => LUTE_EXPORT_CLOSE,
+        }),
+      }),
+    },
+  };
+
+  const luteIframe = {
+    id: 'tradingview_4bddc', // captured frame id shape
+    parentElement: {},       // NO fiber anywhere — captured absence
+    contentWindow: { tradingViewApi: { activeChart: () => luteChart } },
+    getClientRects: () => [{}],
+    clientWidth: 800,
+    getBoundingClientRect: () => ({ left: 100, top: 50, width: 800, height: 430 }),
+  };
+
+  function makeFakeEl(tag) {
+    return {
+      tag, style: {}, attrs: {}, children: [], parentNode: null, textContent: '', title: '',
+      setAttribute(k, v) { this.attrs[k] = v; },
+      appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
+      remove() {
+        const p = this.parentNode;
+        if (!p) return;
+        const i = p.children.indexOf(this);
+        if (i >= 0) p.children.splice(i, 1);
+        this.parentNode = null;
+      },
+    };
+  }
+
+  const doc = {
+    getElementById: () => null,
+    querySelector: (sel) => (String(sel).includes('iframe[id^="tradingview_"]') ? luteIframe : null),
+    querySelectorAll: (sel) => (String(sel).includes('iframe[id^="tradingview_"]') ? [luteIframe] : []),
+    createElement: (tag) => makeFakeEl(tag),
+    body: makeFakeEl('body'),
+    hidden: false,
+  };
+
+  function FakeWebSocket() {}
+  FakeWebSocket.prototype.addEventListener = () => {};
+  FakeWebSocket.CONNECTING = 0; FakeWebSocket.OPEN = 1;
+  FakeWebSocket.CLOSING = 2; FakeWebSocket.CLOSED = 3;
+  function FakeXHR() {}
+  FakeXHR.prototype.send = function () {};
+  FakeXHR.prototype.addEventListener = function () {};
+
+  const win = {
+    fetch: () => Promise.resolve({
+      url: '', headers: { get: () => 'application/json' },
+      clone: () => ({ text: () => Promise.resolve('{}') }),
+    }),
+    XMLHttpRequest: FakeXHR,
+    WebSocket: FakeWebSocket,
+    SharedWorker: undefined,
+    EventSource: undefined,
+    innerWidth: 1280,
+    innerHeight: 800,
+    addEventListener(type, fn) { listeners[type] = fn; },
+    postMessage(message) { emitted.push(message); },
+  };
+  win.window = win;
+  // The captured options bag: datafeed + broker wiring in window[frameId].
+  win[luteIframe.id] = {
+    datafeed: luteDatafeed,
+    brokerFactory: () => ({}),
+    brokerConfig: {},
+    overrides: {},
+    disabledFeatures: [],
+    enabledFeatures: [],
+  };
+
+  // THE FIELD RACE: the site subscribed BEFORE the extension ever ran, and
+  // the dedupe above means it will never subscribe again on its own.
+  if (opts.preSubscribe !== false) {
+    luteDatafeed.subscribeBars(
+      {
+        base_name: [LUTE_MINT],
+        name: 'LUTE', symbol: 'LUTE',
+        ticker: `${LUTE_MINT.toUpperCase()}:LUTE/USD`,
+      },
+      '1S',
+      opts.siteCallback || (() => {}),
+      'site-initial-sub'
+    );
+  }
+
+  const sandbox = {
+    window: win,
+    document: doc,
+    location: { href: `https://lute.gg/trade/${LUTE_MINT}`, hostname: 'lute.gg' },
+    console, Date, Math, Number, String, Array, Object, Boolean, RegExp,
+    Error, Set, WeakSet, WeakMap, Map, Symbol, JSON, Promise, isFinite,
+    MutationObserver: function () { this.observe = () => {}; this.disconnect = () => {}; },
+    setInterval(fn) { timers.push(fn); return timers.length; },
+    clearInterval(id) { if (timers[id - 1]) timers[id - 1] = () => {}; },
+    setTimeout(fn) { timeouts.set(++timeoutSeq, fn); return timeoutSeq; },
+    clearTimeout(id) { timeouts.delete(id); },
+  };
+  vm.runInContext(
+    fs.readFileSync(path.join(ROOT, 'price-bridge.js'), 'utf8'),
+    vm.createContext(sandbox),
+    { filename: 'price-bridge.js' }
+  );
+
+  return {
+    win,
+    datafeed: luteDatafeed,
+    activeSubs,
+    lineShapes,
+    setExportClose(v) { exportRows[0] = [exportRows[0][0] + 1, v, v, v, v]; },
+    send(type, payload) {
+      listeners.message({
+        source: win,
+        data: { source: 'papertrench-content', type, payload },
+      });
+    },
+    runTimers() { for (const fn of timers.slice()) fn(); },
+    runTimeouts() {
+      const pending = [...timeouts.values()];
+      timeouts.clear();
+      for (const fn of pending) fn();
+    },
+    statuses(type) { return emitted.filter((m) => m.source === 'papertrench-bridge' && m.type === type).map((m) => m.payload); },
+  };
+}
+
+test('lute chart: the no-fiber bag shape is discovered — bars AND marks hook, native capable', async () => {
+  const env = runLuteChartBridge();
+  announceLuteToken(env);
+  env.runTimers(); // widget sweep: composite discovery + datafeed patch
+  await microtasks(6);
+
+  const statuses = env.statuses('padre-hook-status');
+  assert.ok(statuses.length, 'discovery must report a hook status');
+  const last = statuses[statuses.length - 1];
+  assert.equal(last.barsHooked, true,
+    'subscribeBars must be patched via the bag-discovered datafeed');
+  assert.equal(last.marksHooked, true,
+    'lute HAS getMarks (friend marks are the product) — the native marks pipeline must hook');
+  assert.equal(last.nativeCapable, true,
+    'a usable widget exists, so the content script may route natively');
+});
+
+test('lute chart: a subscription made BEFORE the patch still pegs the price — export closes flow', async () => {
+  const env = runLuteChartBridge();
+  announceLuteToken(env);
+  env.runTimers();          // sweep discovers + patches; site never re-subscribes
+  env.runTimers();          // export poll now sees the ranked, symbol-matched chart
+  await microtasks(10);
+
+  const exports_ = env.statuses('tick').filter((t) => t && t.source === 'chart-export');
+  assert.ok(exports_.length >= 1,
+    'with the bar hook starved by the pre-patch subscription, exportData IS the peg');
+  const tick = exports_[exports_.length - 1];
+  assert.equal(tick.candidates[0].key, 'chartExportClose');
+  assert.equal(tick.candidates[0].value, LUTE_EXPORT_CLOSE,
+    'the pegged close is the chart the trader is looking at');
+  assert.equal(tick.candidates[0].unit, 'unknown',
+    'MC/$ toggle means the unit is unknowable here — downstream anchors decide');
+  assert.equal(tick.mint, LUTE_MINT, 'the close is mint-tagged for the watched token');
+});
+
+test('lute chart: 61 sweep ticks with a live chart never stand the export peg down (F-26)', async () => {
+  // No paper-axis announce here on purpose: the ONLY thing keeping the miss
+  // counter at zero must be the discovery itself seeing the widget. If the
+  // bag-path discovery ever stops setting lastWidgetScanFound, the export
+  // peg dies exactly one minute in — the field shape of the stale sell.
+  const env = runLuteChartBridge();
+  for (let i = 0; i < 61; i++) env.runTimers();
+  await microtasks(10);
+
+  const fresh = 0.000031;
+  env.setExportClose(fresh);
+  env.runTimers();
+  await microtasks(10);
+
+  const pegged = env.statuses('tick').filter((t) => t && t.source === 'chart-export'
+    && t.candidates && t.candidates.some((c) => c.value === fresh));
+  assert.ok(pegged.length >= 1,
+    'a chart that is visibly alive must still be pegging after a minute of sweeps');
+});
+
+test('lute chart: a post-patch (re)subscription streams live bars to us AND to the site (F-29)', async () => {
+  const env = runLuteChartBridge();
+  announceLuteToken(env);
+  env.runTimers(); // patch lands
+
+  const siteBars = [];
+  env.datafeed.subscribeBars(
+    {
+      base_name: [LUTE_MINT],
+      name: 'LUTE', symbol: 'LUTE',
+      ticker: `${LUTE_MINT.toUpperCase()}:LUTE/USD`,
+    },
+    '1S',
+    (bar) => siteBars.push(bar),
+    'post-patch-sub'
+  );
+  const sub = env.activeSubs.get('post-patch-sub');
+  assert.ok(sub, 'the wrapped subscription must still reach the site datafeed');
+
+  const liveBar = { time: Date.now(), close: 0.000029, volume: 12.5 };
+  sub.callback(liveBar);
+  await microtasks(6);
+
+  const barTicks = env.statuses('tick').filter((t) => t && t.source === 'padre-chart-bar'
+    && t.candidates && t.candidates.some((c) => c.value === 0.000029));
+  assert.ok(barTicks.length >= 1, 'a live lute bar becomes a mint-tagged bridge tick');
+  assert.equal(barTicks[barTicks.length - 1].mint, LUTE_MINT);
+  assert.equal(siteBars.length, 1,
+    'the site\'s own callback must receive every bar our preamble sees (F-29)');
 });

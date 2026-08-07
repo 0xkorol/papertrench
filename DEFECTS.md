@@ -456,6 +456,36 @@ reject it as `hash-mismatch`. The new server code verifies BOTH versions, so it
 is backward compatible — **redeploy the worker before any extension build that
 writes v2 links reaches a user.**
 
+**F-48 · S1 · a sell booked ~20% under the chart the trader watched — a win rendered as -9.6%**
+extension price pipeline (suspects ranked below) · Terp, lute.gg screenshot,
+2026-08-06 (WhiteBull "oUwi…pump", MC axis, first live lute session) ·
+**open — bridge exonerated by lock, provenance receipts landed, source not
+yet pinned**.
+The chart and the S mark sat at ~41K MC when he clicked sell (the panel
+header read $39.8K moments later — the fresh number existed in the tab),
+and the engine booked the exit at 33.1K (the avg-exit line and the P&L
+agree with each other): -9.6% booked on a winning trade. At ~1.24x the
+divergence sits UNDER FILL_WITNESS_RATIO (2x), so the F-47 witness
+correctly stood aside — this is the sub-ratio variant of the same family:
+value-lag wearing a fresh timestamp.
+Eliminated by test, not by argument: four chart-truth locks in
+`test/lute.test.js` boot the shipped bridge against lute's live-captured
+shape (no-fiber options bag + `tradingViewApi` composite, dedup-by-uid
+datafeed keyed on `base_name`, getMarks present) and prove discovery, the
+pre-patch-subscription export peg, F-26 stand-down recovery, and post-patch
+bar flow all work — the bridge cannot be the layer that starved the price.
+Remaining suspects, ranked: (1) the residue F-47 named honestly — an
+action-resolver / on-chain value adopted while the screen was >600ms quiet,
+lagging in the same direction as its witness; (2) quote-side handling of
+the MC-axis `unit:'unknown'` export close for a pump-family token with no
+aggregator anchor; (3) multi-chart grid ranking pinning the wrong chart
+instance.
+Landed with this entry: every fill now records `priceSource` +
+`priceAgeMs` on its journal row (stored-not-committed, the solNet pattern —
+the attestation preimage is untouched). The NEXT occurrence names its
+source in the dashboard journal instead of demanding screenshot forensics.
+Close this defect only by reproducing it with the receipt in hand.
+
 **F-47 · S1 · a fill could execute at a resurrected dead price — a loss rendered as +167%**
 content.js quoteForTrade / quote.js · chatcabal, Twitch + Matt Buitrago's
 Discord screenshots, 2026-08-06 (Axiom, migrated Pump-AMM coin "fork",

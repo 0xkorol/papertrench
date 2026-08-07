@@ -43,6 +43,43 @@ test('a fresh wallet starts at the configured balance with nothing pre-seeded', 
   assert.equal(stats.rounds, 0);
 });
 
+/* ---------------- F-48: fill price provenance receipts ---------------- */
+
+test('F-48: a fill records its price provenance — source and age ride the journal row', () => {
+  const settings = freshSettings();
+  const state = E.defaultState(settings);
+  const buy = E.buy(state, settings, {
+    ts: 1_800_000_000_000, mint: 'MintProv', symbol: 'PROV', site: 'lute',
+    priceNative: 1e-7, solAmount: 1, chain: 'solana',
+    priceSource: 'chart-export', priceAgeMs: 412.7,
+  });
+  assert.equal(buy.trade.priceSource, 'chart-export');
+  assert.equal(buy.trade.priceAgeMs, 413, 'age is stored as whole milliseconds');
+
+  const sell = E.sell(state, settings, {
+    ts: 1_800_000_060_000, mint: 'MintProv', qtyFraction: 1,
+    priceNative: 1.2e-7, priceSource: 'onchain', priceAgeMs: 95,
+  });
+  assert.equal(sell.trade.priceSource, 'onchain');
+  assert.equal(sell.trade.priceAgeMs, 95);
+});
+
+test('F-48: absent provenance stays absent — no invented fields, no negative ages', () => {
+  const settings = freshSettings();
+  const state = E.defaultState(settings);
+  const buy = E.buy(state, settings, {
+    ts: 1, mint: 'MintBare', symbol: 'X', site: 'gmgn', priceNative: 1e-7, solAmount: 1,
+  });
+  assert.ok(!('priceSource' in buy.trade), 'no source claim without a source');
+  assert.ok(!('priceAgeMs' in buy.trade), 'no age claim without a timestamp');
+
+  const clocked = E.buy(state, settings, {
+    ts: 2, mint: 'MintSkew', symbol: 'Y', site: 'gmgn', priceNative: 1e-7, solAmount: 1,
+    priceSource: 'page-feed', priceAgeMs: -30,
+  });
+  assert.equal(clocked.trade.priceAgeMs, 0, 'clock skew clamps to zero, never a negative age');
+});
+
 test('a custom starting balance is honoured', () => {
   const settings = freshSettings({ balanceStartSol: 3.5 });
   assert.equal(E.defaultState(settings).cashSol, 3.5);

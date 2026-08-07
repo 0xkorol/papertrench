@@ -441,6 +441,10 @@
     // Foreign-chain panels order in dollars; the tapped amount is recorded
     // so receipts echo the order as placed, not just its SOL conversion.
     if (Number(o.quotedUsd) > 0) trade.quotedUsd = Number(o.quotedUsd);
+    // F-48: price provenance rides the journal row. Stored-not-committed
+    // (the solNet pattern) — the attestation preimage is untouched.
+    if (o.priceSource) trade.priceSource = String(o.priceSource);
+    if (Number.isFinite(o.priceAgeMs)) trade.priceAgeMs = Math.max(0, Math.round(o.priceAgeMs));
     state.journal.unshift(trade);
     pruneJournal(state);
     return { trade, position: pos };
@@ -518,6 +522,9 @@
       // and counting it here would charge the user for it twice.
       trade.triggerSlipPct = orderSlipPct(o.order, Number(o.priceNative));
     }
+    // F-48: price provenance — see buy().
+    if (o.priceSource) trade.priceSource = String(o.priceSource);
+    if (Number.isFinite(o.priceAgeMs)) trade.priceAgeMs = Math.max(0, Math.round(o.priceAgeMs));
     state.journal.unshift(trade);
     pruneJournal(state);
 

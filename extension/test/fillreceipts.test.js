@@ -41,6 +41,18 @@ test('the fill is measured on the real path, at both ends of both trades', () =>
   }
 });
 
+test('F-48: both fill paths hand the engine the quote provenance', () => {
+  for (const fn of ['async function doBuy(', 'async function doSellInner(']) {
+    const start = contentJs.indexOf(fn);
+    assert.ok(start !== -1, `${fn} must exist`);
+    const body = contentJs.slice(start, contentJs.indexOf('\n  }', start));
+    assert.match(body, /priceSource: fillQuote\.source/,
+      `${fn} must pass the quote's source to the engine`);
+    assert.match(body, /priceAgeMs: fillQuote\.receivedAt > 0 \? Date\.now\(\) - fillQuote\.receivedAt : null/,
+      `${fn} must pass the quote's age at commit`);
+  }
+});
+
 test('measurement never moves what it measures', () => {
   const start = contentJs.indexOf('function noteFillTiming(');
   const fn = contentJs.slice(start, contentJs.indexOf('\n  }', start));

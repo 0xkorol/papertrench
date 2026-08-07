@@ -2325,6 +2325,11 @@
             ts: Date.now(), mint: token.mint, pairAddress: token.pairAddress,
             symbol: token.symbol, name: token.name, site: site.id,
             priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
+            // F-48: which source priced this fill and how old that price was
+            // at commit — the receipt that turns the next wrong-price field
+            // report into a journal lookup instead of a screenshot forensic.
+            priceSource: fillQuote.source || null,
+            priceAgeMs: fillQuote.receivedAt > 0 ? Date.now() - fillQuote.receivedAt : null,
             chain: token.chain || 'solana',
             solAmount,
             // The dollar amount the trader actually tapped on a foreign-chain
@@ -2527,6 +2532,9 @@
           filled = E.sell(state, settings, {
             ts: Date.now(), mint: token.mint, site: site.id,
             qtyFraction: fraction, priceNative: fillQuote.priceNative, priceUsd: fillQuote.priceUsd, mcap: fillQuote.mcap,
+            // F-48: fill price provenance — see doBuy.
+            priceSource: fillQuote.source || null,
+            priceAgeMs: fillQuote.receivedAt > 0 ? Date.now() - fillQuote.receivedAt : null,
           });
           // F-41: claimed before the journal can be observed (see doBuy).
           drawnFillIds.add(filled.trade.id);
