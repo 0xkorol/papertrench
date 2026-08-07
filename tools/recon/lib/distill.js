@@ -10,6 +10,7 @@ const zlib = require('node:zlib');
 const { makeScrubber, loadDenylist } = require('./scrub');
 const { mergeShape, renderShape, collectKeys, normalizeUrl } = require('./schema');
 const { correlate, extractNumbers } = require('./provenance');
+const { buildCorpus } = require('./corpus');
 
 function readJsonl(file) {
   if (!fs.existsSync(file)) return [];
@@ -206,6 +207,12 @@ function distill(capDir, outDir, opts = {}) {
     }
   }
 
+  // ---- §0 URL corpus + coverage --------------------------------------------
+  // The distinct pages the site served, annotated with what the capture saw.
+  // Feeds the coverage scorecard here and the `check` verifier via corpus.json.
+  const docEntries = network.filter((n) => n.resourceType === 'Document');
+  const corpus = buildCorpus(navEvents, domsig, docEntries, scrubber);
+
   // ---- §7 capabilities -----------------------------------------------------
   const capEvents = events.filter((e) => e.ev === 'cap');
   const capsPresence = new Set();
@@ -264,7 +271,13 @@ function distill(capDir, outDir, opts = {}) {
     questions.unshift({ id: 'BLOCKED', text: `⚠️ CAPTURE VOID — ${blockVendor} served a bot challenge${docBlocked.length ? ` (HTTP ${docBlocked[0].status} on the document)` : ''} instead of the app. Everything in this dossier describes the CHALLENGE PAGE, not the site. Re-run HEADED with a real, non-headless profile (\`capture --site <id> --url <U> --headed\`); login-gated terminals also need a logged-in session. Headless is only for public pages that do not challenge.` });
   }
 
+  // Coverage gaps become OPEN QUESTIONS too, so a thin capture is loud.
+  if (!captureBlocked) {
+    for (const gap of corpus.coverage.gaps) q('COVERAGE', gap);
+  }
+
   // ---- write sidecars ------------------------------------------------------
+  writeJson(path.join(outDir, 'corpus.json'), corpus);
   writeJson(path.join(outDir, 'routes.json'), [...routeMap.values()].map((r) => ({ ...r, examples: [...r.examples], chains: [...r.chains], query: [...r.query] })));
   writeJson(path.join(outDir, 'endpoints.json'), [...endpoints.values()].map((e) => ({
     method: e.method, host: e.host, pattern: e.pattern, count: e.count,
@@ -284,7 +297,7 @@ function distill(capDir, outDir, opts = {}) {
     manifest, hostCounts, titleSamples, dollarKeyed, routeMap, chainSlugs,
     endpoints, wsChannels, wsOpen, provenance, pollutionKeys, capsPresence, chartTraffic,
     anchorSeen, snapshotCount, authHits, walls, errorSummary, questions, injectionHits,
-    scrubber, mutations, captureBlocked, blockVendor, docBlocked,
+    scrubber, mutations, captureBlocked, blockVendor, docBlocked, corpus,
   });
   fs.writeFileSync(path.join(outDir, 'DOSSIER.md'), md);
 
@@ -297,6 +310,7 @@ function distill(capDir, outDir, opts = {}) {
       chainSlugs: chainSlugs.size,
     },
     captureBlocked,
+    coverage: corpus.coverage,
     questions,
   };
 }
@@ -344,6 +358,35 @@ function renderDossier(d) {
   }
   p('---');
   p('');
+
+  // §0 coverage scorecard
+  if (d.corpus) {
+    const cov = d.corpus.coverage;
+    const badge = cov.verdict.startsWith('LANDABLE') ? '🟢' : cov.verdict.startsWith('PARTIAL') ? '🟡' : '🔴';
+    p(`## §0 Coverage — ${badge} ${cov.verdict}`);
+    p('');
+    p('What the capture actually covered. A dossier is only as good as its capture; this is where a thin one admits it.');
+    p('');
+    p('| bucket | count |');
+    p('|---|---|');
+    p(`| distinct pages | ${cov.counts.distinctPages} |`);
+    p(`| token pages (address in path) | ${cov.counts.tokenPages} |`);
+    p(`| …with a LIVE-ticking price | ${cov.counts.tokenPagesWithLivePrice} |`);
+    p(`| list/screener pages | ${cov.counts.listPages} |`);
+    p(`| holders/wallet/history pages | ${cov.counts.historyPages} |`);
+    p(`| must-refuse candidates | ${cov.counts.refuseCandidates} |`);
+    p(`| chain slugs | ${cov.counts.chains}${cov.chains.length ? ' (' + cov.chains.join(', ') + ')' : ''} |`);
+    p('');
+    if (cov.gaps.length) {
+      p('**Gaps to close before this capture can land a site:**');
+      for (const g of cov.gaps) p(`- ${g}`);
+    } else {
+      p('No coverage gaps flagged — the capture touched a token page with a live price, a history page, a refuse route, and (if multichain) a second chain. The live pass still governs.');
+    }
+    p('');
+    p('Run `check` after you write the adapter: `node tools/recon/ptrecon.js check --site <id>` runs your real `detect()` over every page above.');
+    p('');
+  }
 
   // §1
   p('## §1 Identity & hosts');

@@ -15,6 +15,9 @@ const path = require('node:path');
 const os = require('node:os');
 const { runCapture } = require('./lib/capture');
 const { distill } = require('./lib/distill');
+const { runVerify, assembleExamples } = require('./lib/verify');
+const { makeScrubber, loadDenylist } = require('./lib/scrub');
+const { scaffold } = require('./lib/scaffold');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 // Raw captures hold cookies/auth/balances. Default location is recon-data/
@@ -171,6 +174,79 @@ async function cmdDistill(args) {
   process.stderr.write(`\n[pt-recon] read: ${path.relative(REPO_ROOT, path.join(outDir, 'DOSSIER.md'))}\n`);
 }
 
+function readJsonl(file) {
+  if (!fs.existsSync(file)) return [];
+  const out = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* torn tail */ }
+  }
+  return out;
+}
+
+async function cmdCheck(args) {
+  const site = args.site;
+  const capDir = args.capture && args.capture !== true ? path.resolve(String(args.capture)) : newestCapture(site);
+  if (!capDir) throw new Error(`no completed capture for site "${site}" — run capture first`);
+  const dossierDir = path.join(siteDir(site), 'dossier');
+  const corpusPath = path.join(dossierDir, 'corpus.json');
+  if (!fs.existsSync(corpusPath)) throw new Error(`no corpus.json — run distill --site ${site} first`);
+
+  const adapterPath = args.adapter && args.adapter !== true
+    ? path.resolve(String(args.adapter))
+    : path.join(REPO_ROOT, 'extension', 'sites.js');
+  if (!fs.existsSync(adapterPath)) throw new Error(`adapter not found: ${adapterPath} (pass --adapter PATH)`);
+  const adapterSrc = fs.readFileSync(adapterPath, 'utf8');
+
+  // Raw nav/doc URLs (unscrubbed, local only) give detect() faithful input;
+  // the corpus supplies the annotations and the scrubber the display form.
+  const events = readJsonl(path.join(capDir, 'raw', 'events.jsonl'));
+  const network = readJsonl(path.join(capDir, 'raw', 'network.jsonl'));
+  const rawUrls = [
+    ...events.filter((e) => e.ev === 'nav' && (e.href || e.url)).map((e) => ({ url: e.href || e.url })),
+    ...network.filter((n) => n.resourceType === 'Document' && n.url).map((n) => ({ url: n.url })),
+  ];
+  const corpus = JSON.parse(fs.readFileSync(corpusPath, 'utf8'));
+  const scrubber = makeScrubber(loadDenylist(loadDenylistText()));
+
+  const examples = assembleExamples(rawUrls, corpus.urls || [], scrubber);
+  if (!examples.length) throw new Error('no testable URLs in the capture — the corpus is empty');
+  const { rows, summary } = runVerify(adapterSrc, examples);
+
+  process.stderr.write(`\n[pt-recon] check — ${path.relative(REPO_ROOT, adapterPath)} vs ${examples.length} real pages from ${path.basename(capDir)}\n\n`);
+  const icon = (r) => r.error ? '⚠️ ' : r.mounted ? '● MOUNT ' : '○ refuse';
+  for (const r of rows) {
+    const detail = r.error ? r.error : r.mounted ? `${r.kind || '?'} ${short(r.address)} chain=${r.chain || '—'}` : '';
+    const tag = r.ann.looksTokenPage ? '[token]' : r.ann.looksHistoryPage ? '[history]' : r.ann.looksListPage ? '[list]' : '[other]';
+    process.stderr.write(`  ${icon(r)} ${tag}${r.ann.hadLivePrice ? '·live' : ''}  ${short(r.display, 66)}\n`);
+    if (detail) process.stderr.write(`           → ${detail}\n`);
+    for (const f of r.flags) process.stderr.write(`           ${f.level === 'high' ? '🔴' : f.level === 'medium' ? '🟡' : f.level === 'error' ? '⚠️ ' : '·'} ${f.code}: ${f.why}\n`);
+  }
+  process.stderr.write(`\n[pt-recon] ${summary.verdict}\n`);
+  process.stderr.write(`  token pages mounted: ${summary.tokenPagesMounted}/${summary.tokenPagesTotal} · refuse-candidates refused: ${summary.refuseCandidatesRefused}/${summary.refuseCandidatesTotal}\n`);
+  process.stderr.write(`  flags: ${summary.high} high, ${summary.medium} medium${summary.errors ? ', ' + summary.errors + ' adapter errors' : ''}\n`);
+  if (summary.high || summary.errors) process.exitCode = 1;
+}
+
+function short(s, n = 44) {
+  if (!s) return '—';
+  s = String(s);
+  return s.length > n ? '…' + s.slice(-n) : s;
+}
+
+function cmdScaffold(args) {
+  const site = args.site;
+  const dossierDir = path.join(siteDir(site), 'dossier');
+  if (!fs.existsSync(path.join(dossierDir, 'corpus.json'))) throw new Error(`no dossier for "${site}" — run distill --site ${site} first`);
+  const outDir = path.join(siteDir(site), 'scaffold');
+  const res = scaffold(dossierDir, outDir, site);
+  process.stderr.write(`\n[pt-recon] scaffold → ${path.relative(REPO_ROOT, outDir)}\n`);
+  for (const f of res.files) process.stderr.write(`  ${f}\n`);
+  process.stderr.write(`  from: ${res.tokenPages} token page(s), ${res.refuseRoutes} refuse route(s), ${res.endpoints} endpoint(s), ${res.wsChannels} WS channel(s)\n`);
+  if (!res.tokenPages) process.stderr.write(`  ⚠️  no token page captured — the gating test has no positive rows. Capture one and re-run.\n`);
+  process.stderr.write(`  These are DRAFTS with TODOs — confirm against the dossier + live site, prove the lock can fail, then copy into extension/test/.\n`);
+}
+
 function cmdList() {
   const sitesDir = path.join(DATA_ROOT, 'sites');
   if (!fs.existsSync(sitesDir)) { process.stderr.write('(no captures yet)\n'); return; }
@@ -189,11 +265,15 @@ async function main() {
   try {
     if (cmd === 'capture') await cmdCapture(args);
     else if (cmd === 'distill') await cmdDistill(args);
+    else if (cmd === 'check') await cmdCheck(args);
+    else if (cmd === 'scaffold') cmdScaffold(args);
     else if (cmd === 'list') cmdList();
     else {
       process.stderr.write('pt-recon — capture a site, distill a dossier.\n\n');
-      process.stderr.write('  capture --site <id> [--url U | --auto U1,U2] [--headless] [--minutes N] [--chrome PATH]\n');
+      process.stderr.write('  capture --site <id> [--url U | --auto U1,U2] [--headed] [--minutes N] [--chrome PATH]\n');
       process.stderr.write('  distill --site <id> [--capture DIR]\n');
+      process.stderr.write('  check    --site <id> [--adapter extension/sites.js]  # run your detect() over the real corpus\n');
+      process.stderr.write('  scaffold --site <id>                                 # draft the gating test + fake from the dossier\n');
       process.stderr.write('  list\n\n');
       process.stderr.write('See docs/RECON.md.\n');
       process.exitCode = cmd ? 1 : 0;

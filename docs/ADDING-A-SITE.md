@@ -14,21 +14,32 @@ a greppable, evidence-cited spec whose sections map 1:1 onto the touch list. It
 turns "sample the live page and hope" into "read the dossier and cite it".
 
 ```
-node tools/recon/ptrecon.js capture --site <id> --url https://<site> --headed
-#   …browse the script it prints (token page, holders tab, a refuse route,
-#     a second chain), then close the window…
-node tools/recon/ptrecon.js distill --site <id>
-#   → recon-data/sites/<id>/dossier/DOSSIER.md
+node tools/recon/ptrecon.js capture  --site <id> --url https://<site> --headed
+#   …browse the script it prints (token page + sit ~30s, holders tab, a refuse
+#     route, a second chain), then close the window…
+node tools/recon/ptrecon.js distill  --site <id>   # → dossier/DOSSIER.md
+node tools/recon/ptrecon.js scaffold --site <id>   # → draft gating test + fake
+#   …write the ~10 touch-list edits below against the dossier…
+node tools/recon/ptrecon.js check    --site <id>   # your detect() vs the real corpus
 ```
 
-Read `DOSSIER.md` whole. Its **§11 OPEN QUESTIONS** is generated, not curated:
-each item is a place the capture was thin or ambiguous (no WS seen, a route
-with one example, a price node with no market origin, a capability seen
-presence-only). **Answer every one before shipping** — by capture, by an
-explicit refusal in code, or by an open QA-MATRIX note — never by assumption.
-If §0 says **CAPTURE VOID** (a bot challenge, not the app), the dossier is
-worthless; re-run headed. The dossier feeds the locks; it does not replace the
-mutation-proof discipline below, and the live pass still governs.
+Read `DOSSIER.md` whole, starting at **§0 Coverage**: if it is 🔴 THIN (no
+token page, no live price, one chain) the capture cannot land a site — browse
+more and re-capture first. If §0 shows **CAPTURE VOID** (a bot challenge, not
+the app), the dossier is worthless; re-run headed.
+
+**§11 OPEN QUESTIONS** is generated, not curated: each item is a place the
+capture was thin or ambiguous (no WS seen, a one-example route, a price node
+with no market origin, a presence-only capability, a coverage gap). **Answer
+every one before shipping** — by capture, by an explicit refusal in code, or by
+an open QA-MATRIX note — never by assumption.
+
+After you write the adapter, **`check`** runs your real `detect()` over every
+page the site actually served and flags a token page you refuse or a wallet
+page you mount — the O-10/O-13 class — before the live pass. It reports; the
+`sitegating` locks still decide. The dossier and scaffold feed the locks; they
+do not replace the mutation-proof discipline below, and the live pass still
+governs.
 
 ## The touch list (there is no central registry)
 

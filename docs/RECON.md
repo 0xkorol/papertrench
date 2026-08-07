@@ -15,27 +15,42 @@ timeline), then **distill** it into a *dossier* — a persistent, greppable,
 evidence-cited spec of the site. A landing is then built by reading the
 dossier, not by guessing. ADDING-A-SITE step 0 is: capture, distill, read.
 
-## Running it
+## The loop
 
-Zero dependencies. Node ≥ 22 and any Chrome/Chromium binary.
+Five commands, and the last two are what make a landing *one-shot* instead of
+one-hopeful:
 
 ```
-# Headed capture (login-gated sites): browse the site yourself for ~10 min.
-node tools/recon/ptrecon.js capture --site gmgn --url https://gmgn.ai
+# 1. CAPTURE. Headed is the default reality — most terminals + DexScreener
+#    Cloudflare-challenge headless. Browse the script the rig prints.
+node tools/recon/ptrecon.js capture --site gmgn --url https://gmgn.ai --headed
+#    …or let the rig drive a public site:
+node tools/recon/ptrecon.js capture --site dexscreener --headed \
+  --auto "https://dexscreener.com/solana,https://dexscreener.com/base"
 
-# Autonomous capture (public pages): the rig visits each URL, scrolls, lingers.
-node tools/recon/ptrecon.js capture --site dexscreener --headless \
-  --auto "https://dexscreener.com,https://dexscreener.com/solana/<pair>"
-
-# Distill the newest capture for a site into dossier/
+# 2. DISTILL → dossier/DOSSIER.md. §0 is a COVERAGE scorecard: it tells you,
+#    before you write a line, whether the capture is landable or too thin.
 node tools/recon/ptrecon.js distill --site gmgn
+
+# 3. SCAFFOLD → draft the gating test + strict-fake reference from the dossier,
+#    facts pre-filled, judgment marked TODO. Copy into extension/test/.
+node tools/recon/ptrecon.js scaffold --site gmgn
+
+# 4. …write the ~10 touch-list edits against the dossier…
+
+# 5. CHECK — run your REAL detect() over every page the site actually served
+#    and flag disagreements (a token page you refuse, a wallet page you mount)
+#    BEFORE the live pass. This is the loop closing on itself.
+node tools/recon/ptrecon.js check --site gmgn
 ```
 
-Headed captures use a persistent profile per site under
-`recon-data/profiles/<site>/` — log in once, stay logged in for every later
-capture. During a headed capture the rig prints a browse script (token page,
-holders tab, a trade if paper-safe, a page that must refuse, chain switch);
-covering it is what makes the dossier complete.
+Headed captures use a persistent profile per site (log in once, stay logged in;
+the profile relocates off any network share so Chrome's locks behave). During a
+headed capture the rig prints a browse script (token page, holders tab, a trade
+if paper-safe, a page that must refuse, chain switch); covering it is what turns
+§0 green. `check` loads the shipped `sites.js` exactly as the extension's own
+`sitegating.test.js` does — it is the same `detect()` the extension runs, judged
+against the real URL corpus instead of a hand-picked one.
 
 ## The trust boundary
 
@@ -62,6 +77,7 @@ silent the dossier says so out loud instead of letting silence read as "fine":
 
 | § | Section | Feeds |
 |---|---|---|
+| 0 | **Coverage scorecard** (what the capture touched: token/list/history pages, live-price token pages, chains; LANDABLE / PARTIAL / THIN verdict) | whether to capture more before writing anything |
 | 1 | Identity & hosts (origins, www variants, title timeline + default-`$`-pattern verdict) | `manifest.json`, `title-feed.js` |
 | 2 | Route atlas (normalized URL patterns, counts, examples; chain-slug candidates; mount/refuse candidate split) | `sites.js` `match()`/`detect()`/`tokenUrl()`, `sitegating` MATRIX, `warmdest.js` |
 | 3 | Endpoint inventory (REST: method, status range, auth?, schema sketch, fixture ref) | strict fakes, `price-bridge.js` |
@@ -75,9 +91,33 @@ silent the dossier says so out loud instead of letting silence read as "fine":
 | 11 | **OPEN QUESTIONS** (generated) | what the landing must answer before shipping |
 | 12 | Instruction-shaped strings (quarantine appendix) | nothing — it is a warning label |
 
-Machine sidecars (`routes.json`, `endpoints.json`, `ws.json`,
+Machine sidecars (`corpus.json`, `routes.json`, `endpoints.json`, `ws.json`,
 `provenance.json`, `anchors.json`, `fixtures/`) carry the same content for
 tooling; fixtures are sanitized real payloads, ready for the pair-form locks.
+`corpus.json` (the distinct pages the site served, each annotated with what the
+capture saw there) is what `check` runs your adapter against.
+
+## Closing the loop: `check` and `scaffold`
+
+The dossier tells you what the site *is*; these two turn that into a correct
+adapter without a round-trip through the live site for every mistake.
+
+- **`scaffold`** drafts the two files a landing writes from scratch today — the
+  `sitegating` test (positive rows from captured token pages, refuse rows from
+  captured wallet/screener pages) and a strict-fake reference (the observed
+  REST/WS schemas, with the F-39 and pollution warnings inline). Output is a
+  DRAFT with TODOs in `recon-data/sites/<id>/scaffold/`; you confirm each row
+  against the dossier and the live site, prove the lock can fail, then copy it
+  into `extension/test/`. A scaffold is never a lock — the mutation-proof
+  discipline is unchanged.
+- **`check`** is the payoff. It loads the shipped `sites.js` in a `vm` (exactly
+  as `sitegating.test.js` does) and runs `currentSite().detect()` over every
+  page the capture recorded, annotated with what was seen there. It flags the
+  two classes we keep fixing by hand: a page with an address in its path and a
+  **live** price that your adapter **refuses** (`MISSED_TOKEN_PAGE`), and a
+  wallet/holders/screener page that your adapter **mounts** (`OVER_MOUNT`,
+  O-10). It reports; the `sitegating` locks still decide — but now you find the
+  disagreement before the live pass, not after a user does.
 
 ## Honesty rules (the point of the tool)
 
