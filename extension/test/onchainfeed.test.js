@@ -506,6 +506,35 @@ test('a constant-product pool discovers its mint through the WSOL-anchored vault
     'the base vault is liquidity, not a holder — the rug guard must exclude it');
 });
 
+test('an UNKNOWN-layout pool yields identity and supply — never a price, never a watch', async () => {
+  // The Coja residue: Axiom /meme/<pair> on a launchpad with no verified
+  // decoder. The WSOL-anchored vault scan works on any pool bytes (vaults
+  // are plain SPL accounts), so the coin's IDENTITY and measured supply
+  // are recoverable — protocol facts. Its price is not: bonding curves
+  // price on VIRTUAL reserves, so a vault ratio from an unverified layout
+  // would be an invented number. poolKind null says exactly that.
+  const MYSTERY_POOL = addrOf(21);
+  const BASE_VAULT = addrOf(22);
+  const QUOTE_VAULT = addrOf(23);
+  const TOK_MINT = addrOf(24);
+  const pool = Buffer.alloc(512);
+  writePubkey(pool, 40, BASE_VAULT);
+  writePubkey(pool, 72, QUOTE_VAULT);
+  const feed = feedWithAccounts({
+    [MYSTERY_POOL]: { owner: 'LaunchLabDoesNotHaveAVerifiedDecoder11111111', data: [pool.toString('base64')] },
+    [BASE_VAULT]: { owner: TOKEN_PROGRAM_ID, data: [splAccountB64(TOK_MINT, 700_000_000_000_000)] },
+    [QUOTE_VAULT]: { owner: TOKEN_PROGRAM_ID, data: [splAccountB64(WSOL, 21_000_000_000)] },
+    [TOK_MINT]: { owner: TOKEN_PROGRAM_ID, data: [mintAccountB64({ supply: 1_000_000_000_000_000, decimals: 6 })] },
+  });
+  const found = await feed.prewatch({ pool: MYSTERY_POOL });
+  assert.ok(found, 'identity and supply are recoverable from any pool');
+  assert.equal(found.mint, TOK_MINT, 'the WSOL side proves the quote; the other side names the token');
+  assert.equal(found.poolKind, null, 'an unverified layout is named as such');
+  assert.equal(found.priceNative, null, 'no decoder, no price — a vault ratio would be invented');
+  assert.ok(Math.abs(found.supplyUi - 1e9) < 1e-6, 'measured supply rides along for the mcap bootstrap');
+  assert.equal(feed.currentQuote(TOK_MINT), null, 'nothing is ever watched on an unverified layout');
+});
+
 test('a pool between two non-SOL tokens is refused — nothing says which side the page charts', async () => {
   const WP_POOL = addrOf(13);
   const wp = Buffer.alloc(256);

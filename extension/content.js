@@ -732,15 +732,27 @@
       if (!token || !token.pending) return;
       if (token.srcAddress !== candidate.address && token.mint !== candidate.address) return;
 
-      // Supply facts only (bare mint account, no decodable pool): the coin
-      // stays pending, but mcap-scale page ticks can now be priced honestly
-      // through the measured supply.
-      if (!found.pool) {
+      // Supply facts only — a bare mint account, or a pool whose layout has
+      // no verified decoder (poolKind null: identity and supply are protocol
+      // facts, its price is not). The coin stays pending, mcap-scale page
+      // ticks become priceable through the measured supply, and on a
+      // pair-address page (Axiom /meme/ on a launchpad we cannot decode)
+      // the discovered mint replaces the stand-in so mint-tagged ticks
+      // match and the resolver's Jupiter-by-mint fallback can engage —
+      // this was the "waiting for first quote for 1+ minute" residue on
+      // fresh low-liq launches (Coja, Discord).
+      if (!found.pool || found.poolKind == null) {
+        if (found.mint !== token.mint) {
+          if (armedBuy && armedBuy.mint === token.mint) armedBuy.mint = found.mint;
+          token.mint = found.mint;
+          token.pairAddress = found.pool || token.pairAddress || null;
+          sendPadreMarker('paper-axis', { pairAddress: token.pairAddress, mint: token.mint });
+        }
         if (Number(found.supplyUi) > 0) {
           token.supplyUi = Number(found.supplyUi);
           token.decimals = Number(found.decimals);
-          refreshRugVerdict(found.mint);
         }
+        refreshRugVerdict(found.mint);
         return;
       }
 
@@ -820,7 +832,17 @@
     }
 
     try {
-      const data = await R.resolve(candidate.address, { chain: candidate.chain });
+      // When the prewatch probe already identified the REAL mint behind a
+      // pair-address page (unknown-layout pool: identity yes, price no),
+      // retries resolve BY MINT — Jupiter indexes fresh launches by mint
+      // within seconds, while the pair endpoint waits on Dexscreener to
+      // notice the pool exists. srcAddress keeps the URL identity, so the
+      // adoption checks below still recognize the answer.
+      const resolveAddress = token && token.pending
+        && token.srcAddress === candidate.address && token.mint !== candidate.address
+        ? token.mint
+        : candidate.address;
+      const data = await R.resolve(resolveAddress, { chain: candidate.chain });
       // The page may have navigated while the resolve was in flight. Adopting
       // the result now would resurrect the old token on the new page — and
       // route fills to it. Bail; the next tick handles the current URL.

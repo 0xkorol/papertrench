@@ -3,6 +3,20 @@
 Stream-style log of what shipped, newest first. User-facing wording; the gory
 details live in the commit messages.
 
+## Unreleased
+
+- **Fresh launches from launchpads we can't decode still get their
+  identity instantly.** On pair-address pages (Axiom's /meme/), a
+  brand-new coin whose pool belongs to a launchpad without a verified
+  decoder used to be a full dead end — no price, and no mint either, so
+  even the market-cap bootstrap couldn't engage. The vault scan now
+  recovers the coin's identity and real supply from any pool (those are
+  protocol facts), the page's own feed prices it under the usual
+  sanity discipline, and price retries switch to asking by mint — which
+  aggregators index within seconds of a launch. The pool's own price
+  stays refused until its layout is verified: an unverified vault ratio
+  would be an invented number.
+
 ## v3.2.0 — 2026-08-07
 
 Every item traces to a named field report from the last two days — the

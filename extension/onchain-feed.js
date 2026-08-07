@@ -708,7 +708,37 @@
         const hint = typeof mint === 'string' && mint !== address ? mint : null;
         return await prewatchPool(address, hint, account, slot);
       }
-      return mintFactsFromAccount(account, address);
+      const facts = mintFactsFromAccount(account, address);
+      if (facts) return facts;
+
+      // A pool whose owner program has NO verified decoder (a launchpad we
+      // have not verified — LaunchLab, DBC, whatever ships next week) used
+      // to be a dead end: no price, and no MINT either, so a pair-address
+      // page (Axiom /meme/) could not even take the supply-facts bootstrap
+      // path — "waiting for first quote for 1+ minute" on exactly the
+      // fresh low-liq launches scalpers care about (Coja, Discord). The
+      // WSOL-anchored vault scan needs no pool layout at all: the vaults
+      // are plain SPL token accounts embedded in the pool bytes. So an
+      // unknown pool still yields IDENTITY and measured supply — protocol
+      // facts — while its PRICE stays refused: bonding curves price on
+      // VIRTUAL reserves (onchain.js's own warning), so a vault ratio from
+      // an unverified layout would be exactly the invented number this
+      // product never shows. The page's own feed prices the coin through
+      // bootstrapTick's sane-band discipline instead.
+      const bytes = O.bytesFromBase64(account.data[0]);
+      const discovered = await discoverPoolMint(bytes);
+      if (!discovered) return null;
+      const [mintAccount] = await getAccounts([discovered]);
+      const mintFacts = mintFactsFromAccount(mintAccount, discovered);
+      if (!mintFacts) return null;
+      return {
+        mint: discovered,
+        pool: address,
+        poolKind: null, // known pool location, UNKNOWN layout: never watched, never priced
+        priceNative: null,
+        decimals: mintFacts.decimals,
+        supplyUi: mintFacts.supplyUi,
+      };
     } catch (error) {
       try { console.debug('PaperTrench: prewatch failed:', error && error.message); } catch (_) {}
       return null;
